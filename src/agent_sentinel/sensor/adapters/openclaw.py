@@ -5,9 +5,16 @@ What the gateway sends (2026.4.15 build), after ``sessions.subscribe``:
 - ``session.tool`` — every tool event of every session: ``{runId, sessionKey, seq, ts,
   data: {phase: start|update|result, name, toolCallId, args, meta, isError, result?}}``.
   ``result`` is stripped unless the session's verbose level is ``full``.
-- ``session.message`` — transcript updates: ``{sessionKey, message: {role, content, ...}}`` with
-  role ``user`` | ``assistant`` | ``toolResult`` (the latter carries the tool output text).
-- ``agent`` — non-tool run streams to all clients, e.g. ``stream: lifecycle, data.phase: start|end``.
+- ``session.message`` — transcript updates: ``{sessionKey, message: {role, content, ...}}``. In a live
+  capture only ``user`` and ``assistant`` arrived; ``toolResult`` messages are *not* pushed.
+- ``agent`` — non-tool run streams to all clients: ``lifecycle`` (start|end|error) and, for shell
+  commands, ``command_output`` (``data: {toolCallId, phase: delta|end, output}``).
+
+Tool output therefore comes from, in order: the ``session.tool`` result itself (verbose ``full``),
+``command_output`` end (shell commands), or ``chat.history`` — fetched right before the next tool
+call / reply / run end of that session. By then the model has already seen the result, so it is in
+the transcript, and the ``tool.result`` is still processed before the call that may act on it
+(sequence rules depend on that order).
 
 ``tools.catalog`` lists core and plugin tools (with ``pluginId``); it becomes inventory.snapshot.
 
@@ -88,6 +95,7 @@ class OpenClawMapper:
         self.seen_sessions: set[str] = set()
         self.results_emitted: set[str] = set()  # toolCallIds whose tool.result went out
         self.pending_results: dict[str, dict[str, Any]] = {}  # result frames without output text
+        self.command_outputs: dict[str, str] = {}  # shell output that arrived before its result frame
         self._seq = 0
 
     def _event(
@@ -186,7 +194,75 @@ class OpenClawMapper:
             return self._message(p)
         if name == "agent" and p.get("stream") == "lifecycle":
             return self._lifecycle(p)
+        if name == "agent" and p.get("stream") == "command_output":
+            return self._command_output(p)
         return []
+
+    def _command_output(self, p: dict[str, Any]) -> list[AgentEvent]:
+        data = p.get("data") or {}
+        call_id, output = data.get("toolCallId"), data.get("output")
+        if data.get("phase") != "end" or not isinstance(call_id, str) or not isinstance(output, str):
+            return []
+        if call_id in self.results_emitted:
+            return []
+        pend = self.pending_results.get(call_id)
+        if pend is None:  # result frame not here yet; use the output when it arrives
+            self.command_outputs[call_id] = output
+            return []
+        return [
+            self._result(
+                pend["key"],
+                pend["run_id"],
+                call_id,
+                pend["tool"],
+                bool(pend.get("isError")),
+                output,
+                pend.get("ts"),
+            )
+        ]
+
+    # ── transcript fallback (chat.history) ───────────────────────────────────
+
+    def history_needed(self, frame: dict[str, Any]) -> str | None:
+        """Session key whose pending results should be fetched before handling ``frame``."""
+        p = frame.get("payload")
+        if not isinstance(p, dict) or not self.pending_results:
+            return None
+        name, key = frame.get("event"), p.get("sessionKey")
+        trigger = (
+            (name == "session.tool" and (p.get("data") or {}).get("phase") == "start")
+            or (name == "session.message" and (p.get("message") or {}).get("role") == "assistant")
+            or (
+                name == "agent"
+                and p.get("stream") == "lifecycle"
+                and (p.get("data") or {}).get("phase") in ("end", "error")
+            )
+        )
+        if trigger and any(r["key"] == key for r in self.pending_results.values()):
+            return key
+        return None
+
+    def results_from_history(self, key: str, messages: list[dict[str, Any]]) -> list[AgentEvent]:
+        out = []
+        for m in messages:
+            call_id = m.get("toolCallId")
+            if m.get("role") in ("toolResult", "tool") and call_id in self.pending_results:
+                pend = self.pending_results[call_id]
+                if pend["key"] != key:
+                    continue
+                is_error = bool(m.get("isError", pend.get("isError", False)))
+                out.append(
+                    self._result(
+                        key,
+                        pend["run_id"],
+                        call_id,
+                        pend["tool"],
+                        is_error,
+                        _text(m.get("content")),
+                        pend.get("ts"),
+                    )
+                )
+        return out
 
     def _lifecycle(self, p: dict[str, Any]) -> list[AgentEvent]:
         key, run_id = p.get("sessionKey"), p.get("runId")
@@ -228,7 +304,19 @@ class OpenClawMapper:
                 out.append(
                     self._result(key, run_id, call_id, tool, bool(data.get("isError")), text, p.get("ts"))
                 )
-            else:  # verbose < full: wait for the transcript's toolResult message
+            elif call_id in self.command_outputs:  # shell output arrived first
+                out.append(
+                    self._result(
+                        key,
+                        run_id,
+                        call_id,
+                        tool,
+                        bool(data.get("isError")),
+                        self.command_outputs.pop(call_id),
+                        p.get("ts"),
+                    )
+                )
+            else:  # verbose < full: get it from command_output or chat.history (see module doc)
                 self.pending_results[call_id] = {
                     "key": key,
                     "run_id": run_id,
@@ -354,6 +442,8 @@ class OpenClawAdapter:
             if frame.get("event") == "exec.approval.requested" and isinstance(frame.get("payload"), dict):
                 await self._gate(ctx, conn, mapper, frame["payload"])
                 return
+            if (key := mapper.history_needed(frame)) is not None:
+                await self._fetch_results(ctx, conn, mapper, key)
             for ev in mapper.map_frame(frame):
                 await self._handle(ctx, conn, ev)
             if mapper.unknown_tool_seen:
@@ -378,6 +468,21 @@ class OpenClawAdapter:
                     await self._snapshot(ctx, conn, mapper)
         finally:
             await conn.close()
+
+    async def _fetch_results(
+        self, ctx: AdapterContext, conn: GatewayConnection, mapper: OpenClawMapper, key: str
+    ) -> None:
+        try:
+            res = await conn.request("chat.history", {"sessionKey": key, "limit": 50})
+        except (ConnectionError, TimeoutError) as e:
+            log.warning("chat.history failed for %s: %s", key, e)
+            return
+        messages = (res.get("payload") or {}).get("messages") if res.get("ok") else None
+        if not isinstance(messages, list):
+            log.warning("chat.history refused for %s: %s", key, res.get("error"))
+            return
+        for ev in mapper.results_from_history(key, messages):
+            await self._handle(ctx, conn, ev)
 
     def _capture(self, frame: dict[str, Any]) -> None:
         """Debug aid: append raw gateway frames (secrets masked) to a JSONL file."""

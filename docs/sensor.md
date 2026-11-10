@@ -127,8 +127,10 @@ SG 코드에서 무엇을 가져오고 고쳤는지는 [from-sg.md](from-sg.md#o
 | `tools.catalog` 응답 | `inventory.snapshot` (툴, 플러그인). 연결할 때, 5분마다, 목록에 없는 툴이 보일 때 |
 | `agent` lifecycle `start` | `session.start` (세션 키마다 처음 한 번) |
 | `session.tool` `phase: start` | `tool.call` (`provider`는 툴 목록으로 플러그인·내장 구분) |
-| `session.tool` `phase: result` | `tool.result`. 결과 텍스트가 없으면(기본 verbose) 트랜스크립트를 기다린다 |
-| `session.message` role `user` / `assistant` / `toolResult` | `prompt.user` / `message.assistant` / `tool.result` |
+| `session.tool` `phase: result` | `tool.result`. 결과 텍스트는 아래 순서로 구한다 |
+| `agent` `command_output` `end` | 셸 명령의 출력 → 위 `tool.result`의 `output_preview` |
+| `chat.history` 응답 | 셸이 아닌 툴의 결과. 같은 세션의 다음 툴 호출·응답·실행 종료 **직전에** 가져온다 |
+| `session.message` role `user` / `assistant` | `prompt.user` / `message.assistant` |
 
 - **집행은 사후다.** 게이트웨이는 툴이 이미 시작된 뒤에 알려준다. 판정이 `block` 이상이면 `sessions.abort`로 그 실행을 중단하고,
   결과(`enforced`, 실패 사유)를 finding의 `response`에 담는다. 같은 실행은 한 번만 중단한다.
@@ -157,9 +159,14 @@ SG 코드에서 무엇을 가져오고 고쳤는지는 [from-sg.md](from-sg.md#o
 | `agent` lifecycle, `session.message`(user/assistant) | ✅ 실제 프레임 모양이 매퍼 가정과 일치 |
 | 셸 승인: 위험 명령 | ✅ 실제 `exec.approval.requested` → 센서가 `deny` → 요청자가 `decision: deny`를 받음 |
 | 셸 승인: 평범한 명령 | ✅ 건드리지 않음 → 시간 만료(`decision: null`) |
-| `session.tool`(툴 이벤트), 실행 중 `sessions.abort` | ⏳ 미확인. 에이전트 실행에 쓰는 로컬 Ollama가 설치돼 있지 않아 LLM 호출이 실패했다 |
+| `session.tool` 툴 호출·결과 (qwen3:8b로 실제 실행) | ✅ `exec` 호출과 출력까지 수집 |
+| 툴 결과 텍스트 | ⚠️ 가정과 달랐다: `toolResult` 메시지는 **푸시되지 않는다**. 셸은 `command_output`, 그 밖의 툴은 `chat.history`로 구하도록 고쳤다 |
+| 실행 중 `sessions.abort` | ✅ 게이트웨이가 수락(`enforced: true`). ⚠️ 하지만 `rm -rf`는 이미 끝난 뒤였다. 빠른 명령은 사후 중단으로 못 막는다 → 셸은 `--gate-exec`가 필요한 이유 |
+| 실제 에이전트 흐름에서 `--gate-exec` | ⏳ 미확인. OpenClaw의 exec 정책이 승인을 묻지 않는 설정이라, 승인 요청은 테스트 클라이언트로만 확인했다 |
 
-녹화한 실제 프레임(호스트 정보 제거)은 [tests/fixtures/openclaw-2026.4.15-frames.jsonl](../tests/fixtures/openclaw-2026.4.15-frames.jsonl)에 회귀 테스트로 고정했다.
+녹화한 실제 프레임(호스트·사용자 정보 제거)은 [openclaw-2026.4.15-frames.jsonl](../tests/fixtures/openclaw-2026.4.15-frames.jsonl)(승인 요청)과
+[openclaw-2026.4.15-tool-run.jsonl](../tests/fixtures/openclaw-2026.4.15-tool-run.jsonl)(툴 실행)에 회귀 테스트로 고정했다.
+에이전트 한 번 실행에 qwen3:8b로 약 5분(첫 실행, MacBook Air M3)이 걸렸다.
 `exec.approval.resolved`에는 결정자(`resolvedBy`)가 들어 있어, M7의 사용자 승인 감사에 그대로 쓸 수 있다.
 
 ## 어댑터 계약
