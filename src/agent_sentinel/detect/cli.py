@@ -39,7 +39,7 @@ def _describe(ev: AgentEvent) -> str:
     return f"{ev.kind.value}{' ' + detail if detail else ''}"
 
 
-def _print_verdict(v: Verdict, show_all: bool) -> None:
+def print_verdict(v: Verdict, show_all: bool) -> None:
     ev = v.event
     if not v.hits and not show_all:
         return
@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     for v in verdicts:
-        _print_verdict(v, args.all)
+        print_verdict(v, args.all)
     hits = Counter(h.rule.id for v in verdicts for h in v.hits)
     print(
         f"\n{len(verdicts)} events, {sum(len(v.findings) for v in verdicts)} findings, "

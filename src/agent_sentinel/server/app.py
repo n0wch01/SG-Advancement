@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import __version__
-from ..policy import PolicyBundle
+from ..policy import PolicyBundle, key_id, load_or_create_signing_key, public_key_b64
 from ..redact import redact_event, redact_text
 from ..schema import AgentEvent, Finding, Severity
 from .auth import (
@@ -58,6 +58,8 @@ class EnrollRequest(_Model):
 class EnrollResponse(_Model):
     device_id: str
     device_token: str = Field(description="Shown once. Store it on the endpoint; the server keeps a hash")
+    policy_public_key: str = Field(description="base64 Ed25519 key the sensor verifies policy bundles with")
+    policy_key_id: str
 
 
 class EventBatch(_Model):
@@ -101,6 +103,8 @@ class PolicyInfo(_Model):
     version: str
     rule_count: int
     enabled_count: int
+    key_id: str
+    public_key: str = Field(description="Give this to installers who want to pin the key")
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -131,12 +135,24 @@ def _policy(request: Request) -> PolicyBundle:
     return request.app.state.policy
 
 
-def _policy_info(bundle: PolicyBundle) -> PolicyInfo:
+def _public_key(request: Request) -> str:
+    return public_key_b64(request.app.state.signing_key.public_key())
+
+
+def _policy_info(request: Request) -> PolicyInfo:
+    bundle = _policy(request)
+    pub = _public_key(request)
     return PolicyInfo(
         version=bundle.version,
         rule_count=len(bundle.rules),
         enabled_count=sum(1 for r in bundle.rules if r.get("enabled", True)),
+        key_id=key_id(pub),
+        public_key=pub,
     )
+
+
+def _load_signed_policy(app: FastAPI) -> PolicyBundle:
+    return PolicyBundle.load(app.state.settings.rules_dir).signed(app.state.signing_key)
 
 
 Limit = Annotated[int, Query(ge=1, le=1000)]
@@ -149,7 +165,7 @@ sensor = APIRouter(prefix="/v1", tags=["sensor"])
 
 
 @sensor.post("/enroll", response_model=EnrollResponse, status_code=status.HTTP_201_CREATED)
-def enroll(body: EnrollRequest, db: DbSession, token: Token) -> EnrollResponse:
+def enroll(body: EnrollRequest, request: Request, db: DbSession, token: Token) -> EnrollResponse:
     """Exchange a one-time enrollment token for a long-lived device token."""
     if not token.startswith(ENROLL_PREFIX):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not an enrollment token")
@@ -178,7 +194,10 @@ def enroll(body: EnrollRequest, db: DbSession, token: Token) -> EnrollResponse:
     )
     et.uses += 1
     db.commit()
-    return EnrollResponse(device_id=device_id, device_token=device_token)
+    pub = _public_key(request)
+    return EnrollResponse(
+        device_id=device_id, device_token=device_token, policy_public_key=pub, policy_key_id=key_id(pub)
+    )
 
 
 @sensor.get("/policy", response_model=PolicyBundle, responses={304: {"description": "Not modified"}})
@@ -364,18 +383,18 @@ def list_findings(
 
 @admin.get("/policy", response_model=PolicyInfo)
 def policy_info(request: Request) -> PolicyInfo:
-    return _policy_info(_policy(request))
+    return _policy_info(request)
 
 
 @admin.post("/policy/reload", response_model=PolicyInfo)
 def reload_policy(request: Request) -> PolicyInfo:
     """Re-read ``rules/`` from disk. An invalid rule file is rejected and the old policy stays."""
     try:
-        bundle = PolicyBundle.load(request.app.state.settings.rules_dir)
+        bundle = _load_signed_policy(request.app)
     except ValueError as e:  # RuleLoadError is a ValueError
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from e
     request.app.state.policy = bundle
-    return _policy_info(bundle)
+    return _policy_info(request)
 
 
 # ── app factory ─────────────────────────────────────────────────────────────
@@ -394,12 +413,17 @@ def create_app(settings: Settings) -> FastAPI:
     app = FastAPI(title="agent-sentinel control plane", version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.state.db = Database(settings.db_url)
+    app.state.signing_key = load_or_create_signing_key(settings.signing_key_path)
     # Fail fast on a broken rules/ directory instead of serving an empty policy.
-    app.state.policy = PolicyBundle.load(settings.rules_dir)
+    app.state.policy = _load_signed_policy(app)
 
     @app.get("/healthz", tags=["ops"])
     def healthz() -> dict[str, str]:
-        return {"status": "ok", "policy_version": app.state.policy.version}
+        return {
+            "status": "ok",
+            "policy_version": app.state.policy.version,
+            "policy_key_id": app.state.policy.key_id,
+        }
 
     app.include_router(sensor)
     app.include_router(admin)

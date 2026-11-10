@@ -8,6 +8,7 @@ from pathlib import Path
 
 DEFAULT_DB_URL = "sqlite:///data/sentinel.db"
 DEFAULT_RULES_DIR = "rules"
+DEFAULT_SIGNING_KEY = "data/policy_signing_key.pem"
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,7 @@ class Settings:
     db_url: str = DEFAULT_DB_URL
     rules_dir: Path = Path(DEFAULT_RULES_DIR)
     admin_token: str | None = None
+    signing_key_path: Path = Path(DEFAULT_SIGNING_KEY)
     max_batch: int = 500
 
     @classmethod
@@ -23,5 +25,6 @@ class Settings:
             db_url=os.environ.get("SENTINEL_DB_URL", DEFAULT_DB_URL),
             rules_dir=Path(os.environ.get("SENTINEL_RULES_DIR", DEFAULT_RULES_DIR)),
             admin_token=os.environ.get("SENTINEL_ADMIN_TOKEN") or None,
+            signing_key_path=Path(os.environ.get("SENTINEL_SIGNING_KEY", DEFAULT_SIGNING_KEY)),
             max_batch=int(os.environ.get("SENTINEL_MAX_BATCH", "500")),
         )

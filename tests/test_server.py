@@ -29,7 +29,14 @@ def make_client(tmp_path: Path, db_url: str = "sqlite://", **kw: Any) -> TestCli
     rules = tmp_path / "rules"
     if not rules.exists():
         shutil.copytree(ROOT / "rules", rules)
-    app = create_app(Settings(db_url=db_url, rules_dir=rules, admin_token="admin-test", **kw))
+    settings = Settings(
+        db_url=db_url,
+        rules_dir=rules,
+        admin_token="admin-test",
+        signing_key_path=tmp_path / "signing_key.pem",
+        **kw,
+    )
+    app = create_app(settings)
     return TestClient(app)
 
 

@@ -12,7 +12,7 @@ services:
     volumes:
       - control-plane-data:/data
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${SENTINEL_PORT:-8000}:8000"
     networks: [corp-net]
 
 networks:
