@@ -294,6 +294,7 @@ class Engine:
                 action=rule.response,
                 enforced=False,
                 enforcer=event.source.sensor,
-                detail="detect-only: enforcement arrives with sensor adapters",
+                # The adapter replaces this with what it actually did (Sensor.record).
+                detail="not enforced: detection only",
             ),
         )

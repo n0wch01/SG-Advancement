@@ -1,6 +1,10 @@
-"""Agent adapters. Each one turns agent-native activity into AgentEvents."""
+"""Agent adapters. Each one turns agent-native activity into AgentEvents.
 
-from .base import Adapter
+``openclaw`` needs the optional ``websockets`` dependency (``agent-sentinel[openclaw]``), so it
+is imported explicitly by whoever uses it, not re-exported here.
+"""
+
+from .base import Adapter, AdapterContext
 from .replay import ReplayAdapter
 
-__all__ = ["Adapter", "ReplayAdapter"]
+__all__ = ["Adapter", "AdapterContext", "ReplayAdapter"]

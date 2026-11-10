@@ -20,7 +20,7 @@ from .. import __version__
 from ..detect import Engine, Verdict
 from ..policy import PolicyBundle, PolicyVerificationError, key_id, load_public_key
 from ..redact import redact_event
-from ..schema import AgentEvent
+from ..schema import AgentEvent, Enforcement
 from .client import ControlPlaneClient, ControlPlaneError, Offline, Transport
 from .priority import event_priority
 from .spool import FlushResult, Spool
@@ -164,13 +164,28 @@ class Sensor:
             update={"endpoint": ep.model_copy(update={"device_id": self.creds.device_id})}
         )
 
-    def process(self, event: AgentEvent) -> ProcessResult:
+    def evaluate(self, event: AgentEvent) -> ProcessResult:
+        """Step 1: stamp + detect. Nothing is queued yet, so the adapter can enforce first
+        (possibly asynchronously) and report what happened through ``record``."""
         if self.engine is None:
             raise NoPolicy("call start() first")
         event = self.stamp(event)
         verdict = self.engine.process(event)  # detection sees the original (unredacted) event
-        self.spool.add([redact_event(event), *verdict.findings], event_priority(event, verdict))
         return ProcessResult(verdict, event)
+
+    def record(self, result: ProcessResult, enforcement: Enforcement | None = None) -> None:
+        """Step 2: queue the redacted event and its findings, with the enforcement outcome."""
+        findings = result.verdict.findings
+        if enforcement is not None:
+            findings = [f.model_copy(update={"response": enforcement}) for f in findings]
+            result.verdict.findings = findings
+        self.spool.add([redact_event(result.event), *findings], event_priority(result.event, result.verdict))
+
+    def process(self, event: AgentEvent) -> ProcessResult:
+        """evaluate + record, for observation-only callers (replay)."""
+        result = self.evaluate(event)
+        self.record(result)
+        return result
 
     def flush(self) -> FlushResult:
         return self.spool.flush(self.client)

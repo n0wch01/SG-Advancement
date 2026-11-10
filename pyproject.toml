@@ -11,6 +11,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# OpenClaw gateway adapter (WebSocket). Only endpoints that run OpenClaw need it.
+openclaw = [
+    "websockets>=13",
+]
 # Control plane only. Endpoint sensors install the bare package and stay light.
 server = [
     "fastapi>=0.115",
@@ -25,9 +29,10 @@ sentinel-sensor = "agent_sentinel.sensor.cli:main"
 
 [dependency-groups]
 dev = [
-    "agent-sentinel[server]",
+    "agent-sentinel[server,openclaw]",
     "httpx2>=2.16",
     "pytest>=8.3",
+    "pytest-asyncio>=0.24",
     "ruff>=0.7",
 ]
 
@@ -42,6 +47,8 @@ packages = ["src/agent_sentinel"]
 testpaths = ["tests", "demo"]  # demo/ is optional; missing paths are skipped
 pythonpath = ["src"]
 addopts = "-q"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 110

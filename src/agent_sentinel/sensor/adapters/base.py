@@ -1,24 +1,44 @@
 """Adapter contract.
 
-An adapter observes one agent (or one interception point) and yields AgentEvents. The runtime
-feeds each one to ``Sensor.process`` and hands the verdict back through ``enforce``.
+An adapter observes one agent (or one interception point), turns what it sees into AgentEvents
+and hands each one to the daemon through ``AdapterContext``:
 
-Observation-only adapters (replay, OpenClaw's post-hoc stream) can leave ``enforce`` as a no-op;
-blocking adapters (Claude Code hooks M6, MCP proxy M8) act on ``verdict.action``.
+    result = ctx.evaluate(event)        # stamp + local rules → verdict (nothing queued yet)
+    enforcement = ...                   # adapter acts on result.verdict.action, if it can
+    ctx.record(result, enforcement)     # queue redacted event + findings with the outcome
+
+Observation-only adapters pass ``None`` as enforcement. Blocking adapters (Claude Code hooks M6,
+MCP proxy M8) act before the tool runs; OpenClaw can only abort after a tool started.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import Protocol
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol
 
-from ...detect import Verdict
-from ...schema import AgentEvent
+from ...schema import Enforcement
+
+if TYPE_CHECKING:
+    from ...schema import AgentEvent
+    from ..core import ProcessResult, Sensor
+
+
+@dataclass
+class AdapterContext:
+    sensor: Sensor
+    user_id: str  # the employee this endpoint's agents act for
+    hostname: str | None = None
+
+    def evaluate(self, event: AgentEvent) -> ProcessResult:
+        return self.sensor.evaluate(event)
+
+    def record(self, result: ProcessResult, enforcement: Enforcement | None = None) -> None:
+        self.sensor.record(result, enforcement)
 
 
 class Adapter(Protocol):
     name: str
 
-    def events(self) -> Iterator[AgentEvent]: ...
-
-    def enforce(self, verdict: Verdict) -> None: ...
+    async def run(self, ctx: AdapterContext) -> None:
+        """Run until cancelled. Reconnect on transient errors; let cancellation propagate."""
+        ...

@@ -5,7 +5,9 @@
     sentinel-sensor status
     sentinel-sensor sync                       # pull policy + flush spool
     sentinel-sensor replay examples/events/claude_code.jsonl
+    sentinel-sensor run --openclaw                  # daemon: watch the local OpenClaw gateway
 
+The OpenClaw gateway token comes from OPENCLAW_GATEWAY_TOKEN (never from argv).
 The enrollment token can also come from SENTINEL_ENROLL_TOKEN (keeps it out of shell history
 and the process list). SENTINEL_HOME overrides the state directory (default ~/.agent-sentinel).
 """
@@ -13,7 +15,12 @@ and the process list). SENTINEL_HOME overrides the state directory (default ~/.a
 from __future__ import annotations
 
 import argparse
+import asyncio
+import contextlib
+import getpass
+import logging
 import os
+import socket
 import sys
 from collections import Counter
 from pathlib import Path
@@ -88,7 +95,6 @@ def _cmd_replay(home: SensorHome, args: argparse.Namespace) -> int:
     actions: Counter[str] = Counter()
     for ev in adapter.events():
         res = sensor.process(ev)
-        adapter.enforce(res.verdict)
         actions[res.verdict.action.value] += 1
         print_verdict(res.verdict, args.all)
     print(f"\nverdicts: {dict(actions)}")
@@ -98,6 +104,50 @@ def _cmd_replay(home: SensorHome, args: argparse.Namespace) -> int:
     r = sensor.flush()
     _print_flush(r)
     return 0 if r.ok else 1
+
+
+def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
+    from .adapters.base import AdapterContext
+    from .daemon import Daemon
+
+    logging.basicConfig(
+        level=args.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    sensor = Sensor(home)
+    adapters: list = []
+    if args.openclaw:
+        try:
+            import websockets  # noqa: F401  # optional dependency
+        except ImportError:
+            print(
+                "--openclaw needs the websockets package: install agent-sentinel[openclaw]", file=sys.stderr
+            )
+            return 2
+        from .adapters.openclaw import OpenClawAdapter
+
+        adapters.append(OpenClawAdapter(args.openclaw, enforce=not args.observe_only))
+    if args.replay:
+        adapters.append(ReplayAdapter(args.replay, delay=args.replay_delay))
+    if not adapters:
+        print("nothing to watch: pass --openclaw and/or --replay", file=sys.stderr)
+        return 2
+    ctx = AdapterContext(sensor, user_id=args.user, hostname=socket.gethostname())
+    daemon = Daemon(
+        sensor, adapters, ctx, sync_interval=args.sync_interval, flush_interval=args.flush_interval
+    )
+
+    async def main_task() -> None:
+        if args.duration:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(daemon.run(), args.duration)
+        else:
+            await daemon.run()
+
+    with contextlib.suppress(KeyboardInterrupt):
+        asyncio.run(main_task())
+    s = sensor.spool.stats()
+    print(f"stopped; {s['pending_events']} events, {s['pending_findings']} findings still queued")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,6 +170,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--all", action="store_true", help="also print events without hits")
     p.add_argument("--no-flush", action="store_true", help="only queue; don't ship")
     p.set_defaults(fn=_cmd_replay)
+
+    p = sub.add_parser("run", help="run the local sensor daemon")
+    p.add_argument(
+        "--openclaw", nargs="?", const="ws://127.0.0.1:18789", metavar="URL", help="watch an OpenClaw gateway"
+    )
+    p.add_argument("--observe-only", action="store_true", help="detect and report, never abort runs")
+    p.add_argument("--replay", nargs="+", type=Path, metavar="JSONL", help="also replay event files (demo)")
+    p.add_argument("--replay-delay", type=float, default=0.0, help="seconds between replayed events")
+    p.add_argument("--user", default=os.environ.get("SENTINEL_USER") or getpass.getuser(), help="employee id")
+    p.add_argument("--sync-interval", type=float, default=60.0)
+    p.add_argument("--flush-interval", type=float, default=5.0)
+    p.add_argument("--duration", type=float, default=0.0, help="stop after N seconds (0 = run until Ctrl+C)")
+    p.add_argument("--log-level", default="info")
+    p.set_defaults(fn=_cmd_run)
 
     args = ap.parse_args(argv)
     home = SensorHome(args.home)
