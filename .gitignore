@@ -14,3 +14,7 @@ data/
 *.sqlite
 *.db
 .DS_Store
+
+# Local-only notes (not published)
+CLAUDE.md
+docs/roadmap.md
