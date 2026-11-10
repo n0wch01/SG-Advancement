@@ -25,7 +25,7 @@
 ```
 
 자세한 설계는 [docs/architecture.md](docs/architecture.md), 공통 이벤트 스키마는 [docs/schema.md](docs/schema.md),
-진행 계획은 [docs/roadmap.md](docs/roadmap.md)를 참고하세요.
+탐지 엔진과 룰 튜닝은 [docs/detection.md](docs/detection.md)를 참고하세요.
 
 ## 개발
 
@@ -34,6 +34,7 @@ uv sync                                   # Python 3.12 환경 구성
 uv run pytest                             # 테스트
 uvx ruff check src tests scripts          # 린트
 uv run python scripts/export_schema.py    # schemas/*.json 재생성 (스키마 변경 시)
+uv run sentinel-detect examples/events/*.jsonl   # 예시 이벤트를 룰에 통과시켜 탐지 결과 보기
 ```
 
 ## 저장소 구조
@@ -41,6 +42,10 @@ uv run python scripts/export_schema.py    # schemas/*.json 재생성 (스키마 
 | 경로 | 내용 |
 |---|---|
 | `src/agent_sentinel/schema/` | 와이어 스키마 v1 (`AgentEvent`, `Finding`) |
+| `src/agent_sentinel/detect/` | 로컬 탐지 엔진 (스트리밍), `sentinel-detect` CLI |
+| `src/agent_sentinel/redact.py` | 전송 전 비밀값 마스킹 |
+| `rules/` | 선언형 탐지 룰 (카테고리별 YAML) — [docs/detection.md](docs/detection.md) |
+| `tests/rule_cases/` | 룰별 오탐/미탐 회귀 케이스 |
 | `schemas/` | 위 모델에서 생성한 JSON Schema (콘솔·비 Python 센서용) |
 | `examples/events/` | 센서별 예시 이벤트 (테스트 픽스처) |
 | `docs/` | 아키텍처·스키마·로드맵 |
