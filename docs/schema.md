@@ -46,7 +46,7 @@ AgentEvent
 | MCP `tools/list` 응답 | `inventory.snapshot` |
 | MCP `tools/call` 요청 / 응답 | `tool.call` / `tool.result` |
 | LangGraph `on_chat_model_start/end`, `on_tool_start/end` | `llm.call`, `tool.call` / `tool.result` |
-| Gemini CLI, Codex CLI | M10에서 실제 hook/설정 사양을 확인해 확정 |
+| Gemini CLI, Codex CLI | 선택 과제 X1에서 실제 hook·설정 사양을 확인해 확정 |
 | sentinel fetch interceptor (기존 SG) | `net.egress` |
 
 ## Finding

@@ -8,9 +8,9 @@
 ```
 AgentEvent ──▶ Engine.process(event) ──▶ Verdict { hits, action, findings }
  (원본)            룰마다 when → match            │
-                                                  ├─ action: 가장 강한 response (센서가 집행, M6~)
+                                                  ├─ action: 가장 강한 response (센서가 집행, M5~)
                                                   └─ findings: 중앙으로 보낼 것 (dedup 적용, 마스킹됨)
-그 뒤 redact_event(event) ──▶ 중앙 전송 (M3~)
+그 뒤 redact_event(event) ──▶ 중앙 전송 (M4~)
 ```
 
 - **스트리밍 단일 경로.** 이벤트 하나를 받을 때마다 판정한다. 배치 분석은 `Engine.replay(events)`로 같은 코드를 탄다.
@@ -21,7 +21,7 @@ AgentEvent ──▶ Engine.process(event) ──▶ Verdict { hits, action, fin
   `dedup: session`(기본값)이면 같은 룰·세션·키 조합에 대해 첫 번째 hit만 Finding으로 남는다.
   같은 유출 시도를 다섯 번 하면 다섯 번 다 막지만 콘솔에는 한 건만 보인다. `session.end` 이벤트가 오면 해당 세션의 dedup 기록이 초기화된다.
 - **M2에서는 집행하지 않는다.** `Finding.response`에는 `enforced: false`가 기록된다.
-  실제 deny나 abort는 센서 어댑터(M4, M6, M7)가 `Verdict.action`을 보고 수행한다.
+  실제 deny나 abort는 센서 어댑터(M5, M6, M8)가 `Verdict.action`을 보고 수행한다.
 
 ## 룰 형식
 

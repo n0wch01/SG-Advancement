@@ -21,8 +21,8 @@
 |---|---|---|---|
 | OpenClaw | `openclaw_gateway` (WS 구독) | 사후(세션 abort) | 기존 SG 코드 재사용 |
 | Claude Code | `claude_code_hook` | **사전**(PreToolUse에서 deny) | managed settings로 정책 강제 |
-| Gemini CLI | `gemini_cli_hook` | 사전(가능 시) | hook 사양은 M10에서 확인 |
-| Codex CLI | `codex_cli_hook` | 확인 필요 | 연동 지점은 M10에서 조사 |
+| Gemini CLI | `gemini_cli_hook` | 사전(가능 시) | hook 사양은 선택 과제 X1에서 확인 |
+| Codex CLI | `codex_cli_hook` | 확인 필요 | 연동 지점은 선택 과제 X1에서 조사 |
 | LangGraph | `langgraph_callback` | 사전(callback에서 예외) | Ollama 로컬 모델로 가상 직원 다수 시뮬레이션 |
 | 모든 MCP 클라이언트 | `mcp_proxy` | **사전**(JSON-RPC 중계 중 거부) | 에이전트 종류와 무관한 범용 경로 |
 | 모든 에이전트 | `egress_proxy` / `llm_proxy` | 사전 | 외부 유출, 비용 한도 |
