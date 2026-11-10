@@ -32,6 +32,31 @@ steps:
 - `expect.action`은 그 단계의 최종 판정이다. 걸린 룰들의 response 중 가장 강한 것이다. `expect.rules`에 적은 룰은 반드시 걸려야 하고, 나머지 룰이 추가로 걸리는 것은 허용된다.
 - 룰 하나의 오탐·미탐을 검증하는 용도라면 시나리오 말고 `tests/rule_cases/`에 케이스를 추가한다.
 
+## OpenClaw 실시간 관제 (M5)
+
+실제 OpenClaw나 LLM 없이, 가짜 게이트웨이([fake_openclaw_gateway.py](fake_openclaw_gateway.py))가 공격 시나리오를
+실제 게이트웨이와 같은 모양의 프레임으로 재생한다. 센서 데몬이 이를 관제하다가 `sessions.abort`로 실행을 중단하는 것을 보여준다.
+
+```bash
+# 터미널 1: 중앙 서버
+SENTINEL_ADMIN_TOKEN=demo-admin uv run sentinel-server
+
+# 터미널 2: 센서 등록
+export SENTINEL_ENROLL_TOKEN=$(curl -s -X POST http://127.0.0.1:8000/v1/admin/enrollment-tokens \
+  -H "Authorization: Bearer demo-admin" -H 'content-type: application/json' -d '{}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+uv run sentinel-sensor --home /tmp/alice enroll --server http://127.0.0.1:8000 --device-id dev-alice
+
+# 터미널 3: 가짜 게이트웨이 (S1 악성 플러그인 / S2 README 인젝션)
+uv run python demo/fake_openclaw_gateway.py S2
+
+# 터미널 2: 센서 데몬
+OPENCLAW_GATEWAY_TOKEN=demo uv run sentinel-sensor --home /tmp/alice run --openclaw --user alice
+```
+
+터미널 3에 `✋ sessions.abort {'key': 'agent:main:main', 'runId': 'r2'}`가 찍히고,
+`curl -s http://127.0.0.1:8000/v1/admin/findings -H "Authorization: Bearer demo-admin"`에는
+`"enforced": true, "detail": "post-hoc: sessions.abort"`가 담긴 finding이 보인다.
+
 ## 삭제
 
 ```bash

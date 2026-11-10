@@ -26,7 +26,7 @@
 
 자세한 설계는 [docs/architecture.md](docs/architecture.md), 공통 이벤트 스키마는 [docs/schema.md](docs/schema.md),
 탐지 엔진과 룰 튜닝은 [docs/detection.md](docs/detection.md), 중앙 서버 API는 [docs/control-plane.md](docs/control-plane.md),
-엔드포인트 센서는 [docs/sensor.md](docs/sensor.md),
+엔드포인트 센서는 [docs/sensor.md](docs/sensor.md), 팀 프로젝트에서 바뀐 점은 [docs/from-sg.md](docs/from-sg.md),
 위협 모델은 [docs/threat-model.md](docs/threat-model.md), 근거가 된 실제 사건은 [docs/incidents.md](docs/incidents.md)를 참고하세요.
 
 ## 개발
@@ -42,6 +42,7 @@ uv run sentinel-server                           # Control Plane API (http://127
 docker compose up -d --build                     # 같은 서버를 컨테이너로 (.env.example 참고)
 uv run sentinel-sensor enroll --server http://127.0.0.1:8000   # 센서 등록 (docs/sensor.md)
 uv run sentinel-sensor replay examples/events/claude_code.jsonl
+uv run sentinel-sensor run --openclaw          # 로컬 데몬: OpenClaw 게이트웨이 관제 (OPENCLAW_GATEWAY_TOKEN)
 ```
 
 ## 저장소 구조
@@ -52,7 +53,7 @@ uv run sentinel-sensor replay examples/events/claude_code.jsonl
 | `src/agent_sentinel/detect/` | 로컬 탐지 엔진 (스트리밍), `sentinel-detect` CLI |
 | `src/agent_sentinel/redact.py` | 전송 전 비밀값 마스킹 |
 | `src/agent_sentinel/policy.py` | 센서에 내려주는 정책 묶음과 Ed25519 서명 (서버 의존성 없음) |
-| `src/agent_sentinel/sensor/` | 엔드포인트 센서 코어: 등록, 서명 정책 캐시, 전송 대기열, 어댑터 — [docs/sensor.md](docs/sensor.md) |
+| `src/agent_sentinel/sensor/` | 엔드포인트 센서: 등록, 서명 정책 캐시, 전송 대기열, 로컬 데몬, 어댑터(OpenClaw, replay) — [docs/sensor.md](docs/sensor.md) |
 | `src/agent_sentinel/server/` | Control Plane API (FastAPI + SQLAlchemy) — [docs/control-plane.md](docs/control-plane.md) |
 | `compose.yaml`, `deploy/` | 데모 토폴로지와 이미지 |
 | `rules/` | 선언형 탐지 룰 (카테고리별 YAML) — [docs/detection.md](docs/detection.md) |

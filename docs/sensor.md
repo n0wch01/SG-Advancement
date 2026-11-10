@@ -93,6 +93,47 @@ B는 등록 토큰을 쓰기 **전에** `/healthz`의 키 지문을 먼저 비�
 - **사용자 프롬프트는 높음**: 사용자가 공격자인 경우(GTG-1002)와, 에이전트가 사용자 지시를 어긴 경우(Replit)의 근거가 된다.
 - 등급표는 지금 코드에 있다. M9에서 중앙 정책으로 옮겨 그룹별로 바꿀 수 있게 할 수 있다.
 
+## 로컬 데몬 (`sentinel-sensor run`)
+
+[daemon.py](../src/agent_sentinel/sensor/daemon.py). 엔드포인트마다 하나 떠 있는 프로세스다.
+룰 엔진을 데몬이 들고 있어서, 시퀀스·빈도 룰이 이 PC의 모든 어댑터에서 오는 이벤트를 함께 본다.
+
+```bash
+export OPENCLAW_GATEWAY_TOKEN=...                       # 게이트웨이 토큰은 환경 변수로만 받는다
+sentinel-sensor run --openclaw                          # 기본 ws://127.0.0.1:18789
+sentinel-sensor run --openclaw --observe-only           # 탐지·보고만, 실행 중단은 하지 않음
+sentinel-sensor run --replay examples/events/*.jsonl    # 데모용: 파일을 재생
+```
+
+| 하는 일 | 주기 | 비고 |
+|---|---|---|
+| 어댑터 실행 | 계속 | 어댑터 하나가 죽어도 나머지는 계속 돈다 |
+| 정책 동기화 | 60초 (`--sync-interval`) | 실패하면 마지막 정책 유지 |
+| 대기열 전송 | 5초 (`--flush-interval`) | 종료할 때 한 번 더 |
+| 처음 정책 받기 | 받을 때까지 재시도 | 중앙이 아직 안 떴을 수 있다(컨테이너 기동 순서). 그동안 판정은 하지 않는다 |
+
+네트워크 호출은 작업 스레드에서 돌아서, 중앙이 느려도 이벤트 처리가 밀리지 않는다.
+hook처럼 호출마다 새로 뜨는 어댑터가 데몬에 판정을 묻는 로컬 소켓은 M6에서 붙인다.
+
+## OpenClaw 어댑터
+
+[adapters/openclaw.py](../src/agent_sentinel/sensor/adapters/openclaw.py). 설치: `agent-sentinel[openclaw]`(websockets).
+SG 코드에서 무엇을 가져오고 고쳤는지는 [from-sg.md](from-sg.md#openclaw-연동-m5)에 있다.
+
+| 게이트웨이에서 | AgentEvent로 |
+|---|---|
+| `tools.catalog` 응답 | `inventory.snapshot` (툴, 플러그인). 연결할 때, 5분마다, 목록에 없는 툴이 보일 때 |
+| `agent` lifecycle `start` | `session.start` (세션 키마다 처음 한 번) |
+| `session.tool` `phase: start` | `tool.call` (`provider`는 툴 목록으로 플러그인·내장 구분) |
+| `session.tool` `phase: result` | `tool.result`. 결과 텍스트가 없으면(기본 verbose) 트랜스크립트를 기다린다 |
+| `session.message` role `user` / `assistant` / `toolResult` | `prompt.user` / `message.assistant` / `tool.result` |
+
+- **집행은 사후다.** 게이트웨이는 툴이 이미 시작된 뒤에 알려준다. 판정이 `block` 이상이면 `sessions.abort`로 그 실행을 중단하고,
+  결과(`enforced`, 실패 사유)를 finding의 `response`에 담는다. 같은 실행은 한 번만 중단한다.
+- `require_approval`은 아직 OpenClaw에서 집행하지 못한다(alert로 기록). 게이트웨이의 셸 실행 승인(`exec.approval.*`)을 쓰면 셸 명령은 사전에 막을 수 있다.
+- 권한: 관측만 하면 `operator.read`, 중단까지 하면 `operator.write`. 장치 신원 파일이 있으면 connect에 서명해 권한을 유지한다.
+- 연결이 끊기면 1초부터 최대 60초까지 늘려 가며 다시 붙는다.
+
 ## 어댑터 계약
 
 [adapters/base.py](../src/agent_sentinel/sensor/adapters/base.py)
@@ -100,9 +141,12 @@ B는 등록 토큰을 쓰기 **전에** `/healthz`의 키 지문을 먼저 비�
 ```python
 class Adapter(Protocol):
     name: str
-    def events(self) -> Iterator[AgentEvent]: ...
-    def enforce(self, verdict: Verdict) -> None: ...
+    async def run(self, ctx: AdapterContext) -> None: ...   # 취소될 때까지
+
+result = ctx.evaluate(event)          # 장비 ID 채우기 + 로컬 룰 → 판정 (아직 대기열에 안 넣음)
+enforcement = ...                     # 어댑터가 판정에 따라 집행 (가능하면)
+ctx.record(result, enforcement)       # 마스킹된 이벤트와 finding을 집행 결과와 함께 대기열로
 ```
 
-M4에는 JSONL 파일을 재생하는 `ReplayAdapter`만 있다. OpenClaw(M5)는 관측과 사후 abort를,
-Claude Code hook(M6)과 MCP 프록시(M8)는 사전 차단을 `enforce`로 구현한다.
+판정과 기록을 나눈 이유는, 집행이 비동기(OpenClaw의 `sessions.abort`)일 때 **실제로 무슨 일이 일어났는지**를 finding에 남기기 위해서다.
+관측만 하는 어댑터(`ReplayAdapter`)는 `enforcement` 없이 기록한다. Claude Code hook(M6)과 MCP 프록시(M8)는 툴 실행 전에 집행한다.
