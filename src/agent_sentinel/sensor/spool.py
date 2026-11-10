@@ -4,6 +4,9 @@ Everything the sensor wants to send goes here first, so nothing is lost while th
 is down. ``flush`` ships it in batches; because the server deduplicates on event_id/finding_id,
 re-sending a batch after a lost response is harmless.
 
+Items carry a priority (priority.py): a full spool evicts low priority first, and a flush sends
+high priority first, so the evidence that matters survives a long outage.
+
 Several short-lived processes (one per Claude Code hook call, for example) may write at the same
 time, so the DB runs in WAL mode with a busy timeout.
 """
@@ -21,6 +24,7 @@ from typing import Literal
 
 from ..schema import AgentEvent, Finding
 from .client import ControlPlaneClient, Offline
+from .priority import Priority
 
 Kind = Literal["event", "finding"]
 _ENDPOINT: dict[Kind, tuple[str, str]] = {
@@ -38,10 +42,12 @@ CREATE TABLE IF NOT EXISTS outbox (
     attempts   INTEGER NOT NULL DEFAULT 0,
     dead       INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
+    priority   INTEGER NOT NULL DEFAULT 1,
     UNIQUE (kind, item_id)
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
 """
+_INDEX = "CREATE INDEX IF NOT EXISTS outbox_send_order ON outbox (dead, priority, kind, id)"
 
 
 @dataclass
@@ -69,6 +75,10 @@ class Spool:
         self.batch_size = batch_size
         with self._db() as db:
             db.executescript(_SCHEMA)
+            cols = {row[1] for row in db.execute("PRAGMA table_info(outbox)")}
+            if "priority" not in cols:  # spool created before priorities existed
+                db.execute("ALTER TABLE outbox ADD COLUMN priority INTEGER NOT NULL DEFAULT 1")
+            db.execute(_INDEX)
 
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
@@ -81,36 +91,50 @@ class Spool:
 
     # ── enqueue ──────────────────────────────────────────────────────────────
 
-    def add(self, items: list[AgentEvent | Finding]) -> None:
+    def add(self, items: list[AgentEvent | Finding], priority: Priority = Priority.NORMAL) -> None:
+        """Queue events at ``priority``; findings are always CRITICAL and promote their evidence."""
         rows = []
+        evidence: list[str] = []
+        now = time.time()
         for it in items:
             if isinstance(it, AgentEvent):
-                rows.append(("event", it.event_id, it.model_dump_json(), time.time()))
+                rows.append(("event", it.event_id, it.model_dump_json(), now, int(priority)))
             else:
-                rows.append(("finding", it.finding_id, it.model_dump_json(), time.time()))
+                rows.append(("finding", it.finding_id, it.model_dump_json(), now, int(Priority.CRITICAL)))
+                evidence.extend(it.evidence_event_ids)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             db.executemany(
-                "INSERT OR IGNORE INTO outbox (kind, item_id, doc, created) VALUES (?,?,?,?)", rows
+                "INSERT OR IGNORE INTO outbox (kind, item_id, doc, created, priority) VALUES (?,?,?,?,?)",
+                rows,
             )
+            if evidence:
+                db.executemany(
+                    "UPDATE outbox SET priority = ? WHERE kind = 'event' AND item_id = ?",
+                    [(int(Priority.CRITICAL), e) for e in evidence],
+                )
             self._enforce_cap(db)
             db.execute("COMMIT")
 
     def _enforce_cap(self, db: sqlite3.Connection) -> None:
-        """Bounded disk use while offline: drop the oldest *events* first; findings are kept."""
+        """Bounded disk use while offline: evict events, lowest priority first, oldest first within
+        a level. Findings are never evicted (they are few, and they are the point)."""
         (n,) = db.execute("SELECT COUNT(*) FROM outbox WHERE dead = 0").fetchone()
         excess = n - self.max_items
         if excess <= 0:
             return
-        cur = db.execute(
-            "DELETE FROM outbox WHERE id IN "
-            "(SELECT id FROM outbox WHERE kind = 'event' AND dead = 0 ORDER BY id LIMIT ?)",
+        victims = db.execute(
+            "SELECT id, priority FROM outbox WHERE kind = 'event' AND dead = 0 ORDER BY priority, id LIMIT ?",
             (excess,),
-        )
-        db.execute(
-            "INSERT INTO meta (key, value) VALUES ('dropped_events', ?) "
+        ).fetchall()
+        db.executemany("DELETE FROM outbox WHERE id = ?", [(v[0],) for v in victims])
+        dropped: dict[int, int] = {}
+        for _, prio in victims:
+            dropped[prio] = dropped.get(prio, 0) + 1
+        db.executemany(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = value + excluded.value",
-            (cur.rowcount,),
+            [(f"dropped_p{prio}", count) for prio, count in dropped.items()],
         )
 
     # ── inspect ──────────────────────────────────────────────────────────────
@@ -121,12 +145,14 @@ class Spool:
                 db.execute("SELECT kind, COUNT(*) FROM outbox WHERE dead = 0 GROUP BY kind").fetchall()
             )
             (dead,) = db.execute("SELECT COUNT(*) FROM outbox WHERE dead = 1").fetchone()
-            dropped = db.execute("SELECT value FROM meta WHERE key = 'dropped_events'").fetchone()
+            meta = dict(db.execute("SELECT key, value FROM meta WHERE key LIKE 'dropped_p%'").fetchall())
+        by_level = {f"dropped_{p.name.lower()}": meta.get(f"dropped_p{int(p)}", 0) for p in Priority}
         return {
             "pending_events": pending.get("event", 0),
             "pending_findings": pending.get("finding", 0),
             "dead": dead,
-            "dropped_events": dropped[0] if dropped else 0,
+            "dropped_events": sum(by_level.values()),
+            **by_level,
         }
 
     def dead_letters(self) -> list[tuple[str, str, str]]:
@@ -138,11 +164,13 @@ class Spool:
     # ── ship ─────────────────────────────────────────────────────────────────
 
     def flush(self, client: ControlPlaneClient) -> FlushResult:
-        """Send everything pending. Events go before findings so the console can resolve evidence."""
+        """Send everything pending, highest priority first. Within a level events go before
+        findings so the console can resolve evidence."""
         result = FlushResult()
         try:
-            for kind in ("event", "finding"):
-                self._flush_kind(client, kind, result)
+            for prio in sorted(Priority, reverse=True):
+                for kind in ("event", "finding"):
+                    self._flush_kind(client, kind, int(prio), result)
         except Offline as e:
             result.error = f"offline: {e}"
         except AuthRejected as e:
@@ -151,13 +179,15 @@ class Spool:
         result.remaining = s["pending_events"] + s["pending_findings"]
         return result
 
-    def _flush_kind(self, client: ControlPlaneClient, kind: Kind, result: FlushResult) -> None:
+    def _flush_kind(self, client: ControlPlaneClient, kind: Kind, prio: int, result: FlushResult) -> None:
         path, field = _ENDPOINT[kind]
         size = self.batch_size
         while True:
             with self._db() as db:
                 rows = db.execute(
-                    "SELECT id, doc FROM outbox WHERE kind = ? AND dead = 0 ORDER BY id LIMIT ?", (kind, size)
+                    "SELECT id, doc FROM outbox WHERE dead = 0 AND priority = ? AND kind = ? "
+                    "ORDER BY id LIMIT ?",
+                    (prio, kind, size),
                 ).fetchall()
             if not rows:
                 return

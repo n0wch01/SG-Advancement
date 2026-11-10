@@ -305,10 +305,12 @@ def test_lost_response_resend_is_deduplicated(server: TestClient, net: Net, home
     events = list(ReplayAdapter([EXAMPLES / "claude_code.jsonl"]).events())
     for ev in events:
         sensor.process(ev)
-    net.drop_response = True  # server stores the events, sensor never hears back
+    net.drop_response = True  # server stores the first batch, sensor never hears back
     assert not sensor.flush().ok
+    first_batch = len(admin_get(server, "/v1/admin/events"))
+    assert 0 < first_batch < len(events)  # priorities split the send into levels
     r = sensor.flush()
-    assert r.ok and r.duplicates == len(events)
+    assert r.ok and r.duplicates == first_batch
     assert len(admin_get(server, "/v1/admin/events")) == len(events)
 
 

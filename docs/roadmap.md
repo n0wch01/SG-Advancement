@@ -15,6 +15,10 @@
   센서는 기본으로 등록 응답에서 서버 공개키를 받아 저장하고(처음 한 번 신뢰), 선택으로 설치 시 공개키를 직접 지정(고정)할 수 있다.
 - **장비 신원**: M3~M11은 장비 토큰으로 인증한다. 다른 PC가 네트워크로 붙는 M12에서 장비 인증서(mTLS)를 더한다.
   인증서를 써도 이벤트 안의 `device_id` 검사는 그대로 유지한다.
+- **로컬 데몬**: 엔드포인트마다 `sentinel-sensor run` 데몬이 상주하며 룰 엔진 상태(시퀀스·빈도)를 들고 있다.
+  OpenClaw처럼 오래 붙어 있는 어댑터는 데몬 안에서 돌고, Claude Code hook처럼 호출마다 뜨는 어댑터는 로컬 소켓으로 판정만 묻는다.
+- **판정할 수 없을 때는 fail-open**: 데몬이 없거나 정책이 없으면 허용한다. 대신 그 사실을 반드시 기록해 콘솔에서 보이게 한다.
+- **전송 대기열 우선순위**: 이벤트에 등급(낮음·보통·높음·긴급)을 매긴다. 대기열이 차면 낮은 등급부터 버리고, 다시 연결되면 높은 등급부터 보낸다.
 - **가상 직원 LLM**: 기본은 로컬 Ollama(외부 API 불필요)로 하고, 직원마다 모델 백엔드를 설정으로 바꿀 수 있게 한다.
   개발 머신은 Mac 16GB이므로 Ollama는 호스트에서 직접 실행하고(Docker 안에서는 Metal GPU를 못 쓴다), 7~8B급 모델 하나를 직원들이 공유한다.
   동시에 움직이는 직원은 2~3명으로 잡고, 나머지는 일과 스케줄로 순서를 나눈다.
@@ -27,8 +31,8 @@
 | M2 | 로컬 탐지 엔진 | SG `detect.py` 룰 타입 이전(regex/rate/loop/sequence/inventory diff), redaction, S1~S3 룰 통과 | ✅ |
 | M3 | Control Plane API | FastAPI + SQLAlchemy(SQLite): 장비 등록(토큰), 이벤트·finding 수집, 정책 v0(`rules/` 묶음 + 해시) 조회, compose 뼈대, 위협 모델 초안(`docs/threat-model.md`) | ✅ |
 | M4 | Sensor core | 어댑터 인터페이스, 정책 pull·캐시(중앙이 끊기면 마지막 정책 사용), 정책 서명(Ed25519) 검증, 전송 큐·재시도, 등록 CLI. 예시 이벤트 replay로 센서 → 중앙 엔드투엔드 | ✅ |
-| M5 | OpenClaw 어댑터 | SG ingest/respond 이전, 사후 abort 집행, SG 대비 변경점 문서(`docs/from-sg.md`) | ⏳ |
-| M6 | Claude Code hook 어댑터 | PreToolUse에서 로컬 정책으로 deny(첫 사전 차단), 두 종류 에이전트 동시 관제 | |
+| M5 | 로컬 데몬 + OpenClaw 어댑터 | `sentinel-sensor run`(어댑터 실행, 주기적 정책 동기화·전송), SG ingest/respond 이전, 사후 abort 집행, SG 대비 변경점 문서(`docs/from-sg.md`) | ⏳ |
+| M6 | Claude Code hook 어댑터 | hook → 로컬 소켓 → 데몬 판정, PreToolUse에서 deny(첫 사전 차단), 데몬·정책 없으면 fail-open + 기록, 두 종류 에이전트 동시 관제 | |
 | M7 | Console v1 | 장비/사용자 인벤토리, 위협 타임라인, finding 상세(룰 근거, 마스킹된 증거) | |
 | M8 | MCP 프록시 + 악성 MCP 시나리오 | tool poisoning, 미허가 MCP 서버 차단 | |
 | M9 | 정책 관리 | 정책 버전·그룹별 대상·응답 단계, 콘솔 편집기, 센서 pull 반영, 변경 감사 로그 | |

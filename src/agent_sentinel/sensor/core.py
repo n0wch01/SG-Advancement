@@ -22,6 +22,7 @@ from ..policy import PolicyBundle, PolicyVerificationError, key_id, load_public_
 from ..redact import redact_event
 from ..schema import AgentEvent
 from .client import ControlPlaneClient, ControlPlaneError, Offline, Transport
+from .priority import event_priority
 from .spool import FlushResult, Spool
 from .state import Credentials, SensorHome, now_utc, write_private
 
@@ -168,7 +169,7 @@ class Sensor:
             raise NoPolicy("call start() first")
         event = self.stamp(event)
         verdict = self.engine.process(event)  # detection sees the original (unredacted) event
-        self.spool.add([redact_event(event), *verdict.findings])
+        self.spool.add([redact_event(event), *verdict.findings], event_priority(event, verdict))
         return ProcessResult(verdict, event)
 
     def flush(self) -> FlushResult:

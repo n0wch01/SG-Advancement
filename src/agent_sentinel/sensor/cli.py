@@ -59,6 +59,13 @@ def _cmd_status(home: SensorHome, _: argparse.Namespace) -> int:
         f"spool      {s['pending_events']} events, {s['pending_findings']} findings pending; "
         f"{s['dead']} dead; {s['dropped_events']} dropped"
     )
+    if s["dropped_events"]:
+        levels = ", ".join(
+            f"{k.removeprefix('dropped_')} {v}"
+            for k, v in s.items()
+            if k.startswith("dropped_") and k != "dropped_events"
+        )
+        print(f"           dropped by priority: {levels}")
     for kind, item_id, err in sensor.spool.dead_letters()[:5]:
         print(f"  dead {kind} {item_id}: {err}")
     return 0
