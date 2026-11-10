@@ -1,0 +1,402 @@
+{
+  "$defs": {
+    "AgentRef": {
+      "additionalProperties": false,
+      "description": "Which agent instance and conversation the event belongs to.",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/AgentType"
+        },
+        "session_id": {
+          "description": "Agent-native session/conversation id",
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One agent turn/run inside the session, if known",
+          "title": "Run Id"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cwd"
+        }
+      },
+      "required": [
+        "type",
+        "session_id"
+      ],
+      "title": "AgentRef",
+      "type": "object"
+    },
+    "AgentType": {
+      "description": "The AI agent product that produced the activity.",
+      "enum": [
+        "openclaw",
+        "claude_code",
+        "langgraph",
+        "gemini_cli",
+        "codex_cli",
+        "unknown"
+      ],
+      "title": "AgentType",
+      "type": "string"
+    },
+    "Endpoint": {
+      "additionalProperties": false,
+      "description": "The machine (container / VM / PC) the agent runs on.",
+      "properties": {
+        "device_id": {
+          "description": "Stable id issued at enrollment",
+          "minLength": 1,
+          "title": "Device Id",
+          "type": "string"
+        },
+        "hostname": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hostname"
+        },
+        "os": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Os"
+        },
+        "ip": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ip"
+        }
+      },
+      "required": [
+        "device_id"
+      ],
+      "title": "Endpoint",
+      "type": "object"
+    },
+    "Enforcement": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ResponseAction"
+        },
+        "enforced": {
+          "description": "False = recommended only (detect mode) or enforcement failed",
+          "title": "Enforced",
+          "type": "boolean"
+        },
+        "enforcer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SensorType"
+            },
+            {
+              "const": "control_plane",
+              "type": "string"
+            }
+          ],
+          "title": "Enforcer"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        }
+      },
+      "required": [
+        "action",
+        "enforced",
+        "enforcer"
+      ],
+      "title": "Enforcement",
+      "type": "object"
+    },
+    "Principal": {
+      "additionalProperties": false,
+      "description": "The human the agent acts on behalf of.",
+      "properties": {
+        "user_id": {
+          "minLength": 1,
+          "title": "User Id",
+          "type": "string"
+        },
+        "display_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Name"
+        },
+        "groups": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Groups",
+          "type": "array"
+        }
+      },
+      "required": [
+        "user_id"
+      ],
+      "title": "Principal",
+      "type": "object"
+    },
+    "ResponseAction": {
+      "description": "Ordered from least to most disruptive.",
+      "enum": [
+        "allow",
+        "alert",
+        "require_approval",
+        "block",
+        "abort_session",
+        "quarantine"
+      ],
+      "title": "ResponseAction",
+      "type": "string"
+    },
+    "SensorType": {
+      "description": "How the activity was observed. One agent can be seen by several sensors\n(e.g. Claude Code via its hooks *and* via the MCP proxy).",
+      "enum": [
+        "openclaw_gateway",
+        "claude_code_hook",
+        "gemini_cli_hook",
+        "codex_cli_hook",
+        "langgraph_callback",
+        "mcp_proxy",
+        "llm_proxy",
+        "egress_proxy"
+      ],
+      "title": "SensorType",
+      "type": "string"
+    },
+    "Severity": {
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "ThreatCategory": {
+      "description": "Coarse category shown in the console. Fine-grained framework ids\n(OWASP LLM / Agentic, MITRE ATLAS) go into Finding.tags.",
+      "enum": [
+        "prompt_injection",
+        "data_exfiltration",
+        "supply_chain",
+        "tool_misuse",
+        "resource_abuse",
+        "privilege_escalation",
+        "memory_poisoning",
+        "policy_violation",
+        "other"
+      ],
+      "title": "ThreatCategory",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1",
+      "default": "1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "finding_id": {
+      "title": "Finding Id",
+      "type": "string"
+    },
+    "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+    },
+    "rule_id": {
+      "minLength": 1,
+      "title": "Rule Id",
+      "type": "string"
+    },
+    "rule_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rule Version"
+    },
+    "severity": {
+      "$ref": "#/$defs/Severity"
+    },
+    "category": {
+      "$ref": "#/$defs/ThreatCategory"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "message": {
+      "default": "",
+      "title": "Message",
+      "type": "string"
+    },
+    "recommended_action": {
+      "default": "",
+      "title": "Recommended Action",
+      "type": "string"
+    },
+    "confidence": {
+      "default": 1.0,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "detector": {
+      "default": "local",
+      "enum": [
+        "local",
+        "central"
+      ],
+      "title": "Detector",
+      "type": "string"
+    },
+    "evidence_event_ids": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Event Ids",
+      "type": "array"
+    },
+    "endpoint": {
+      "$ref": "#/$defs/Endpoint"
+    },
+    "principal": {
+      "$ref": "#/$defs/Principal"
+    },
+    "agent": {
+      "$ref": "#/$defs/AgentRef"
+    },
+    "response": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Enforcement"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "tags": {
+      "default": [],
+      "description": "e.g. owasp-llm:LLM01, mitre-atlas:AML.T0051",
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    },
+    "labels": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Labels",
+      "type": "object"
+    }
+  },
+  "required": [
+    "ts",
+    "rule_id",
+    "severity",
+    "category",
+    "title",
+    "endpoint",
+    "principal",
+    "agent"
+  ],
+  "title": "Finding",
+  "type": "object"
+}

@@ -1,0 +1,898 @@
+{
+  "$defs": {
+    "AgentRef": {
+      "additionalProperties": false,
+      "description": "Which agent instance and conversation the event belongs to.",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/AgentType"
+        },
+        "session_id": {
+          "description": "Agent-native session/conversation id",
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One agent turn/run inside the session, if known",
+          "title": "Run Id"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cwd"
+        }
+      },
+      "required": [
+        "type",
+        "session_id"
+      ],
+      "title": "AgentRef",
+      "type": "object"
+    },
+    "AgentType": {
+      "description": "The AI agent product that produced the activity.",
+      "enum": [
+        "openclaw",
+        "claude_code",
+        "langgraph",
+        "gemini_cli",
+        "codex_cli",
+        "unknown"
+      ],
+      "title": "AgentType",
+      "type": "string"
+    },
+    "AssistantMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "message.assistant",
+          "default": "message.assistant",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "AssistantMessage",
+      "type": "object"
+    },
+    "Endpoint": {
+      "additionalProperties": false,
+      "description": "The machine (container / VM / PC) the agent runs on.",
+      "properties": {
+        "device_id": {
+          "description": "Stable id issued at enrollment",
+          "minLength": 1,
+          "title": "Device Id",
+          "type": "string"
+        },
+        "hostname": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hostname"
+        },
+        "os": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Os"
+        },
+        "ip": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ip"
+        }
+      },
+      "required": [
+        "device_id"
+      ],
+      "title": "Endpoint",
+      "type": "object"
+    },
+    "InventorySnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "inventory.snapshot",
+          "default": "inventory.snapshot",
+          "title": "Kind",
+          "type": "string"
+        },
+        "tools": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ToolDescriptor"
+          },
+          "title": "Tools",
+          "type": "array"
+        },
+        "plugins": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDescriptor"
+          },
+          "title": "Plugins",
+          "type": "array"
+        },
+        "mcp_servers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Mcp Servers",
+          "type": "array"
+        }
+      },
+      "title": "InventorySnapshot",
+      "type": "object"
+    },
+    "LlmCall": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "llm.call",
+          "default": "llm.call",
+          "title": "Kind",
+          "type": "string"
+        },
+        "provider": {
+          "description": "anthropic | openai | google | ollama | ...",
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "input_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Tokens"
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Tokens"
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Usd"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Ms"
+        }
+      },
+      "required": [
+        "provider",
+        "model"
+      ],
+      "title": "LlmCall",
+      "type": "object"
+    },
+    "NetEgress": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "net.egress",
+          "default": "net.egress",
+          "title": "Kind",
+          "type": "string"
+        },
+        "method": {
+          "default": "GET",
+          "title": "Method",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "host": {
+          "title": "Host",
+          "type": "string"
+        },
+        "bytes_out": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bytes Out"
+        },
+        "destination": {
+          "default": "unknown",
+          "enum": [
+            "internal",
+            "external",
+            "unknown"
+          ],
+          "title": "Destination",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "host"
+      ],
+      "title": "NetEgress",
+      "type": "object"
+    },
+    "PluginDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "plugin_id": {
+          "title": "Plugin Id",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Install source: registry, path, git url ...",
+          "title": "Source"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "plugin_id"
+      ],
+      "title": "PluginDescriptor",
+      "type": "object"
+    },
+    "Principal": {
+      "additionalProperties": false,
+      "description": "The human the agent acts on behalf of.",
+      "properties": {
+        "user_id": {
+          "minLength": 1,
+          "title": "User Id",
+          "type": "string"
+        },
+        "display_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Name"
+        },
+        "groups": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Groups",
+          "type": "array"
+        }
+      },
+      "required": [
+        "user_id"
+      ],
+      "title": "Principal",
+      "type": "object"
+    },
+    "SensorType": {
+      "description": "How the activity was observed. One agent can be seen by several sensors\n(e.g. Claude Code via its hooks *and* via the MCP proxy).",
+      "enum": [
+        "openclaw_gateway",
+        "claude_code_hook",
+        "gemini_cli_hook",
+        "codex_cli_hook",
+        "langgraph_callback",
+        "mcp_proxy",
+        "llm_proxy",
+        "egress_proxy"
+      ],
+      "title": "SensorType",
+      "type": "string"
+    },
+    "SessionEnd": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "session.end",
+          "default": "session.end",
+          "title": "Kind",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "completed | aborted | error | ...",
+          "title": "Reason"
+        }
+      },
+      "title": "SessionEnd",
+      "type": "object"
+    },
+    "SessionStart": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "session.start",
+          "default": "session.start",
+          "title": "Kind",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "title": "SessionStart",
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "description": "The sensor/adapter that emitted the event.",
+      "properties": {
+        "sensor": {
+          "$ref": "#/$defs/SensorType"
+        },
+        "sensor_version": {
+          "default": "0.1.0",
+          "title": "Sensor Version",
+          "type": "string"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-sensor monotonic sequence number",
+          "title": "Seq"
+        }
+      },
+      "required": [
+        "sensor"
+      ],
+      "title": "Source",
+      "type": "object"
+    },
+    "ToolCall": {
+      "additionalProperties": false,
+      "description": "Emitted *before* a tool executes. Sensors that can block (hooks, proxies) wait for the\nlocal policy verdict on this event.",
+      "properties": {
+        "kind": {
+          "const": "tool.call",
+          "default": "tool.call",
+          "title": "Kind",
+          "type": "string"
+        },
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/ToolProvider",
+          "default": {
+            "kind": "unknown",
+            "plugin_id": null,
+            "mcp_server": null,
+            "mcp_server_url": null
+          }
+        },
+        "arguments": {
+          "additionalProperties": true,
+          "description": "Redacted by the sensor",
+          "title": "Arguments",
+          "type": "object"
+        }
+      },
+      "required": [
+        "call_id",
+        "tool"
+      ],
+      "title": "ToolCall",
+      "type": "object"
+    },
+    "ToolDescriptor": {
+      "additionalProperties": false,
+      "description": "A tool as advertised to the model (used for inventory / tool-poisoning checks).",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/ToolProvider",
+          "default": {
+            "kind": "unknown",
+            "plugin_id": null,
+            "mcp_server": null,
+            "mcp_server_url": null
+          }
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "description_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description Sha256"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "ToolDescriptor",
+      "type": "object"
+    },
+    "ToolProvider": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ToolProviderKind",
+          "default": "unknown"
+        },
+        "plugin_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plugin Id"
+        },
+        "mcp_server": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "MCP server name as configured by the client",
+          "title": "Mcp Server"
+        },
+        "mcp_server_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mcp Server Url"
+        }
+      },
+      "title": "ToolProvider",
+      "type": "object"
+    },
+    "ToolProviderKind": {
+      "enum": [
+        "builtin",
+        "plugin",
+        "mcp",
+        "function",
+        "unknown"
+      ],
+      "title": "ToolProviderKind",
+      "type": "string"
+    },
+    "ToolResult": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "tool.result",
+          "default": "tool.result",
+          "title": "Kind",
+          "type": "string"
+        },
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/ToolProvider",
+          "default": {
+            "kind": "unknown",
+            "plugin_id": null,
+            "mcp_server": null,
+            "mcp_server_url": null
+          }
+        },
+        "ok": {
+          "default": true,
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "output_preview": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Head of the output, redacted",
+          "title": "Output Preview"
+        },
+        "output_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Bytes"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ms"
+        }
+      },
+      "required": [
+        "call_id",
+        "tool"
+      ],
+      "title": "ToolResult",
+      "type": "object"
+    },
+    "UserPrompt": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "prompt.user",
+          "default": "prompt.user",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "UserPrompt",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1",
+      "default": "1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "ts": {
+      "description": "When it happened on the endpoint (UTC recommended)",
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+    },
+    "received_ts": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Set by the control plane",
+      "title": "Received Ts"
+    },
+    "endpoint": {
+      "$ref": "#/$defs/Endpoint"
+    },
+    "principal": {
+      "$ref": "#/$defs/Principal"
+    },
+    "agent": {
+      "$ref": "#/$defs/AgentRef"
+    },
+    "source": {
+      "$ref": "#/$defs/Source"
+    },
+    "payload": {
+      "discriminator": {
+        "mapping": {
+          "inventory.snapshot": "#/$defs/InventorySnapshot",
+          "llm.call": "#/$defs/LlmCall",
+          "message.assistant": "#/$defs/AssistantMessage",
+          "net.egress": "#/$defs/NetEgress",
+          "prompt.user": "#/$defs/UserPrompt",
+          "session.end": "#/$defs/SessionEnd",
+          "session.start": "#/$defs/SessionStart",
+          "tool.call": "#/$defs/ToolCall",
+          "tool.result": "#/$defs/ToolResult"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SessionStart"
+        },
+        {
+          "$ref": "#/$defs/SessionEnd"
+        },
+        {
+          "$ref": "#/$defs/UserPrompt"
+        },
+        {
+          "$ref": "#/$defs/AssistantMessage"
+        },
+        {
+          "$ref": "#/$defs/ToolCall"
+        },
+        {
+          "$ref": "#/$defs/ToolResult"
+        },
+        {
+          "$ref": "#/$defs/LlmCall"
+        },
+        {
+          "$ref": "#/$defs/NetEgress"
+        },
+        {
+          "$ref": "#/$defs/InventorySnapshot"
+        }
+      ],
+      "title": "Payload"
+    },
+    "labels": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Free-form, e.g. scenario=S1",
+      "title": "Labels",
+      "type": "object"
+    },
+    "raw": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional redacted native frame",
+      "title": "Raw"
+    }
+  },
+  "required": [
+    "ts",
+    "endpoint",
+    "principal",
+    "agent",
+    "source",
+    "payload"
+  ],
+  "title": "AgentEvent",
+  "type": "object"
+}

@@ -1,0 +1,1 @@
+{"ts":"2026-11-10T05:00:00Z","endpoint":{"device_id":"dev-erin"},"principal":{"user_id":"erin"},"agent":{"type":"gemini_cli","session_id":"gm-01","model":"gemini-2.5-pro"},"source":{"sensor":"gemini_cli_hook","seq":1},"payload":{"kind":"tool.call","call_id":"gm-call-1","tool":"run_shell_command","provider":{"kind":"builtin"},"arguments":{"command":"cat ~/.aws/credentials"}}}
