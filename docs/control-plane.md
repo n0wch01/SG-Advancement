@@ -19,7 +19,9 @@ docker compose up -d --build
 | `SENTINEL_ADMIN_TOKEN` | (없음) | 관리자 API 토큰. M7에서 콘솔 로그인으로 바뀐다 |
 | `SENTINEL_DB_URL` | `sqlite:///data/sentinel.db` | SQLAlchemy URL. Postgres로 갈 때 이 값만 바꾼다 |
 | `SENTINEL_RULES_DIR` | `rules` | 정책 v0으로 내려줄 룰 디렉터리 |
+| `SENTINEL_SIGNING_KEY` | `data/policy_signing_key.pem` | 정책 서명용 Ed25519 개인키. 없으면 처음 시작할 때 만든다 (0600) |
 | `SENTINEL_MAX_BATCH` | `500` | 한 번에 받는 이벤트/finding 최대 개수 |
+| `SENTINEL_PORT` | `8000` | compose에서 호스트에 여는 포트 (8000이 이미 쓰이고 있을 때) |
 
 ## 인증
 
@@ -42,7 +44,7 @@ docker compose up -d --build
 
 ```
 관리자 ─ POST /v1/admin/enrollment-tokens ─▶ set_… (설치 담당자에게 전달)
-센서   ─ POST /v1/enroll  (Bearer set_…)  ─▶ { device_id, device_token: sdt_… }   ← 한 번만 보여줌
+센서   ─ POST /v1/enroll  (Bearer set_…)  ─▶ { device_id, device_token: sdt_…, policy_public_key }   ← 토큰은 한 번만 보여줌
 센서   ─ GET  /v1/policy  (Bearer sdt_…, If-None-Match) ─▶ 200 bundle | 304
 센서   ─ 로컬 탐지 → redact ─ POST /v1/events, /v1/findings ─▶ { accepted, duplicates }
 관리자 ─ GET /v1/admin/devices | events | findings
@@ -50,7 +52,7 @@ docker compose up -d --build
 
 | 메서드 | 경로 | 인증 | 설명 |
 |---|---|---|---|
-| GET | `/healthz` | 없음 | 상태와 현재 정책 버전 |
+| GET | `/healthz` | 없음 | 상태, 현재 정책 버전, 서명 키 지문(`policy_key_id`) |
 | POST | `/v1/enroll` | 등록 토큰 | 장비 등록. `device_id`를 생략하면 서버가 `dev-xxxxxxxx`로 만든다. 중복이면 409 |
 | GET | `/v1/policy` | 장비 | 정책 묶음. `ETag`가 정책 버전이다 |
 | POST | `/v1/events` | 장비 | `{"events": [AgentEvent, ...]}` |
@@ -59,7 +61,7 @@ docker compose up -d --build
 | GET | `/v1/admin/devices` | 관리자 | 장비 목록. `policy_current`는 이 장비가 최신 정책을 받아 갔는지 여부 |
 | GET | `/v1/admin/events` | 관리자 | 필터: `device_id`, `user_id`, `session_id`, `kind`, `limit`, `offset`. 최신순 |
 | GET | `/v1/admin/findings` | 관리자 | 필터: 위 항목들 + `rule_id`, `category`, `min_severity` |
-| GET | `/v1/admin/policy` | 관리자 | 현재 정책 버전과 룰 개수 |
+| GET | `/v1/admin/policy` | 관리자 | 현재 정책 버전, 룰 개수, 서명 공개키(설치 시 고정용) |
 | POST | `/v1/admin/policy/reload` | 관리자 | `rules/`를 다시 읽는다. 룰 파일이 깨져 있으면 422를 주고 기존 정책을 유지한다 |
 
 ## 정책 v0
@@ -70,7 +72,8 @@ docker compose up -d --build
   룰 내용이 바뀔 때만 버전이 바뀐다. 파일 순서나 주석, 들여쓰기는 버전에 영향이 없다.
 - 센서는 `If-None-Match: "<version>"`으로 물어보고, 바뀌지 않았으면 304를 받아 본문을 다시 받지 않는다.
 - `PolicyBundle.to_ruleset()`은 해시를 다시 계산해 보고, 맞지 않으면 거부한다. 전송 중 깨진 정책으로 엔진을 만들지 않기 위해서다.
-  서명이 아니라서 위조까지 막지는 못한다. M4에서 서버의 Ed25519 서명을 붙여 센서가 검증하게 한다.
+  해시만으로는 위조를 막지 못하므로, 서버가 `version`에 Ed25519로 서명하고(`key_id`, `signature`) 센서가 검증한다.
+  자세한 내용은 [sensor.md](sensor.md#정책-서명과-공개키).
 - 이 모듈은 서버 의존성이 없어서 센서(M4)가 그대로 가져다 쓴다.
 
 ## 저장
