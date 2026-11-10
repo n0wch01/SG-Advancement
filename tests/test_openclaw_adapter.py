@@ -9,6 +9,7 @@ import asyncio
 import json
 import secrets
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -530,3 +531,36 @@ async def test_capture_writes_masked_frames(gateway, enrolled: Sensor, tmp_path)
         assert "AKIAABCDEFGHIJKLMNOP" not in text and "[REDACTED:aws-access-key]" in text
     finally:
         task.cancel()
+
+
+# ── real gateway capture (OpenClaw 2026.4.15) ───────────────────────────────
+# Recorded with `sentinel-sensor run --openclaw --capture` against a real gateway: one agent
+# turn that failed at the LLM (lifecycle start/error + user/assistant messages) and two real
+# exec approval requests (one denied by the sensor, one left to expire). Host-identifying
+# frames (presence, health) and session snapshots were stripped.
+
+REAL = Path(__file__).parent / "fixtures" / "openclaw-2026.4.15-frames.jsonl"
+
+
+def test_real_capture_maps_cleanly() -> None:
+    frames = [json.loads(line) for line in REAL.read_text("utf-8").splitlines()]
+    m = OpenClawMapper("alice")
+    events = []
+    for f in frames:
+        if f["event"] == "exec.approval.requested":
+            events += m.approval_request(f["payload"])
+        else:
+            events += m.map_frame(f)
+    counts = {k: kinds(events).count(k) for k in set(kinds(events))}
+    assert counts == {"session.start": 1, "prompt.user": 1, "tool.call": 2}
+    prompt = next(e for e in events if e.kind.value == "prompt.user")
+    assert "ls -la /tmp/sentinel-test" in prompt.payload.text
+    calls = [e for e in events if e.kind.value == "tool.call"]
+    assert {c.payload.arguments["command"] for c in calls} == {
+        "rm -rf /tmp/sentinel-test/junk",
+        "ls -la /tmp/sentinel-test",
+    }
+    assert all(c.agent.session_id == "agent:main:main" for c in calls)
+    assert all(c.labels["openclaw.phase"] == "exec-approval" for c in calls)
+    resolved = [f for f in frames if f["event"] == "exec.approval.resolved"]
+    assert [r["payload"]["decision"] for r in resolved] == ["deny"]

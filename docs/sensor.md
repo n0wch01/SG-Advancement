@@ -148,6 +148,20 @@ SG 코드에서 무엇을 가져오고 고쳤는지는 [from-sg.md](from-sg.md#o
   장치 신원 파일이 있으면 connect에 서명해 권한을 유지한다. 처음 권한을 늘릴 때는 `openclaw devices list` → `openclaw devices approve`가 한 번 필요할 수 있다.
 - 연결이 끊기면 1초부터 최대 60초까지 늘려 가며 다시 붙는다.
 
+### 실제 게이트웨이 확인 (2026-11-10, OpenClaw 2026.4.15)
+
+| 항목 | 결과 |
+|---|---|
+| 핸드셰이크, 장치 서명, `operator.approvals`까지 권한 요청 | ✅ 페어링 추가 승인 없이 연결 |
+| `tools.catalog` → 인벤토리 | ✅ 코어 툴 32개, 플러그인 0개 |
+| `agent` lifecycle, `session.message`(user/assistant) | ✅ 실제 프레임 모양이 매퍼 가정과 일치 |
+| 셸 승인: 위험 명령 | ✅ 실제 `exec.approval.requested` → 센서가 `deny` → 요청자가 `decision: deny`를 받음 |
+| 셸 승인: 평범한 명령 | ✅ 건드리지 않음 → 시간 만료(`decision: null`) |
+| `session.tool`(툴 이벤트), 실행 중 `sessions.abort` | ⏳ 미확인. 에이전트 실행에 쓰는 로컬 Ollama가 설치돼 있지 않아 LLM 호출이 실패했다 |
+
+녹화한 실제 프레임(호스트 정보 제거)은 [tests/fixtures/openclaw-2026.4.15-frames.jsonl](../tests/fixtures/openclaw-2026.4.15-frames.jsonl)에 회귀 테스트로 고정했다.
+`exec.approval.resolved`에는 결정자(`resolvedBy`)가 들어 있어, M7의 사용자 승인 감사에 그대로 쓸 수 있다.
+
 ## 어댑터 계약
 
 [adapters/base.py](../src/agent_sentinel/sensor/adapters/base.py)
