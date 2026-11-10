@@ -32,9 +32,10 @@
 ```bash
 uv sync                                   # Python 3.12 환경 구성
 uv run pytest                             # 테스트
-uvx ruff check src tests scripts          # 린트
+uvx ruff check .          # 린트
 uv run python scripts/export_schema.py    # schemas/*.json 재생성 (스키마 변경 시)
 uv run sentinel-detect examples/events/*.jsonl   # 예시 이벤트를 룰에 통과시켜 탐지 결과 보기
+uv run python demo/demo_runner.py S2             # 시나리오 데모
 ```
 
 ## 저장소 구조
@@ -46,6 +47,7 @@ uv run sentinel-detect examples/events/*.jsonl   # 예시 이벤트를 룰에 �
 | `src/agent_sentinel/redact.py` | 전송 전 비밀값 마스킹 |
 | `rules/` | 선언형 탐지 룰 (카테고리별 YAML) — [docs/detection.md](docs/detection.md) |
 | `tests/rule_cases/` | 룰별 오탐/미탐 회귀 케이스 |
+| `demo/` | 공격 시나리오 단계별 데모 (선택, 폴더째 삭제 가능) — [demo/README.md](demo/README.md) |
 | `schemas/` | 위 모델에서 생성한 JSON Schema (콘솔·비 Python 센서용) |
 | `examples/events/` | 센서별 예시 이벤트 (테스트 픽스처) |
 | `docs/` | 아키텍처·스키마·로드맵 |

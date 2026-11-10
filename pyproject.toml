@@ -26,14 +26,14 @@ build-backend = "hatchling.build"
 packages = ["src/agent_sentinel"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "demo"]  # demo/ is optional; missing paths are skipped
 pythonpath = ["src"]
 addopts = "-q"
 
 [tool.ruff]
 line-length = 110
 target-version = "py312"
-src = ["src", "tests", "scripts"]
+src = ["src", "tests", "scripts", "demo"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
