@@ -27,7 +27,7 @@
 자세한 설계는 [docs/architecture.md](docs/architecture.md), 공통 이벤트 스키마는 [docs/schema.md](docs/schema.md),
 탐지 엔진과 룰 튜닝은 [docs/detection.md](docs/detection.md), 중앙 서버 API는 [docs/control-plane.md](docs/control-plane.md),
 엔드포인트 센서는 [docs/sensor.md](docs/sensor.md),
-위협 모델은 [docs/threat-model.md](docs/threat-model.md)를 참고하세요.
+위협 모델은 [docs/threat-model.md](docs/threat-model.md), 근거가 된 실제 사건은 [docs/incidents.md](docs/incidents.md)를 참고하세요.
 
 ## 개발
 
