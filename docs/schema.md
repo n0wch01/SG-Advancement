@@ -57,7 +57,7 @@ Finding
 ├ severity  info < low < medium < high < critical
 ├ category  prompt_injection | data_exfiltration | supply_chain | tool_misuse |
 │           resource_abuse | privilege_escalation | memory_poisoning | policy_violation | other
-├ title, message, recommended_action, confidence(0~1)
+├ title, message, recommended_action, explanation(매칭 근거, 마스킹됨), confidence(0~1)
 ├ detector  local | central
 ├ evidence_event_ids
 ├ endpoint, principal, agent   ← 트리거 이벤트에서 상속 (Finding.from_event)

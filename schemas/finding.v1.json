@@ -326,6 +326,19 @@
       "title": "Recommended Action",
       "type": "string"
     },
+    "explanation": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "What exactly matched (field, pattern, redacted excerpt) — for rule tuning",
+      "title": "Explanation"
+    },
     "confidence": {
       "default": 1.0,
       "maximum": 1.0,

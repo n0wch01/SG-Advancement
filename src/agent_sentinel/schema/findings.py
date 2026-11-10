@@ -73,6 +73,9 @@ class Finding(StrictModel):
     title: str
     message: str = ""
     recommended_action: str = ""
+    explanation: str | None = Field(
+        default=None, description="What exactly matched (field, pattern, redacted excerpt) — for rule tuning"
+    )
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     detector: Literal["local", "central"] = "local"
     evidence_event_ids: tuple[str, ...] = ()
