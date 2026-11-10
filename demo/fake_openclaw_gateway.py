@@ -6,6 +6,7 @@ attack scenario as real-shaped frames. Prints every sessions.abort it receives.
 
     uv run python demo/fake_openclaw_gateway.py S1          # malicious plugin
     uv run python demo/fake_openclaw_gateway.py S2          # README injection → .env exfil
+    uv run python demo/fake_openclaw_gateway.py EXEC        # shell approvals (sensor needs --gate-exec)
     OPENCLAW_GATEWAY_TOKEN=demo uv run sentinel-sensor run --openclaw ws://127.0.0.1:18789
 """
 
@@ -66,6 +67,12 @@ def message(role: str, content: Any, **extra: Any) -> dict[str, Any]:
     return {"type": "event", "event": "session.message", "payload": {"sessionKey": KEY, "message": msg}}
 
 
+def approval(approval_id: str, command: str) -> dict[str, Any]:
+    req = {"command": command, "cwd": "/work", "sessionKey": KEY, "agentId": "main", "ask": "on-miss"}
+    payload = {"id": approval_id, "request": req, "createdAtMs": _now(), "expiresAtMs": _now() + 120_000}
+    return {"type": "event", "event": "exec.approval.requested", "payload": payload}
+
+
 SCENARIOS: dict[str, list[tuple[str, Any]]] = {
     "S1": [
         (
@@ -108,6 +115,11 @@ SCENARIOS: dict[str, list[tuple[str, Any]]] = {
             ),
         ),
     ],
+    "EXEC": [
+        ("에이전트 실행 시작", lambda: lifecycle("r3", "start")),
+        ("셸 승인 요청: 평범한 명령 (사람이 결정)", lambda: approval("ap-1", "ls -la")),
+        ("셸 승인 요청: 파괴적 명령", lambda: approval("ap-2", "rm -rf ~/projects")),
+    ],
 }
 
 
@@ -144,6 +156,9 @@ class Gateway:
                 if not self.played:
                     self.played = True
                     asyncio.create_task(self.play(ws))
+            elif method == "exec.approval.resolve":
+                print(f"[gateway] 🛑 exec.approval.resolve {params}  ← 실행 전에 센서가 거절")
+                await reply(True, {"ok": True})
             elif method == "sessions.abort":
                 print(f"[gateway] ✋ sessions.abort {params}  ← 센서가 실행을 중단시킴")
                 await reply(True, {"ok": True, "aborted": True})

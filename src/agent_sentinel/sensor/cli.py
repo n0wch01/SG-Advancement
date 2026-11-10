@@ -125,7 +125,11 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
             return 2
         from .adapters.openclaw import OpenClawAdapter
 
-        adapters.append(OpenClawAdapter(args.openclaw, enforce=not args.observe_only))
+        adapters.append(
+            OpenClawAdapter(
+                args.openclaw, enforce=not args.observe_only, gate_exec=args.gate_exec, capture=args.capture
+            )
+        )
     if args.replay:
         adapters.append(ReplayAdapter(args.replay, delay=args.replay_delay))
     if not adapters:
@@ -176,6 +180,10 @@ def main(argv: list[str] | None = None) -> int:
         "--openclaw", nargs="?", const="ws://127.0.0.1:18789", metavar="URL", help="watch an OpenClaw gateway"
     )
     p.add_argument("--observe-only", action="store_true", help="detect and report, never abort runs")
+    p.add_argument(
+        "--gate-exec", action="store_true", help="answer OpenClaw exec approvals: deny risky shell commands"
+    )
+    p.add_argument("--capture", type=Path, metavar="JSONL", help="append raw gateway frames (masked) here")
     p.add_argument("--replay", nargs="+", type=Path, metavar="JSONL", help="also replay event files (demo)")
     p.add_argument("--replay-delay", type=float, default=0.0, help="seconds between replayed events")
     p.add_argument("--user", default=os.environ.get("SENTINEL_USER") or getpass.getuser(), help="employee id")

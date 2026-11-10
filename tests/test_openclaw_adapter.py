@@ -253,7 +253,7 @@ class FakeGateway:
                     self.subscribed.set()
                 elif method == "tools.catalog":
                     await ws.send(json.dumps({"type": "res", "id": rid, "ok": True, "payload": CATALOG}))
-                elif method == "sessions.abort":
+                elif method == "exec.approval.resolve" or method == "sessions.abort":
                     await ws.send(json.dumps({"type": "res", "id": rid, "ok": True, "payload": {"ok": True}}))
                 else:
                     await ws.send(
@@ -271,6 +271,9 @@ class FakeGateway:
 
     def aborts(self) -> list[dict[str, Any]]:
         return [p for m, p in self.calls if m == "sessions.abort"]
+
+    def resolves(self) -> list[dict[str, Any]]:
+        return [p for m, p in self.calls if m == "exec.approval.resolve"]
 
 
 @pytest.fixture
@@ -437,3 +440,93 @@ def test_verdict_actions_cover_openclaw_enforcement() -> None:
         ResponseAction.REQUIRE_APPROVAL,
     }
     assert handled == set(ResponseAction)
+
+
+# ── exec approval gating (pre-exec) ─────────────────────────────────────────
+# "Risky" here = a block-level verdict (destructive-shell-command). Note that `curl --data @.env`
+# on its own is only alert (sensitive-file-access); it blocks after an injection (sequence rule).
+
+
+def approval(approval_id: str, command: str) -> dict[str, Any]:
+    req = {"command": command, "cwd": "/work", "sessionKey": KEY, "agentId": "main", "ask": "on-miss"}
+    payload = {"id": approval_id, "request": req, "createdAtMs": 5, "expiresAtMs": 60_005}
+    return {"type": "event", "event": "exec.approval.requested", "payload": payload}
+
+
+async def gated(gateway, sensor: Sensor, **kw: Any) -> tuple[FakeGateway, asyncio.Task]:
+    gw, url = gateway
+    adapter = OpenClawAdapter(url, token="gw-token", identity_path="/nonexistent", **kw)
+    return gw, await run_adapter(adapter, sensor)
+
+
+def finding_for_call(sensor: Sensor, call_id: str) -> list[dict[str, Any]]:
+    import sqlite3
+
+    with sqlite3.connect(sensor.spool.path) as db:
+        evs = {
+            json.loads(d)["event_id"]
+            for (d,) in db.execute("SELECT doc FROM outbox WHERE kind='event'")
+            if json.loads(d)["payload"].get("call_id") == call_id
+        }
+    return [f for f in queued_findings(sensor) if set(f["evidence_event_ids"]) & evs]
+
+
+async def test_risky_command_is_denied_before_it_runs(gateway, enrolled: Sensor) -> None:
+    gw, task = await gated(gateway, enrolled, gate_exec=True)
+    try:
+        assert "operator.approvals" in gw.scopes_seen[-1]
+        await gw.push(approval("ap-1", "rm -rf ~/projects"))
+        await until(lambda: gw.resolves())
+        assert gw.resolves() == [{"id": "ap-1", "decision": "deny"}]
+        assert gw.aborts() == []  # nothing ran, nothing to abort
+        await until(lambda: finding_for_call(enrolled, "approval:ap-1"))
+        resp = finding_for_call(enrolled, "approval:ap-1")[0]["response"]
+        assert resp["enforced"] is True and resp["detail"] == "pre-exec: exec.approval denied"
+    finally:
+        task.cancel()
+
+
+async def test_benign_command_is_left_alone(gateway, enrolled: Sensor) -> None:
+    gw, task = await gated(gateway, enrolled, gate_exec=True)
+    try:
+        await gw.push(approval("ap-2", "ls -la"), approval("ap-3", "rm -rf ~/projects"))
+        await until(lambda: gw.resolves())
+        assert [r["id"] for r in gw.resolves()] == ["ap-3"]  # ap-2 untouched: the human decides
+    finally:
+        task.cancel()
+
+
+async def test_require_approval_is_left_to_the_user(gateway, enrolled: Sensor) -> None:
+    gw, task = await gated(gateway, enrolled, gate_exec=True)
+    try:
+        await gw.push(approval("ap-4", "psql $DB -c 'DROP TABLE users;'"))
+        await until(lambda: finding_for_call(enrolled, "approval:ap-4"))
+        f = next(f for f in finding_for_call(enrolled, "approval:ap-4") if f["rule_id"] == "destructive-sql")
+        assert f["response"]["detail"] == "left to the user: OpenClaw exec approval"
+        assert gw.resolves() == []
+    finally:
+        task.cancel()
+
+
+async def test_gating_is_opt_in(gateway, enrolled: Sensor) -> None:
+    gw, task = await gated(gateway, enrolled)
+    try:
+        assert "operator.approvals" not in gw.scopes_seen[-1]
+        await gw.push(approval("ap-5", "rm -rf ~/projects"))
+        await until(lambda: finding_for_call(enrolled, "approval:ap-5"))
+        assert finding_for_call(enrolled, "approval:ap-5")[0]["response"]["detail"] == "exec gating off"
+        assert gw.resolves() == []
+    finally:
+        task.cancel()
+
+
+async def test_capture_writes_masked_frames(gateway, enrolled: Sensor, tmp_path) -> None:
+    out = tmp_path / "frames.jsonl"
+    gw, task = await gated(gateway, enrolled, capture=out)
+    try:
+        await gw.push(tool("start", "exec", "c9", args={"command": "echo AKIAABCDEFGHIJKLMNOP"}))
+        await until(lambda: out.exists() and "c9" in out.read_text())
+        text = out.read_text()
+        assert "AKIAABCDEFGHIJKLMNOP" not in text and "[REDACTED:aws-access-key]" in text
+    finally:
+        task.cancel()

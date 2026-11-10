@@ -12,8 +12,14 @@ What the gateway sends (2026.4.15 build), after ``sessions.subscribe``:
 ``tools.catalog`` lists core and plugin tools (with ``pluginId``); it becomes inventory.snapshot.
 
 OpenClaw only lets us see a tool call once it has started, so enforcement is post-hoc: a verdict
-of block or worse aborts the run. Shell commands that need OpenClaw's own exec approval could be
-gated *before* they run via ``exec.approval.*`` — not used yet.
+of block or worse aborts the run.
+
+Exception — shell commands. When OpenClaw's exec policy asks for approval, the gateway emits
+``exec.approval.requested`` ``{id, request: {command, commandArgv, cwd, sessionKey, ...}}`` *before*
+running anything, and any client with ``operator.approvals`` may answer ``exec.approval.resolve``
+``{id, decision: allow-once|allow-always|deny}``. With ``gate_exec`` the adapter evaluates the
+pending command and answers ``deny`` for block-or-worse; everything else is left to the human,
+which is exactly "the user approves" for ``require_approval``.
 """
 
 from __future__ import annotations
@@ -23,8 +29,10 @@ import json
 import logging
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
+from ...redact import redact_value
 from ...schema import AgentEvent, Enforcement, ResponseAction, SensorType
 from .base import AdapterContext
 from .openclaw_gateway import DEFAULT_URL, DeviceIdentity, GatewayConnection, GatewayError
@@ -136,6 +144,34 @@ class OpenClawMapper:
             f"inventory:{agent_id}",
             {"kind": "inventory.snapshot", "tools": tools, "plugins": list(plugins.values())},
         )
+
+    # ── exec approvals ───────────────────────────────────────────────────────
+
+    def approval_request(self, p: dict[str, Any]) -> list[AgentEvent]:
+        """A pending shell command, as the tool.call it would become if approved. The last event
+        is that call; a session.start may precede it."""
+        approval_id, req = p.get("id"), p.get("request")
+        if not (isinstance(approval_id, str) and isinstance(req, dict)):
+            return []
+        command = req.get("command") or " ".join(str(a) for a in req.get("commandArgv") or [])
+        if not command:
+            return []
+        key = req.get("sessionKey") or f"approval:{req.get('agentId') or 'main'}"
+        out = self._session_start(key, p.get("createdAtMs"), None, "observed")
+        arguments = {"command": command, **({"cwd": req["cwd"]} if req.get("cwd") else {})}
+        ev = self._event(
+            key,
+            {
+                "kind": "tool.call",
+                "call_id": f"approval:{approval_id}",
+                "tool": "exec",
+                "provider": {"kind": "builtin"},
+                "arguments": arguments,
+            },
+            p.get("createdAtMs"),
+        )
+        labels = {"openclaw.phase": "exec-approval", "openclaw.approval_id": approval_id}
+        return [*out, ev.model_copy(update={"labels": labels})]
 
     # ── frames ───────────────────────────────────────────────────────────────
 
@@ -266,6 +302,8 @@ class OpenClawAdapter:
         token: str | None = None,
         *,
         enforce: bool = True,
+        gate_exec: bool = False,
+        capture: Path | None = None,
         identity_path: str | None = None,
         inventory_interval: float = 300.0,
         max_backoff: float = 60.0,
@@ -276,7 +314,12 @@ class OpenClawAdapter:
         self.identity_path = identity_path
         self.inventory_interval = inventory_interval
         self.max_backoff = max_backoff
+        self.gate_exec = gate_exec and enforce
+        self.capture = capture
         self.scopes = ["operator.read", "operator.write"] if enforce else ["operator.read"]
+        if self.gate_exec:
+            # May require approving a scope upgrade once: `openclaw devices list` / `approve`.
+            self.scopes.append("operator.approvals")
         self.aborted_runs: set[tuple[str, str | None]] = set()
         self.connected = asyncio.Event()
 
@@ -306,6 +349,11 @@ class OpenClawAdapter:
         conn = await GatewayConnection.open(self.url, self.token, scopes=self.scopes, identity=identity)
 
         async def on_event(frame: dict[str, Any]) -> None:
+            if self.capture is not None:
+                self._capture(frame)
+            if frame.get("event") == "exec.approval.requested" and isinstance(frame.get("payload"), dict):
+                await self._gate(ctx, conn, mapper, frame["payload"])
+                return
             for ev in mapper.map_frame(frame):
                 await self._handle(ctx, conn, ev)
             if mapper.unknown_tool_seen:
@@ -330,6 +378,45 @@ class OpenClawAdapter:
                     await self._snapshot(ctx, conn, mapper)
         finally:
             await conn.close()
+
+    def _capture(self, frame: dict[str, Any]) -> None:
+        """Debug aid: append raw gateway frames (secrets masked) to a JSONL file."""
+        assert self.capture is not None
+        with self.capture.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(redact_value(frame), ensure_ascii=False) + "\n")
+
+    async def _gate(
+        self, ctx: AdapterContext, conn: GatewayConnection, mapper: OpenClawMapper, p: dict[str, Any]
+    ) -> None:
+        events = mapper.approval_request(p)
+        if not events:
+            return
+        for ev in events[:-1]:
+            await self._handle(ctx, conn, ev)
+        result = ctx.evaluate(events[-1])
+        action = result.verdict.action
+        sensor = SensorType.OPENCLAW_GATEWAY
+        enforcement: Enforcement | None = None
+        if action in _ABORTING and self.gate_exec:
+            try:
+                res = await conn.request("exec.approval.resolve", {"id": p["id"], "decision": "deny"})
+                ok, err = bool(res.get("ok")), res.get("error")
+            except (ConnectionError, TimeoutError) as e:
+                ok, err = False, str(e)
+            detail = "pre-exec: exec.approval denied" if ok else f"exec.approval.resolve failed: {err}"
+            enforcement = Enforcement(action=action, enforced=ok, enforcer=sensor, detail=detail)
+        elif action is ResponseAction.REQUIRE_APPROVAL:
+            enforcement = Enforcement(
+                action=action,
+                enforced=True,
+                enforcer=sensor,
+                detail="left to the user: OpenClaw exec approval",
+            )
+        elif action in _ABORTING:
+            enforcement = Enforcement(
+                action=action, enforced=False, enforcer=sensor, detail="exec gating off"
+            )
+        ctx.record(result, enforcement)
 
     async def _snapshot(self, ctx: AdapterContext, conn: GatewayConnection, mapper: OpenClawMapper) -> None:
         res = await conn.request("tools.catalog", {})
