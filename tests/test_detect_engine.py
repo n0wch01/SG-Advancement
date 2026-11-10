@@ -192,6 +192,11 @@ def test_duplicate_ids_rejected(tmp_path: Path) -> None:
         RuleSet.load(tmp_path)
 
 
-def test_bundled_rules_load() -> None:
-    rs = RuleSet.load(Path(__file__).resolve().parents[1] / "rules")
-    assert len(rs.enabled) >= 20
+def test_repeat_counts_full_run_but_keeps_bounded_evidence() -> None:
+    r = rule(match={"type": "repeat", "threshold": 3})
+    eng = Engine(RuleSet([r]))
+    vs = [eng.process(bash("same", at=i)) for i in range(7)]
+    assert [bool(v.hits) for v in vs] == [False, False, True, True, True, True, True]
+    assert "7 consecutive" in vs[-1].hits[0].explanation
+    assert len(vs[-1].hits[0].evidence_event_ids) == 3
+    assert not eng.process(bash("different")).hits

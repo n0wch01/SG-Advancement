@@ -157,18 +157,22 @@ class _RateMatcher:
 class _RepeatMatcher:
     def __init__(self, spec: RepeatMatch) -> None:
         self.spec = spec
-        self.state: dict[tuple[str, ...], tuple[str, list[str]]] = {}
+        # group -> (signature, run length, last `threshold` event ids)
+        self.state: dict[tuple[str, ...], tuple[str, int, list[str]]] = {}
 
     def check(self, event: AgentEvent, doc: dict[str, Any]) -> _RawHit | None:
         group = tuple(first(doc, p) for p in self.spec.group_by)
         sig = json.dumps([resolve(doc, p) for p in self.spec.same], sort_keys=True, ensure_ascii=False)
         last = self.state.get(group)
-        ids = last[1] + [event.event_id] if last and last[0] == sig else [event.event_id]
-        self.state[group] = (sig, ids[-self.spec.threshold :])
-        if len(ids) < self.spec.threshold:
+        if last and last[0] == sig:
+            count, ids = last[1] + 1, (last[2] + [event.event_id])[-self.spec.threshold :]
+        else:
+            count, ids = 1, [event.event_id]
+        self.state[group] = (sig, count, ids)
+        if count < self.spec.threshold:
             return None
-        why = f"{len(ids)} consecutive identical calls ({', '.join(self.spec.same)}) for {'/'.join(group)}"
-        return _RawHit("/".join(group), why, tuple(ids[-self.spec.threshold :]))
+        why = f"{count} consecutive identical calls ({', '.join(self.spec.same)}) for {'/'.join(group)}"
+        return _RawHit("/".join(group), why, tuple(ids))
 
 
 @dataclass
