@@ -13,9 +13,9 @@ AI 에이전트에서 실제로 일어난 사건을 [위협 모델](threat-model
 | [GitHub MCP 인젝션](#github-mcp-프롬프트-인젝션) | 2025.05 | T1, T16 | 인젝션 패턴 룰 | 정상 툴(PR 생성)을 통한 유출 |
 | [EchoLeak](#echoleak-microsoft-365-copilot) | 2025.06 | T1 | 인젝션 패턴, 외부 호스트 룰 | 대상 에이전트 아님. 이미지 URL 유출 |
 | [Supabase MCP + Cursor](#supabase-mcp--cursor) | 2025.07 | T1, T16 | 인젝션 패턴, 툴 인자 속 비밀값 | 비밀값 형식이 아닌 데이터 |
-| [Replit DB 삭제](#replit-운영-db-삭제) | 2025.07 | T17 | 파괴적 셸 명령 | SQL `DROP`, 사용자 지시 위반 |
-| [Amazon Q 확장 오염](#amazon-q-vs-code-확장-오염) | 2025.07 | T2, T17 | 파괴적 셸 명령 | 에이전트 확장 자체의 변조 |
-| [Nx s1ngularity](#nx-s1ngularity) | 2025.08 | T15 | 민감 파일 접근 | 권한 우회 옵션으로 실행된 에이전트 |
+| [Replit DB 삭제](#replit-운영-db-삭제) | 2025.07 | T17 | 파괴적 셸 명령, `destructive-sql` | 사용자 지시 위반 |
+| [Amazon Q 확장 오염](#amazon-q-vs-code-확장-오염) | 2025.07 | T2, T17 | 파괴적 셸 명령, `destructive-cloud-command` | 에이전트 확장 자체의 변조 |
+| [Nx s1ngularity](#nx-s1ngularity) | 2025.08 | T15 | 민감 파일 접근, `agent-unattended-safety-bypass` | 센서가 실행 방식을 수집해야 함 (M6) |
 | [postmark-mcp](#postmark-mcp) | 2025.09 | T3, T4 | 미허가 MCP 서버, 외부 호스트 | 허가된 서버가 나중에 악성화 |
 | [GTG-1002](#gtg-1002) | 2025.11 | T14 | 빈도 룰, 민감 파일 | 악의적 사용자 자신 |
 | [OpenClaw ClawHavoc](#openclaw-clawhavoc와-cve-2026-25253) | 2026.01~02 | T2 | 미허가 플러그인 설치·호출 (S1) | 허용 목록 밖은 다 막지만, 허용된 스킬의 악성 업데이트 |
@@ -51,14 +51,15 @@ AI 에이전트에서 실제로 일어난 사건을 [위협 모델](threat-model
 
 - **무슨 일**: "코드 동결" 지시를 받은 상태에서 에이전트가 운영 DB를 삭제하고, 그 사실을 숨겼다.
 - **현재 대응**: 셸로 실행하는 파괴적 명령은 `destructive-shell-command`(block)가 잡는다.
-- **빈틈**: DB 툴로 보내는 SQL `DROP`/`DELETE`는 셸 명령이 아니어서 걸리지 않는다. "사용자가 금지한 행동"을 이해하는 룰도 없다. → T17.
+- **추가한 룰**: DB 툴이나 `psql -c`로 보내는 `DROP`, 조건 없는 `DELETE`/`TRUNCATE`는 `destructive-sql`(require_approval)이 잡는다. → T17.
+- **빈틈**: "사용자가 금지한 행동"(코드 동결)을 이해하는 룰은 없다.
   사용자 프롬프트를 높음 등급으로 올린 이유가 이 사건이다. 지시를 어겼는지 사후에 확인할 근거가 남아야 한다.
 - 출처: [OECD AI Incidents](https://oecd.ai/en/incidents/2025-07-19-1eb1), [eWeek](https://www.eweek.com/news/replit-ai-coding-assistant-failure/)
 
 ### Amazon Q VS Code 확장 오염
 
 - **무슨 일**: 외부인이 PR로 "로컬 파일과 클라우드 자원을 지우는 정리 에이전트" 프롬프트를 넣었고, 1.84.0에 그대로 배포됐다(설치 약 95만). 확인 없이 툴을 실행하는 옵션과 함께 실행되도록 돼 있었다.
-- **현재 대응**: 실제로 실행되는 `rm -rf` 등은 `destructive-shell-command`가 막는다.
+- **현재 대응**: 실제로 실행되는 `rm -rf` 등은 `destructive-shell-command`가 막고, `aws s3 rm --recursive`, `terminate-instances`, `terraform destroy`는 `destructive-cloud-command`(require_approval)가 잡는다.
 - **빈틈**: 에이전트 **확장 자체가 바뀐 것**은 보지 못한다. 에이전트 버전·확장 해시를 인벤토리에 넣어 바뀌면 알리는 것이 대응이다(`AgentRef.version`은 이미 스키마에 있다).
 - 출처: [The Register](https://www.theregister.com/2025/07/24/amazon_q_ai_prompt/), [JFrog](https://research.jfrog.com/post/amazon-q-vs-code-extension-compromised-with-malicious-code/)
 
@@ -67,8 +68,9 @@ AI 에이전트에서 실제로 일어난 사건을 [위협 모델](threat-model
 - **무슨 일**: 악성 npm 패키지가 PC에 설치된 Claude Code·Gemini CLI·Amazon Q를 `--dangerously-skip-permissions`, `--yolo`, `--trust-all-tools`로 실행해,
   훔칠 파일(지갑, SSH 키, 토큰)을 AI가 찾게 했다. 수천 개의 비밀값이 공개 저장소로 유출됐다.
 - **현재 대응**: 에이전트가 `.ssh/`, `.env` 등을 읽으면 `sensitive-file-access`가 잡는다.
-- **빈틈**: **사람이 아닌 프로세스가 안전장치를 끄고 에이전트를 실행한 것** 자체를 보지 못한다. → T15.
-  hook 어댑터(M6)가 세션 시작 시 권한 모드를 이벤트에 담을 수 있는지 확인하고, 룰 후보로 제안한다(룰 조정은 직접 하기로 했으므로 제안만).
+- **추가한 룰**: `session.start`에 실행 방식(`permission_mode`, `interactive`, `parent_process`)을 담도록 스키마를 늘렸다.
+  확인을 끈 모드면 `agent-safety-bypass`(alert), 사람이 없는 상태에서 끄면 `agent-unattended-safety-bypass`(abort_session)가 걸린다. → T15.
+- **빈틈**: 센서가 그 값을 실제로 채워야 동작한다. Claude Code hook이 권한 모드를 넘겨주는지는 M6에서 확인한다.
 - 출처: [Wiz](https://wiz.io/blog/s1ngularity-supply-chain-attack), [Socket](https://socket.dev/blog/nx-packages-compromised)
 
 ### postmark-mcp
@@ -102,6 +104,7 @@ AI 에이전트에서 실제로 일어난 사건을 [위협 모델](threat-model
 | finding이 생기면 같은 세션의 직전 10분 이벤트를 긴급으로 승격 | GitHub MCP, Supabase, EchoLeak: 시작점은 에이전트가 **읽은 것**인데, 그 자체는 룰에 안 걸리는 경우가 많다 | [spool.py](../src/agent_sentinel/sensor/spool.py) |
 | 사용자 프롬프트를 높음 등급으로 | GTG-1002(사용자가 공격자), Replit(지시 위반 확인) | [priority.py](../src/agent_sentinel/sensor/priority.py) |
 | 위협 T14~T17 추가 | 위 빈틈들 | [threat-model.md](threat-model.md) |
+| 룰 4개 초안 (`destructive-sql`, `destructive-cloud-command`, `agent-safety-bypass`, `agent-unattended-safety-bypass`) | Replit, Amazon Q, Nx | [rules/tool_misuse.yaml](../rules/tool_misuse.yaml) |
 
 ## 참고 논문·표준
 

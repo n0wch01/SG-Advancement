@@ -123,4 +123,7 @@ uv run pytest tests/test_rule_cases.py     # 방금 추가한 케이스가 실�
 - `vigil-instruction-bypass`: `skip the first data` 같은 평범한 문장에도 걸릴 수 있다.
 - `unapproved-mcp-tool-call`: 서버 이름은 위조할 수 있다. URL 룰(`unapproved-mcp-server-url`)이 주 방어선이다.
 - `sequence`는 세션마다 진행 상태를 하나만 추적한다. 첫 단계가 다시 나오면 시작 시각을 갱신한다.
+- `destructive-sql`: 개발 DB를 일부러 초기화하는 작업도 걸린다(그래서 require_approval). 실행 인자(`query`, `sql`, `statement`, `command`)만 보므로, 파일에 SQL을 쓰는 것은 걸리지 않는다. 다른 이름의 인자로 SQL을 받는 DB 툴은 놓친다.
+- `destructive-cloud-command`: `gcloud`/`az`의 delete는 범위가 넓어 아직 넣지 않았다(미탐). 단일 자원 삭제(`kubectl delete pod`)도 뺐다.
+- `agent-safety-bypass`, `agent-unattended-safety-bypass`: 샌드박스나 CI에서 일부러 확인을 끄는 정상 사용이 있다. 그룹별 예외는 M9 정책에서 다룬다. 센서가 `permission_mode`를 채우지 않으면 아예 동작하지 않는다.
 - 허용목록은 아직 룰 파일에 직접 적혀 있다. M9에서 중앙 정책(그룹별 대상, 버전)으로 옮긴다.

@@ -21,7 +21,7 @@ AgentEvent
 
 | kind | 의미 | 주요 필드 |
 |---|---|---|
-| `session.start` / `session.end` | 세션 수명주기 | reason |
+| `session.start` / `session.end` | 세션 수명주기 | reason; start에는 `permission_mode`, `interactive`, `parent_process`(실행 방식, 선택) |
 | `prompt.user` | 사용자 입력 | text |
 | `message.assistant` | 모델 응답 | text |
 | `tool.call` | 툴 실행 **직전** (차단 판단 지점) | call_id, tool, provider, arguments |
