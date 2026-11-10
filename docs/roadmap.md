@@ -21,8 +21,8 @@
 |---|---|---|---|
 | M1 | 저장소 뼈대 + 공통 스키마 v1 | `AgentEvent`/`Finding` 모델, JSON Schema, 6개 센서 예시 이벤트, 테스트 | ✅ |
 | M2 | 로컬 탐지 엔진 | SG `detect.py` 룰 타입 이전(regex/rate/loop/sequence/inventory diff), redaction, S1~S3 룰 통과 | ✅ |
-| M3 | Control Plane API | FastAPI + SQLAlchemy(SQLite): 장비 등록(토큰), 이벤트·finding 수집, 정책 v0(`rules/` 묶음 + 해시) 조회, compose 뼈대, 위협 모델 초안(`docs/threat-model.md`) | ⏳ |
-| M4 | Sensor core | 어댑터 인터페이스, 정책 pull·캐시(중앙이 끊기면 마지막 정책 사용), 전송 큐·재시도, 등록 CLI. 예시 이벤트 replay로 센서 → 중앙 엔드투엔드 | |
+| M3 | Control Plane API | FastAPI + SQLAlchemy(SQLite): 장비 등록(토큰), 이벤트·finding 수집, 정책 v0(`rules/` 묶음 + 해시) 조회, compose 뼈대, 위협 모델 초안(`docs/threat-model.md`) | ✅ |
+| M4 | Sensor core | 어댑터 인터페이스, 정책 pull·캐시(중앙이 끊기면 마지막 정책 사용), 전송 큐·재시도, 등록 CLI. 예시 이벤트 replay로 센서 → 중앙 엔드투엔드 | ⏳ |
 | M5 | OpenClaw 어댑터 | SG ingest/respond 이전, 사후 abort 집행, SG 대비 변경점 문서(`docs/from-sg.md`) | |
 | M6 | Claude Code hook 어댑터 | PreToolUse에서 로컬 정책으로 deny(첫 사전 차단), 두 종류 에이전트 동시 관제 | |
 | M7 | Console v1 | 장비/사용자 인벤토리, 위협 타임라인, finding 상세(룰 근거, 마스킹된 증거) | |
