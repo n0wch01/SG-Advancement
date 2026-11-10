@@ -9,11 +9,22 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.optional-dependencies]
+# Control plane only. Endpoint sensors install the bare package and stay light.
+server = [
+    "fastapi>=0.115",
+    "sqlalchemy>=2.0",
+    "uvicorn>=0.32",
+]
+
 [project.scripts]
 sentinel-detect = "agent_sentinel.detect.cli:main"
+sentinel-server = "agent_sentinel.server.cli:main"
 
 [dependency-groups]
 dev = [
+    "agent-sentinel[server]",
+    "httpx2>=2.16",
     "pytest>=8.3",
     "ruff>=0.7",
 ]
