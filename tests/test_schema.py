@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -163,10 +164,14 @@ def test_confidence_bounds() -> None:
 
 
 def test_exported_json_schemas_are_up_to_date() -> None:
+    # Pass src explicitly: on macOS the editable-install .pth can get the "hidden" flag
+    # (e.g. iCloud-synced folders) and Python >= 3.12 then skips it.
+    env = os.environ | {"PYTHONPATH": str(ROOT / "src")}
     r = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "export_schema.py"), "--check"],
         capture_output=True,
         text=True,
+        env=env,
     )
     assert r.returncode == 0, r.stderr
 

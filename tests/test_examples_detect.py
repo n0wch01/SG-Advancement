@@ -1,4 +1,4 @@
-"""SG scenarios S1–S3 replayed from examples/events through the bundled rules."""
+"""examples/events (per-sensor fixtures) replayed through the bundled rules, plus the CLI."""
 
 from __future__ import annotations
 
