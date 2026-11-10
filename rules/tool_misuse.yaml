@@ -1,0 +1,16 @@
+# 툴 오남용: 파괴적 명령
+version: 1
+rules:
+  - id: destructive-shell-command
+    severity: high
+    category: tool_misuse
+    title: 파괴적 셸 명령
+    message: 되돌리기 어려운 셸 명령(rm -rf, mkfs, dd, force push 등)이 실행되려 합니다.
+    recommended_action: 호출을 차단하고 사용자 승인을 받으세요.
+    response: block
+    tags: [owasp-llm:LLM06]
+    when: {payload.kind: tool.call}
+    match:
+      type: regex
+      fields: [payload.arguments]
+      pattern: '\brm\s+-[a-zA-Z]*(rf|fr)[a-zA-Z]*\b|\brm\s+-[a-zA-Z]*r[a-zA-Z]*\s+-[a-zA-Z]*f|\bmkfs(\.\w+)?\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:|\bchmod\s+-R\s+777\s+/|\bgit\s+push\s+.*(--force\b|-f\b)'

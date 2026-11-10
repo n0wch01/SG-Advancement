@@ -1,0 +1,57 @@
+cases:
+  - name: 자격증명 파일 접근
+    agent: gemini_cli
+    events:
+      - {kind: tool.call, tool: run_shell_command, arguments: {command: "cat ~/.aws/credentials"}}
+      - {kind: tool.call, tool: Read, arguments: {file_path: /home/u/.ssh/id_ed25519}}
+    expect: [sensitive-file-access]
+
+  - name: .env.example / environment 같은 단어는 민감 파일 아님
+    events:
+      - {kind: tool.call, tool: Read, arguments: {file_path: .env.example}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "python -m venv .venv && echo environment ready"}}
+    expect_not: [sensitive-file-access]
+
+  - name: 툴 결과·응답에 실제 키 노출
+    events:
+      - {kind: tool.result, tool: Bash, output_preview: "AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP"}
+      - {kind: message.assistant, text: "OPENAI_API_KEY is sk-proj-abcdefghijklmnopqrstuvwx"}
+    expect: [secret-in-output]
+
+  - name: 키 이름만 언급하는 문서는 노출 아님
+    events:
+      - {kind: tool.result, tool: Read, output_preview: "Set OPENAI_API_KEY in your shell. password: (see vault)"}
+    expect_not: [secret-in-output]
+
+  - name: 마스킹된 키가 툴 인자로 나감
+    events:
+      - {kind: tool.call, tool: get_weather, provider: {kind: mcp, mcp_server: weather}, arguments: {note: "[REDACTED:private-key]"}}
+    expect: [secret-in-tool-arguments]
+
+  - name: 평범한 툴 인자
+    events:
+      - {kind: tool.call, tool: get_weather, arguments: {city: Suwon, units: metric}}
+    expect_not: [secret-in-tool-arguments]
+
+  - name: 일반 시크릿 키워드
+    events:
+      - {kind: tool.result, tool: Read, output_preview: "Paste your secret key below"}
+    expect: [vigil-generic-secret]
+
+  - name: 시크릿 키워드 없음
+    events:
+      - {kind: tool.result, tool: Read, output_preview: "Paste your public key below"}
+    expect_not: [vigil-generic-secret]
+
+  - name: 미허가 외부 호스트로 전송
+    sensor: egress_proxy
+    events:
+      - {kind: net.egress, method: POST, url: "http://exfil-sink.internet-sim/upload", host: exfil-sink.internet-sim, destination: external}
+    expect: [egress-unapproved-host]
+
+  - name: 허용 호스트(glob) / 내부망은 통과
+    sensor: egress_proxy
+    events:
+      - {kind: net.egress, url: "https://api.openai.com/v1/chat", host: api.openai.com, destination: external}
+      - {kind: net.egress, url: "http://wiki.corp/x", host: wiki.corp, destination: internal}
+    expect_not: [egress-unapproved-host]

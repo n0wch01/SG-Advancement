@@ -1,0 +1,46 @@
+# 자원 남용 / Denial of Wallet (SG S3 api_abuse.yaml에서 이전)
+version: 1
+rules:
+  - id: rate-limit-tool-calls
+    severity: high
+    category: resource_abuse
+    title: 동일 도구 고빈도 호출 (Rate Limit)
+    message: 짧은 시간 안에 같은 도구를 반복 호출하고 있습니다. Denial of Wallet의 초기 신호입니다.
+    recommended_action: 세션을 중단하고 프롬프트를 검토하세요. 도구별 최대 호출 횟수를 시스템 프롬프트에 명시하세요.
+    response: abort_session
+    tags: [owasp-llm:LLM10, scenario:S3]
+    when: {payload.kind: tool.call}
+    match:
+      type: rate
+      window_seconds: 60
+      threshold: 5          # 60초 안에 5번째 호출에서 발화
+      # group_by 기본값: [endpoint.device_id, agent.session_id, payload.tool]
+      # 사용자 단위로 보려면: [principal.user_id, payload.tool]
+
+  - id: identical-args-loop
+    severity: critical
+    category: resource_abuse
+    title: 동일 인자 반복 호출 (무한 루프)
+    message: 같은 도구를 같은 인자로 연속 호출합니다. 종료 조건 없는 루프 패턴입니다.
+    recommended_action: 세션을 중단하고 종료 조건과 최대 반복 횟수를 추가하세요.
+    response: abort_session
+    tags: [owasp-llm:LLM10, scenario:S3]
+    when: {payload.kind: tool.call}
+    match:
+      type: repeat
+      threshold: 5
+      same: [payload.tool, payload.arguments]
+
+  - id: exhaustion-keyword-prompt
+    severity: medium
+    category: resource_abuse
+    title: 자원 고갈 유도 키워드
+    message: 프롬프트에 종료 조건이 없는 반복 지시("완벽할 때까지", "계속 재시도" 등)가 있습니다.
+    recommended_action: 반복 조건을 명시적으로 제한하세요(최대 N회, 결과 동일 시 중단 등).
+    tags: [owasp-llm:LLM10, scenario:S3]
+    when: {payload.kind: prompt.user}
+    match:
+      type: regex
+      fields: [payload.text]
+      ignore_case: true
+      pattern: '(반복해|완벽할 때까지|완벽히.*때까지|멈추지 말고|계속 진행해|계속 해|무한(히|으로|루프)?|endless|infinite[ _-]?loop|retry[ _-]?forever|keep[ _-]?trying|재시도|다시 시도)'

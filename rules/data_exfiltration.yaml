@@ -1,0 +1,79 @@
+# 데이터 유출: 민감 파일 접근, 자격증명 노출, 미허가 외부 전송
+version: 1
+rules:
+  - id: sensitive-file-access
+    severity: high
+    category: data_exfiltration
+    title: 민감 파일 접근
+    message: 툴 호출이 자격증명·키 파일(.env, ~/.ssh, ~/.aws/credentials 등)에 접근합니다.
+    recommended_action: 작업에 필요한 접근인지 확인하고, 아니라면 파일 접근 allowlist를 적용하세요.
+    tags: [owasp-llm:LLM02, scenario:S2]
+    when: {payload.kind: tool.call}
+    match:
+      type: regex
+      fields: [payload.arguments]
+      pattern: '(^|[^\w.])\.env\b(?!\.example|\.sample|\.template)|\bid_(rsa|ed25519|ecdsa)\b|\.ssh/|\.aws/credentials|\.netrc\b|\.git-credentials\b|\.kube/config'
+
+  # 탐지는 마스킹 "전"의 원본 이벤트에서 돈다. 그래서 실제 키 형식을 볼 수 있다.
+  - id: secret-in-output
+    severity: critical
+    category: data_exfiltration
+    title: 자격증명 노출 (툴 결과 / 모델 응답)
+    message: 툴 결과나 모델 응답에 API 키·개인키 등 자격증명 형식이 포함됐습니다.
+    recommended_action: 해당 자격증명을 즉시 회수(rotate)하고 노출 경로를 점검하세요.
+    tags: [owasp-llm:LLM02, scenario:S2]
+    when: {payload.kind: [tool.result, message.assistant]}
+    match:
+      type: regex
+      fields: [payload.output_preview, payload.text]
+      pattern: '-----BEGIN ((EC|PGP|DSA|RSA|OPENSSH) )?PRIVATE KEY( BLOCK)?-----|\b(A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}\b|\bgh[pousr]_[A-Za-z0-9]{36,}|\bsk-(ant-|proj-)?[A-Za-z0-9_-]{20,}|\bAIza[0-9A-Za-z_-]{35}|xox[pborsa]-[0-9]{10,}-[0-9A-Za-z-]+|sk_live_[0-9a-zA-Z]{24}|(?i:\b(api[_-]?key|secret[_-]?key|access[_-]?token|password)\s*[:=]\s*\S{8,})'
+
+  # 이미 센서 단에서 마스킹된 값([REDACTED:...])이 툴 인자로 나가는 것 자체가 유출 신호다.
+  - id: secret-in-tool-arguments
+    severity: high
+    category: data_exfiltration
+    title: 자격증명이 툴 인자로 전달됨
+    message: 자격증명(또는 마스킹된 자격증명)이 툴 호출 인자에 실려 나갑니다.
+    recommended_action: 호출을 차단하고 어떤 지시로 자격증명이 인자에 들어갔는지 확인하세요.
+    response: block
+    tags: [owasp-llm:LLM02]
+    when: {payload.kind: tool.call}
+    match:
+      type: regex
+      fields: [payload.arguments]
+      pattern: '\[REDACTED:[\w-]+\]|-----BEGIN [A-Z ]*PRIVATE KEY|\b(AKIA|ASIA)[A-Z0-9]{16}\b|\bgh[pousr]_[A-Za-z0-9]{36,}|\bsk-(ant-|proj-)?[A-Za-z0-9_-]{20,}'
+
+  - id: vigil-generic-secret
+    severity: low
+    category: data_exfiltration
+    title: 일반 시크릿 키워드 (Vigil ContainsGenericSecretPhrase)
+    message: '"private/secret/access key|token|password" 형식의 키워드가 감지됐습니다.'
+    recommended_action: 실제 시크릿이 포함됐는지, 시크릿 추출을 유도하는 문서인지 확인하세요.
+    when: {payload.kind: [tool.result, message.assistant]}
+    match:
+      type: regex
+      fields: [payload.output_preview, payload.text]
+      ignore_case: true
+      pattern: '(private|secret|access)\s(key|token|password|pass)'
+
+  - id: egress-unapproved-host
+    severity: high
+    category: data_exfiltration
+    title: 미허가 외부 호스트로 전송
+    message: 허용목록에 없는 외부 호스트로 네트워크 요청이 나갔습니다.
+    recommended_action: 목적지를 확인하고, 유출이 의심되면 세션을 중단하세요.
+    response: block
+    tags: [owasp-llm:LLM02, scenario:S1, scenario:S2]
+    when: {payload.kind: net.egress, payload.destination: external}
+    match:
+      type: allowlist
+      field: payload.host
+      allow:
+        - api.anthropic.com
+        - "*.openai.com"
+        - generativelanguage.googleapis.com
+        - github.com
+        - "*.github.com"
+        - pypi.org
+        - files.pythonhosted.org
+        - registry.npmjs.org

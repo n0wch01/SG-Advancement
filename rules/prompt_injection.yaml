@@ -1,0 +1,120 @@
+# 프롬프트 인젝션: 에이전트로 "들어오는" 텍스트(툴 결과, 사용자 입력)의 시그니처 + S2 시퀀스
+# 시그니처 출처: deadbits/vigil-llm (Apache-2.0), SG md_signatures.yaml에서 이전
+version: 1
+rules:
+  - id: vigil-instruction-bypass
+    severity: high
+    category: prompt_injection
+    title: 지시 무력화 시도 (Vigil InstructionBypass)
+    message: 이전 지시를 무시·우회하라는 표현이 감지됐습니다.
+    recommended_action: 입력의 출처를 확인하고 에이전트에 그대로 전달되지 않게 하세요.
+    tags: [owasp-llm:LLM01, mitre-atlas:AML.T0051]
+    when: {payload.kind: [tool.result, prompt.user]}
+    match:
+      type: regex
+      fields: [payload.output_preview, payload.text]
+      ignore_case: true
+      pattern: '(ignore|disregard|skip|forget|neglect|overlook|omit|bypass|pay no attention to|do not follow|do not obey)(?:\s+\w+){0,3}\s+(content|text|instructions?|directives?|commands?|context|conversation|inputs?|data|messages?|communication|responses?|requests?)'
+
+  - id: vigil-system-instruction-markers
+    severity: high
+    category: prompt_injection
+    title: 시스템 인스트럭션 마커 (Vigil SystemInstructions)
+    message: LLM 제어 토큰(<|im_start|>system, <<SYS>> 등)이 외부 입력에서 감지됐습니다.
+    recommended_action: 신뢰할 수 없는 텍스트의 모델 제어 토큰을 이스케이프하세요.
+    tags: [owasp-llm:LLM01]
+    when: {payload.kind: [tool.result, prompt.user]}
+    match:
+      type: regex
+      fields: [payload.output_preview, payload.text]
+      pattern: '(System Instruction:\s|\[system\]\(#(assistant|context)\)|<s>\[INST\]\s*<<SYS>>|<</SYS>>|<\|im_start\|>(assistant|system)|\{\{#system~\}\}|\{\{/system~\}\})'
+
+  - id: vigil-guidance-template-markers
+    severity: medium
+    category: prompt_injection
+    title: Guidance 템플릿 토큰 (Vigil ContainsGuidance)
+    message: Guidance 역할 템플릿 토큰({{#system~}} 등)으로 역할 위장을 시도합니다.
+    recommended_action: 외부 입력의 템플릿 토큰을 제거하거나 raw text로만 전달하세요.
+    tags: [owasp-llm:LLM01]
+    when: {payload.kind: [tool.result, prompt.user]}
+    match:
+      type: regex
+      fields: [payload.output_preview, payload.text]
+      pattern: '\{\{#(system|user|assistant)~\}\}|\{\{/(system|user|assistant)~\}\}'
+
+  - id: vigil-react-injection
+    severity: high
+    category: prompt_injection
+    title: ReAct 사고/행동 위장 (Vigil ContainsReAct)
+    message: ReAct "Thought/Action" 토큰이 JSON 액션과 함께 외부 입력에 들어 있습니다.
+    recommended_action: 해당 입력을 격리하고 ReAct 토큰을 이스케이프하세요.
+    tags: [owasp-llm:LLM01]
+    when: {payload.kind: tool.result}
+    match:
+      type: regex
+      fields: [payload.output_preview]
+      pattern: '(Thought|Action):\s*```(json)?\s*\{\s*"action"\s*:\s*"[^"]+"'
+
+  - id: vigil-react-text
+    severity: medium
+    category: prompt_injection
+    title: ReAct 평문 흐름 위장 (Vigil ContainsReAct_txt)
+    message: 외부 문서에 "Thought:/Action:/Observation:" 형식의 에이전트 흐름이 들어 있습니다.
+    recommended_action: 해당 섹션을 제거하거나 raw text로만 전달하세요.
+    tags: [owasp-llm:LLM01]
+    when: {payload.kind: tool.result}
+    match:
+      type: regex
+      fields: [payload.output_preview]
+      pattern: '(?m)^(Thought|Action|Action Input|Observation):\s+\w'
+
+  - id: ko-injection-marker
+    severity: medium
+    category: prompt_injection
+    title: 한국어 AI 지시 패턴 (인젝션 의심)
+    message: 문서가 AI에게 민감 파일을 읽거나 단계별로 따르라고 지시합니다.
+    recommended_action: 에이전트에 전달된 외부 문서 내용을 검토하세요.
+    tags: [owasp-llm:LLM01, scenario:S2]
+    when: {payload.kind: tool.result}
+    match:
+      type: regex
+      fields: [payload.output_preview]
+      ignore_case: true
+      pattern: '(env-snapshot|\.env.*읽|읽.*\.env|env.*파일.*읽|단계별.*지시|이전.*지시.*무시|AI\s*(어시스턴트|에이전트)(는|에게|라면))'
+
+  - id: vigil-ipv4
+    severity: info
+    category: prompt_injection
+    title: IPv4 주소 (Vigil ContainsIPv4)
+    message: 외부 입력이나 툴 인자에 IPv4 주소가 있습니다. SSRF 페이로드일 수 있습니다.
+    recommended_action: 내부망 주소로의 요청이라면 egress 정책을 확인하세요.
+    when: {payload.kind: [tool.result, tool.call]}
+    match:
+      type: regex
+      fields: [payload.output_preview, payload.arguments]
+      pattern: '\b(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}\b'
+
+  # S2 핵심: 인젝션이 담긴 툴 결과를 읽은 "뒤에" 같은 세션에서 민감 파일/외부 전송 툴 호출.
+  # 단일 시그니처보다 오탐이 적고, 인젝션이 실제로 행동을 바꿨다는 근거가 된다.
+  - id: injection-then-sensitive-action
+    severity: critical
+    category: prompt_injection
+    title: 인젝션 이후 민감 행동 (S2 시퀀스)
+    message: 인젝션 의심 텍스트를 읽은 직후 같은 세션에서 민감 파일 접근 또는 외부 전송이 시도됐습니다.
+    recommended_action: 툴 호출을 차단하고 세션을 검토하세요. 원본 문서의 출처를 추적하세요.
+    response: block
+    tags: [owasp-llm:LLM01, owasp-llm:LLM02, scenario:S2]
+    match:
+      type: sequence
+      within_seconds: 300
+      steps:
+        - name: injected-content
+          when: {payload.kind: tool.result}
+          fields: [payload.output_preview]
+          ignore_case: true
+          pattern: 'ignore (all )?(previous|prior|above) instructions|<important>|<\|im_start\|>system|<<SYS>>|\.env.*읽|읽.*\.env|단계별.*지시|send .{0,40}(\.env|credentials|secret)'
+        - name: sensitive-action
+          when: {payload.kind: tool.call}
+          fields: [payload.arguments]
+          ignore_case: true
+          pattern: '(^|[^\w.])\.env\b(?!\.example)|id_rsa|\.ssh/|\.aws/credentials|\bcurl\b|\bwget\b|\bnc\s|invoke-webrequest'

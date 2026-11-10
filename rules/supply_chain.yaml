@@ -1,0 +1,77 @@
+# 공급망: 미허가 플러그인 / MCP 서버, 툴 설명 변조(tool poisoning)
+# SG S1(악성 플러그인)을 일반화. 허용목록은 M9에서 중앙 정책으로 옮겨간다.
+version: 1
+rules:
+  - id: unapproved-plugin-installed
+    severity: high
+    category: supply_chain
+    title: 미허가 플러그인 설치 감지
+    message: 에이전트 인벤토리에 허용목록에 없는 플러그인이 나타났습니다.
+    recommended_action: 플러그인 출처를 확인하고, 승인되지 않았다면 비활성화(quarantine)하세요.
+    response: quarantine
+    tags: [owasp-llm:LLM03, scenario:S1]
+    when: {payload.kind: inventory.snapshot}
+    match:
+      type: allowlist
+      field: payload.plugins[].plugin_id
+      allow: []           # 승인된 plugin_id를 추가 (glob 가능: "corp-*")
+
+  - id: unapproved-plugin-tool-call
+    severity: high
+    category: supply_chain
+    title: 미허가 플러그인 툴 호출
+    message: 허용목록에 없는 플러그인이 제공하는 툴이 호출됐습니다.
+    recommended_action: 호출을 차단하고 해당 플러그인을 격리하세요.
+    response: block
+    tags: [owasp-llm:LLM03, scenario:S1]
+    when: {payload.kind: tool.call, payload.provider.kind: plugin}
+    match:
+      type: allowlist
+      field: payload.provider.plugin_id
+      allow: []
+
+  - id: unapproved-mcp-server-url
+    severity: high
+    category: supply_chain
+    title: 미허가 MCP 서버 연결
+    message: 허용되지 않은 주소의 MCP 서버가 툴을 제공하고 있습니다.
+    recommended_action: MCP 서버 설정을 확인하고 승인되지 않은 서버를 제거하세요.
+    response: quarantine
+    tags: [owasp-agentic:T2, scenario:S1]
+    when: {payload.kind: inventory.snapshot}
+    match:
+      type: allowlist
+      field: payload.tools[].provider.mcp_server_url
+      allow:
+        - "http://localhost*"
+        - "http://127.0.0.1*"
+        - "http://*.corp-net/*"     # 데모용 사내망 (docker compose corp-net)
+
+  - id: unapproved-mcp-tool-call
+    severity: medium
+    category: supply_chain
+    title: 허용목록에 없는 MCP 서버의 툴 호출
+    message: 허용목록에 없는 이름의 MCP 서버 툴이 호출됐습니다.
+    recommended_action: 해당 MCP 서버가 승인된 것인지 확인하세요.
+    response: alert
+    tags: [owasp-agentic:T2]
+    when: {payload.kind: tool.call, payload.provider.kind: mcp}
+    match:
+      type: allowlist
+      field: payload.provider.mcp_server
+      allow: [filesystem, github]   # 예시. 이름은 위조 가능하므로 URL 룰과 함께 쓴다.
+
+  - id: mcp-tool-description-poisoning
+    severity: critical
+    category: supply_chain
+    title: 툴 설명 변조(Tool Poisoning) 의심
+    message: 툴 설명에 모델에게 내리는 숨은 지시나 민감 경로가 포함돼 있습니다.
+    recommended_action: 해당 MCP 서버/플러그인을 즉시 격리하고 툴 설명 원문을 검토하세요.
+    response: quarantine
+    tags: [owasp-llm:LLM01, owasp-agentic:T2]
+    when: {payload.kind: inventory.snapshot}
+    match:
+      type: regex
+      fields: ["payload.tools[].description"]   # [] 가 들어간 경로는 따옴표 필수
+      ignore_case: true
+      pattern: '<important>|<system>|before using this tool|ignore (all )?previous|do not (tell|mention|inform)|~/\.ssh|id_rsa|\.aws/credentials|(^|[^\w.])\.env\b'

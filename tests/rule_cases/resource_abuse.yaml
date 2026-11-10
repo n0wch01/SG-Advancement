@@ -1,0 +1,52 @@
+cases:
+  - name: S3 60초 안에 같은 도구 5회 (인자는 매번 다름)
+    agent: langgraph
+    sensor: langgraph_callback
+    events:
+      - {at: 0, kind: tool.call, tool: search_docs, arguments: {q: a}}
+      - {at: 10, kind: tool.call, tool: search_docs, arguments: {q: b}}
+      - {at: 20, kind: tool.call, tool: search_docs, arguments: {q: c}}
+      - {at: 30, kind: tool.call, tool: search_docs, arguments: {q: d}}
+      - {at: 40, kind: tool.call, tool: search_docs, arguments: {q: e}}
+    expect: [rate-limit-tool-calls]
+    expect_not: [identical-args-loop]
+
+  - name: 같은 횟수라도 창 밖으로 흩어지면 정상
+    events:
+      - {at: 0, kind: tool.call, tool: search_docs, arguments: {q: a}}
+      - {at: 30, kind: tool.call, tool: search_docs, arguments: {q: b}}
+      - {at: 61, kind: tool.call, tool: search_docs, arguments: {q: c}}
+      - {at: 92, kind: tool.call, tool: search_docs, arguments: {q: d}}
+      - {at: 123, kind: tool.call, tool: search_docs, arguments: {q: e}}
+    expect_not: [rate-limit-tool-calls]
+
+  - name: S3 동일 인자 5회 연속 (느리게 → rate는 안 걸림)
+    events:
+      - {at: 0, kind: tool.call, tool: search_docs, arguments: {q: report}}
+      - {at: 100, kind: tool.call, tool: search_docs, arguments: {q: report}}
+      - {at: 200, kind: tool.call, tool: search_docs, arguments: {q: report}}
+      - {at: 300, kind: tool.call, tool: search_docs, arguments: {q: report}}
+      - {at: 400, kind: tool.call, tool: search_docs, arguments: {q: report}}
+    expect: [identical-args-loop]
+    expect_not: [rate-limit-tool-calls]
+
+  - name: 중간에 인자가 바뀌면 연속 카운트 리셋
+    events:
+      - {at: 0, kind: tool.call, tool: search_docs, arguments: {q: report}}
+      - {at: 100, kind: tool.call, tool: search_docs, arguments: {q: report}}
+      - {at: 200, kind: tool.call, tool: search_docs, arguments: {q: report}}
+      - {at: 300, kind: tool.call, tool: search_docs, arguments: {q: summary}}
+      - {at: 400, kind: tool.call, tool: search_docs, arguments: {q: report}}
+      - {at: 500, kind: tool.call, tool: search_docs, arguments: {q: report}}
+    expect_not: [identical-args-loop]
+
+  - name: 종료 조건 없는 반복 지시
+    events:
+      - {kind: prompt.user, text: 결과가 완벽할 때까지 계속 재시도해}
+      - {kind: prompt.user, text: keep trying until it works}
+    expect: [exhaustion-keyword-prompt]
+
+  - name: 횟수 제한이 있는 평범한 요청
+    events:
+      - {kind: prompt.user, text: 분기 보고서를 요약해줘. 최대 3번까지만 검색해}
+    expect_not: [exhaustion-keyword-prompt]
