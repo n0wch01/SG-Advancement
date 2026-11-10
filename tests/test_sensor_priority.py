@@ -52,6 +52,7 @@ class Recorder:
 def test_kind_and_hits_decide_priority() -> None:
     assert event_priority(ev(0, kind="llm.call", provider="ollama", model="m")) is Priority.LOW
     assert event_priority(ev(0, kind="tool.result", tool="Read")) is Priority.NORMAL
+    assert event_priority(ev(0, kind="prompt.user", text="hi")) is Priority.HIGH
     assert event_priority(ev(0, kind="tool.call", tool="Bash")) is Priority.HIGH
 
     engine = Engine(RuleSet.load(ROOT / "rules"))
@@ -94,10 +95,29 @@ def test_finding_promotes_its_evidence_and_is_never_evicted(tmp_path: Path) -> N
     assert not any(e.event_id in kept for e in flood)
 
 
+def test_finding_promotes_preceding_session_context(tmp_path: Path) -> None:
+    """Incidents start from content the agent read; keep it even when no rule matched it."""
+    spool = Spool(tmp_path / "s.db", context_seconds=300)
+    stale = ev(0, at=0, kind="tool.result", tool="Read", output_preview="an hour ago")
+    read = ev(1, at=3500, kind="tool.result", tool="Read", output_preview="issue text, no rule hit")
+    elsewhere = ev(2, at=3550, kind="tool.result", tool="Read", session="s2", output_preview="other")
+    for e in (stale, read, elsewhere):
+        spool.add([e], Priority.NORMAL)
+    trigger = ev(3, at=3600, kind="tool.call", tool="Bash", arguments={"command": "curl x"})
+    spool.add([trigger, finding_for(trigger)], Priority.CRITICAL)  # finding cites only the trigger
+
+    with sqlite3.connect(spool.path) as db:
+        prio = dict(db.execute("SELECT item_id, priority FROM outbox WHERE kind = 'event'").fetchall())
+    assert prio[read.event_id] == Priority.CRITICAL  # same session, 100 s before
+    assert prio[stale.event_id] == Priority.NORMAL  # outside the window
+    assert prio[elsewhere.event_id] == Priority.NORMAL  # other session
+
+
 def test_flush_sends_critical_first(tmp_path: Path) -> None:
     spool = Spool(tmp_path / "s.db")
-    low = ev(0, kind="llm.call", provider="ollama", model="m")
-    high = ev(1, kind="tool.call", tool="Read")
+    # low/high live in another session so session-context promotion leaves them alone.
+    low = ev(0, kind="llm.call", provider="ollama", model="m", session="other")
+    high = ev(1, kind="tool.call", tool="Read", session="other")
     crit = ev(2, kind="tool.call", tool="Bash", arguments={"command": "cat .env"})
     f = finding_for(crit)
     spool.add([low], Priority.LOW)

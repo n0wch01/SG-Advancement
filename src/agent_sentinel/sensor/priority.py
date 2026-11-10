@@ -6,8 +6,10 @@ Priority decides two things while the control plane is unreachable:
 - **send order**: after reconnecting, the highest priority is shipped first.
 
 Findings are always CRITICAL and are never evicted. An event becomes CRITICAL when any rule hit
-it, or later when a finding cites it as evidence (e.g. the earlier steps of a sequence rule).
-Otherwise its kind decides. M9 can move this table into the central policy.
+it, or later when a finding cites it as evidence or it came shortly before a finding in the same
+session
+(spool.py, ``context_seconds``). Otherwise its kind decides. M9 can move this table into the
+central policy. Rationale per level, with real incidents: docs/incidents.md.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from ..schema import AgentEvent, EventKind
 class Priority(IntEnum):
     LOW = 0  # chatter: useful for context, cheap to lose
     NORMAL = 1  # content the agent saw or was given
-    HIGH = 2  # actions and inventory: what the agent did or could do
+    HIGH = 2  # actions, inventory, and what the human asked for
     CRITICAL = 3  # rule hits, finding evidence, findings
 
 
@@ -31,8 +33,10 @@ KIND_PRIORITY: dict[EventKind, Priority] = {
     EventKind.INVENTORY_SNAPSHOT: Priority.HIGH,
     EventKind.SESSION_START: Priority.HIGH,
     EventKind.SESSION_END: Priority.HIGH,
+    # The user's own words show intent (an insider driving the agent) and the instructions the
+    # agent was bound by (an ignored "code freeze"), so they rank with actions.
+    EventKind.PROMPT_USER: Priority.HIGH,
     EventKind.TOOL_RESULT: Priority.NORMAL,
-    EventKind.PROMPT_USER: Priority.NORMAL,
     EventKind.MESSAGE_ASSISTANT: Priority.LOW,
     EventKind.LLM_CALL: Priority.LOW,
 }

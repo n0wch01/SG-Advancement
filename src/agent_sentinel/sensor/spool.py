@@ -5,7 +5,9 @@ is down. ``flush`` ships it in batches; because the server deduplicates on event
 re-sending a batch after a lost response is harmless.
 
 Items carry a priority (priority.py): a full spool evicts low priority first, and a flush sends
-high priority first, so the evidence that matters survives a long outage.
+high priority first, so the evidence that matters survives a long outage. When a finding is
+queued, its cited evidence *and* the same session's preceding events (``context_seconds``) are
+promoted: incidents start from content the agent read, which rarely matches a rule by itself.
 
 Several short-lived processes (one per Claude Code hook call, for example) may write at the same
 time, so the DB runs in WAL mode with a busy timeout.
@@ -43,11 +45,26 @@ CREATE TABLE IF NOT EXISTS outbox (
     dead       INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
     priority   INTEGER NOT NULL DEFAULT 1,
+    session    TEXT,
+    ts         REAL,
     UNIQUE (kind, item_id)
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
 """
-_INDEX = "CREATE INDEX IF NOT EXISTS outbox_send_order ON outbox (dead, priority, kind, id)"
+_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS outbox_send_order ON outbox (dead, priority, kind, id)",
+    "CREATE INDEX IF NOT EXISTS outbox_session ON outbox (session, ts)",
+)
+# Columns added after the first release; old spool files get them on open.
+_ADDED_COLUMNS = {
+    "priority": "INTEGER NOT NULL DEFAULT 1",
+    "session": "TEXT",
+    "ts": "REAL",
+}
+
+
+def _session_key(item: AgentEvent | Finding) -> str:
+    return f"{item.endpoint.device_id}\x1f{item.agent.session_id}"
 
 
 @dataclass
@@ -68,17 +85,22 @@ class AuthRejected(Exception):
 
 
 class Spool:
-    def __init__(self, path: Path, max_items: int = 50_000, batch_size: int = 200) -> None:
+    def __init__(
+        self, path: Path, max_items: int = 50_000, batch_size: int = 200, context_seconds: float = 600
+    ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self.max_items = max_items
         self.batch_size = batch_size
+        self.context_seconds = context_seconds
         with self._db() as db:
             db.executescript(_SCHEMA)
             cols = {row[1] for row in db.execute("PRAGMA table_info(outbox)")}
-            if "priority" not in cols:  # spool created before priorities existed
-                db.execute("ALTER TABLE outbox ADD COLUMN priority INTEGER NOT NULL DEFAULT 1")
-            db.execute(_INDEX)
+            for name, decl in _ADDED_COLUMNS.items():
+                if name not in cols:
+                    db.execute(f"ALTER TABLE outbox ADD COLUMN {name} {decl}")
+            for stmt in _INDEXES:
+                db.execute(stmt)
 
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
@@ -92,26 +114,39 @@ class Spool:
     # ── enqueue ──────────────────────────────────────────────────────────────
 
     def add(self, items: list[AgentEvent | Finding], priority: Priority = Priority.NORMAL) -> None:
-        """Queue events at ``priority``; findings are always CRITICAL and promote their evidence."""
+        """Queue events at ``priority``; findings are always CRITICAL and promote their evidence
+        plus the session context that led up to them."""
         rows = []
         evidence: list[str] = []
+        contexts: list[tuple[str, float, float]] = []  # (session, from_ts, to_ts)
         now = time.time()
         for it in items:
+            ts = it.ts.timestamp()
             if isinstance(it, AgentEvent):
-                rows.append(("event", it.event_id, it.model_dump_json(), now, int(priority)))
+                kind, item_id, prio = "event", it.event_id, int(priority)
             else:
-                rows.append(("finding", it.finding_id, it.model_dump_json(), now, int(Priority.CRITICAL)))
+                kind, item_id, prio = "finding", it.finding_id, int(Priority.CRITICAL)
                 evidence.extend(it.evidence_event_ids)
+                contexts.append((_session_key(it), ts - self.context_seconds, ts))
+            rows.append((kind, item_id, it.model_dump_json(), now, prio, _session_key(it), ts))
+        crit = int(Priority.CRITICAL)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             db.executemany(
-                "INSERT OR IGNORE INTO outbox (kind, item_id, doc, created, priority) VALUES (?,?,?,?,?)",
+                "INSERT OR IGNORE INTO outbox (kind, item_id, doc, created, priority, session, ts) "
+                "VALUES (?,?,?,?,?,?,?)",
                 rows,
             )
             if evidence:
                 db.executemany(
                     "UPDATE outbox SET priority = ? WHERE kind = 'event' AND item_id = ?",
-                    [(int(Priority.CRITICAL), e) for e in evidence],
+                    [(crit, e) for e in evidence],
+                )
+            if contexts:
+                db.executemany(
+                    "UPDATE outbox SET priority = ? WHERE kind = 'event' AND dead = 0 "
+                    "AND session = ? AND ts BETWEEN ? AND ?",
+                    [(crit, *c) for c in contexts],
                 )
             self._enforce_cap(db)
             db.execute("COMMIT")

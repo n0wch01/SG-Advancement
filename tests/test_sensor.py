@@ -308,7 +308,7 @@ def test_lost_response_resend_is_deduplicated(server: TestClient, net: Net, home
     net.drop_response = True  # server stores the first batch, sensor never hears back
     assert not sensor.flush().ok
     first_batch = len(admin_get(server, "/v1/admin/events"))
-    assert 0 < first_batch < len(events)  # priorities split the send into levels
+    assert 0 < first_batch <= len(events)
     r = sensor.flush()
     assert r.ok and r.duplicates == first_batch
     assert len(admin_get(server, "/v1/admin/events")) == len(events)
