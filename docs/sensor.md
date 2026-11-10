@@ -102,6 +102,8 @@ B는 등록 토큰을 쓰기 **전에** `/healthz`의 키 지문을 먼저 비�
 export OPENCLAW_GATEWAY_TOKEN=...                       # 게이트웨이 토큰은 환경 변수로만 받는다
 sentinel-sensor run --openclaw                          # 기본 ws://127.0.0.1:18789
 sentinel-sensor run --openclaw --observe-only           # 탐지·보고만, 실행 중단은 하지 않음
+sentinel-sensor run --openclaw --gate-exec              # 셸 명령 승인 요청에 답한다 (위험하면 실행 전 거절)
+sentinel-sensor run --openclaw --capture frames.jsonl   # 게이트웨이 원본 프레임을 마스킹해서 기록 (디버깅)
 sentinel-sensor run --replay examples/events/*.jsonl    # 데모용: 파일을 재생
 ```
 
@@ -130,8 +132,20 @@ SG 코드에서 무엇을 가져오고 고쳤는지는 [from-sg.md](from-sg.md#o
 
 - **집행은 사후다.** 게이트웨이는 툴이 이미 시작된 뒤에 알려준다. 판정이 `block` 이상이면 `sessions.abort`로 그 실행을 중단하고,
   결과(`enforced`, 실패 사유)를 finding의 `response`에 담는다. 같은 실행은 한 번만 중단한다.
-- `require_approval`은 아직 OpenClaw에서 집행하지 못한다(alert로 기록). 게이트웨이의 셸 실행 승인(`exec.approval.*`)을 쓰면 셸 명령은 사전에 막을 수 있다.
-- 권한: 관측만 하면 `operator.read`, 중단까지 하면 `operator.write`. 장치 신원 파일이 있으면 connect에 서명해 권한을 유지한다.
+- **셸 명령은 실행 전에 막을 수 있다** (`--gate-exec`). OpenClaw의 exec 정책이 승인을 요구하도록 설정돼 있으면, 게이트웨이는 명령을 실행하기 전에
+  `exec.approval.requested`를 보낸다. 센서는 그 명령을 `tool.call`(라벨 `openclaw.phase=exec-approval`)로 판정한다.
+
+  | 판정 | 센서가 하는 일 | finding의 `response.detail` |
+  |---|---|---|
+  | `block` 이상 | `exec.approval.resolve {decision: deny}` | `pre-exec: exec.approval denied` |
+  | `require_approval` | 아무것도 안 함. OpenClaw의 승인 창에서 사용자가 결정 | `left to the user: OpenClaw exec approval` |
+  | `allow`, `alert` | 아무것도 안 함. 평소처럼 사람이 결정 | (alert면 기록만) |
+
+  센서는 **거절만** 하고 허용은 하지 않는다. 허용까지 하면 사람이 보던 승인 창을 센서가 대신 닫아 버리기 때문이다.
+  승인된 명령이 실제로 실행되면 `session.tool`로 한 번 더 들어오므로, 같은 명령이 두 번 판정된다(finding은 중복 제거되지만 빈도 룰은 두 번 센다).
+- 그 밖의 툴에서 `require_approval`은 아직 집행하지 못한다(alert로 기록).
+- 권한: 관측만 하면 `operator.read`, 중단까지 하면 `operator.write`, 셸 승인에 답하려면 `operator.approvals`.
+  장치 신원 파일이 있으면 connect에 서명해 권한을 유지한다. 처음 권한을 늘릴 때는 `openclaw devices list` → `openclaw devices approve`가 한 번 필요할 수 있다.
 - 연결이 끊기면 1초부터 최대 60초까지 늘려 가며 다시 붙는다.
 
 ## 어댑터 계약

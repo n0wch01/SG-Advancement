@@ -19,7 +19,7 @@
 
 | 에이전트 | 센서 | 차단 가능 시점 | 승인(`require_approval`) | 비고 |
 |---|---|---|---|---|
-| OpenClaw | `openclaw_gateway` (WS 구독) | 사후(실행 abort) | 게이트웨이에 셸 실행 승인(`exec.approval.*`, `operator.approvals`)이 있음을 M5에서 확인. 셸 명령은 이걸로 사전 거절 가능, 나머지는 콘솔 승인 큐 | SG 코드 이전, [from-sg.md](from-sg.md) |
+| OpenClaw | `openclaw_gateway` (WS 구독) | 사후(실행 abort). **셸 명령은 사전**(exec 승인 요청에 deny) | 셸 명령은 OpenClaw 자체 승인 창에서 사용자가 결정. 나머지 툴은 콘솔 승인 큐 | SG 코드 이전, [from-sg.md](from-sg.md) |
 | Claude Code | `claude_code_hook` | **사전**(PreToolUse에서 deny) | PreToolUse가 `ask`를 돌려 Claude Code의 확인 창으로 넘긴다 | managed settings로 정책 강제 |
 | Gemini CLI | `gemini_cli_hook` | 사전(가능 시) | X1에서 확인. 안 되면 차단 + 콘솔 승인 큐 | hook 사양은 선택 과제 X1에서 확인 |
 | Codex CLI | `codex_cli_hook` | 확인 필요 | X1에서 확인. 안 되면 차단 + 콘솔 승인 큐 | 연동 지점은 선택 과제 X1에서 조사 |

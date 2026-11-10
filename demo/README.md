@@ -57,6 +57,9 @@ OPENCLAW_GATEWAY_TOKEN=demo uv run sentinel-sensor --home /tmp/alice run --openc
 `curl -s http://127.0.0.1:8000/v1/admin/findings -H "Authorization: Bearer demo-admin"`에는
 `"enforced": true, "detail": "post-hoc: sessions.abort"`가 담긴 finding이 보인다.
 
+셸 명령 사전 거절을 보려면 터미널 3에서 `EXEC` 시나리오를, 터미널 2에서 `run --openclaw --gate-exec`를 쓴다.
+`🛑 exec.approval.resolve {'id': 'ap-2', 'decision': 'deny'}`가 찍히고, 평범한 명령(`ap-1`)은 건드리지 않는다.
+
 ## 삭제
 
 ```bash

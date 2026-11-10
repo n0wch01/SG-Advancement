@@ -48,7 +48,8 @@ SG의 `scripts/openclaw_ws.py`, `sentinel/ingest.py`, `sentinel/respond.py`가
 - 툴 이벤트는 모든 클라이언트에 방송되지 않는다. `sessions.subscribe`를 호출한 연결에만 `session.tool`로 간다.
 - `sessions.abort`는 `key`와 선택 항목 `runId`만 받는다. 다른 키를 넣으면 거부한다(SG 주석의 "strict params"가 이것이다).
 - 게이트웨이에는 셸 실행 승인 기능(`exec.approval.requested` 이벤트, `exec.approval.resolve` 메서드, `operator.approvals` 권한)이 있다.
-  이걸 쓰면 셸 명령에 한해서는 **실행 전에** 거절할 수 있다. 아직 쓰지 않았다.
+  SG는 이 이벤트를 "approval" 종류로 분류만 했다. 지금은 센서가 승인 요청에 답해서, 셸 명령은 **실행 전에** 거절한다(`--gate-exec`).
+  OpenClaw 연동이 "사후 중단만 가능"에서 "셸 명령은 사전 차단"으로 바뀐 부분이다.
 
 ## 탐지 엔진 (M2)
 
