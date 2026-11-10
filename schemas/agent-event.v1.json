@@ -470,6 +470,45 @@
           ],
           "default": null,
           "title": "Reason"
+        },
+        "permission_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent-native approval mode, e.g. default | plan | acceptEdits | bypassPermissions (Claude Code), yolo (Gemini CLI), full-auto (Codex CLI)",
+          "title": "Permission Mode"
+        },
+        "interactive": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "False when started without a human at a terminal (-p, no TTY, CI)",
+          "title": "Interactive"
+        },
+        "parent_process": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Executable that launched the agent, e.g. zsh, node, python",
+          "title": "Parent Process"
         }
       },
       "title": "SessionStart",

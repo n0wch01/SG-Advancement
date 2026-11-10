@@ -65,6 +65,20 @@ class PluginDescriptor(StrictModel):
 class SessionStart(StrictModel):
     kind: Literal[EventKind.SESSION_START] = EventKind.SESSION_START
     reason: str | None = None
+    # How the agent was launched. Malware has driven installed agent CLIs with their safety
+    # checks switched off (Nx "s1ngularity", 2025); these let rules see that. All optional:
+    # sensors fill what their agent exposes.
+    permission_mode: str | None = Field(
+        default=None,
+        description="Agent-native approval mode, e.g. default | plan | acceptEdits | bypassPermissions "
+        "(Claude Code), yolo (Gemini CLI), full-auto (Codex CLI)",
+    )
+    interactive: bool | None = Field(
+        default=None, description="False when started without a human at a terminal (-p, no TTY, CI)"
+    )
+    parent_process: str | None = Field(
+        default=None, description="Executable that launched the agent, e.g. zsh, node, python"
+    )
 
 
 class SessionEnd(StrictModel):

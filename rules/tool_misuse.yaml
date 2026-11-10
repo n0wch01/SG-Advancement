@@ -1,4 +1,4 @@
-# 툴 오남용: 파괴적 명령
+# 툴 오남용: 파괴적 명령, 안전장치를 끈 실행
 version: 1
 rules:
   - id: destructive-shell-command
@@ -14,3 +14,70 @@ rules:
       type: regex
       fields: [payload.arguments]
       pattern: '\brm\s+-[a-zA-Z]*(rf|fr)[a-zA-Z]*\b|\brm\s+-[a-zA-Z]*r[a-zA-Z]*\s+-[a-zA-Z]*f|\bmkfs(\.\w+)?\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:|\bchmod\s+-R\s+777\s+/|\bgit\s+push\s+.*(--force\b|-f\b)'
+
+  # T17 (docs/incidents.md: Replit, Amazon Q). 셸 룰이 못 보는 DB·클라우드 경로.
+  # 오탐 주의: 개발 DB를 일부러 초기화하는 작업도 걸린다. 그래서 block이 아니라 require_approval.
+  # 파일에 SQL을 쓰는 것(Write의 content)은 실행이 아니므로 보지 않는다: fields를 실행 인자로 한정했다.
+  - id: destructive-sql
+    severity: high
+    category: tool_misuse
+    title: 파괴적 SQL 실행
+    message: 테이블·DB 삭제나 조건 없는 DELETE/TRUNCATE가 실행되려 합니다.
+    recommended_action: 운영 DB인지 확인하고, 사람이 승인한 경우에만 실행하세요. 백업 여부를 먼저 확인하세요.
+    response: require_approval
+    tags: [owasp-llm:LLM06, incident:replit-2025]
+    when: {payload.kind: tool.call}
+    match:
+      type: regex
+      ignore_case: true
+      fields: [payload.arguments.query, payload.arguments.sql, payload.arguments.statement, payload.arguments.command]
+      pattern: '\bdrop\s+(table|database|schema)\b|\btruncate\s+(table\s+)?[\w."]+|\bdelete\s+from\s+[\w."]+\s*(;|$|[''"])'
+
+  # 오탐 주의: 단일 자원 삭제(kubectl delete pod 등)는 일부러 뺐다. gcloud/az의 delete는 범위가 넓어 아직 넣지 않았다.
+  - id: destructive-cloud-command
+    severity: high
+    category: tool_misuse
+    title: 클라우드 자원 일괄 삭제
+    message: 클라우드 자원을 대량 또는 영구 삭제하는 명령이 실행되려 합니다.
+    recommended_action: 대상 계정과 자원을 확인하고, 사람이 승인한 경우에만 실행하세요.
+    response: require_approval
+    tags: [owasp-llm:LLM06, incident:amazon-q-2025]
+    when: {payload.kind: tool.call}
+    match:
+      type: regex
+      fields: [payload.arguments]
+      pattern: '\baws\s+s3\s+rb\b|\baws\s+s3\s+rm\b.*--recursive|\baws\s+[\w-]+\s+(delete|terminate)-[\w-]+|\bterraform\s+destroy\b|\bkubectl\s+delete\s+(ns|namespaces?|all)\b|\bkubectl\s+delete\b.*--all\b'
+
+  # T15 (docs/incidents.md: Nx s1ngularity). 센서가 session.start에 실행 방식을 담아야 동작한다 (M6~).
+  # 오탐 주의: 샌드박스·컨테이너에서 일부러 권한 확인을 끄는 개발자도 있다. 그래서 alert.
+  - id: agent-safety-bypass
+    severity: medium
+    category: policy_violation
+    title: 권한 확인을 끈 에이전트 실행
+    message: 에이전트가 툴 실행 전 사용자 확인을 끈 모드로 시작했습니다.
+    recommended_action: 격리된 환경인지 확인하세요. 일반 업무 PC라면 기본 모드를 쓰도록 안내하세요.
+    response: alert
+    tags: [owasp-llm:LLM06, incident:nx-s1ngularity-2025]
+    when: {payload.kind: session.start}
+    match:
+      type: regex
+      ignore_case: true
+      fields: [payload.permission_mode]
+      pattern: 'bypass|yolo|dangerous|full-auto|trust-all'
+
+  # 사람이 없는데 확인까지 꺼졌다면 다른 프로그램이 에이전트를 부리는 것일 수 있다.
+  # 오탐 주의: CI에서 claude -p 등을 이렇게 돌리는 정상 사용이 있다. 그룹별 예외는 M9 정책에서.
+  - id: agent-unattended-safety-bypass
+    severity: critical
+    category: policy_violation
+    title: 사람 없이 권한 확인을 끈 에이전트 실행
+    message: 터미널에 사람이 없는 상태로, 툴 실행 확인을 끈 에이전트가 시작됐습니다. 악성코드가 에이전트를 대신 실행하는 패턴입니다.
+    recommended_action: 부모 프로세스(parent_process)를 확인하세요. CI가 아니라면 세션을 중단하고 장비를 점검하세요.
+    response: abort_session
+    tags: [owasp-llm:LLM06, incident:nx-s1ngularity-2025]
+    when: {payload.kind: session.start, payload.interactive: "false"}
+    match:
+      type: regex
+      ignore_case: true
+      fields: [payload.permission_mode]
+      pattern: 'bypass|yolo|dangerous|full-auto|trust-all'
