@@ -34,8 +34,10 @@ async def test_daemon_ships_replayed_events_periodically(enrolled: Sensor, cp: T
     task = asyncio.create_task(daemon.run())
     try:
         await asyncio.wait_for(replay.done.wait(), 5)
-        await until(lambda: events_on_server(cp) == len(list(replay.events())))
-        assert daemon.stats.flushes >= 1
+        # flush runs in a worker thread and bumps the counter after it returns, so the server
+        # can already hold the events while the counter is still 0: wait for both.
+        n = len(list(replay.events()))
+        await until(lambda: events_on_server(cp) == n and daemon.stats.flushes >= 1)
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
