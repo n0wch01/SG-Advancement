@@ -52,7 +52,7 @@
 | M4 | Sensor core | 어댑터 인터페이스, 정책 pull·캐시(중앙이 끊기면 마지막 정책 사용), 정책 서명(Ed25519) 검증, 전송 큐·재시도, 등록 CLI. 예시 이벤트 replay로 센서 → 중앙 엔드투엔드 | ✅ |
 | M5 | 로컬 데몬 + OpenClaw 어댑터 | `sentinel-sensor run`(어댑터 실행, 주기적 정책 동기화·전송), SG ingest/respond 이전, 사후 abort 집행, 셸 명령은 exec 승인으로 사전 거절, SG 대비 변경점 문서(`docs/from-sg.md`). **게이트웨이 프로토콜 v4 대응**: 센서 자체 장치 신원 + 페어링 + `deviceToken`, `tool-events` 기능 선언. v4 실환경에서 관측·탐지 확인, 실행 전 차단은 M5c로 넘김(결정 B) | ✅ |
 | M5b | OpenClaw 팀·다중 사용자 | **팀 공용 게이트웨이를 주 데모 환경으로**. 에이전트별 인벤토리(`tools.catalog` agentId), 세션 소유자를 사용자로 귀속(다중 사용자 모드), 하위 에이전트 위임 체인 추적(부모↔자식 세션), 에이전트 간 인젝션 전파 탐지(T18), `openclaw agents team create`로 팀 데모 | |
-| M5c | OpenClaw 플러그인 사전 차단 | TypeScript 플러그인의 `before_tool_call` → 로컬 소켓 → 데몬 판정. 모든 툴에 block·`requireApproval`(사용자 승인)·결과 기록. 데몬 없으면 단계적 처리 + 라벨. 어댑터가 본 실행 중 플러그인 판정이 없는 것을 우회 finding으로 | |
+| M5c | OpenClaw 플러그인 사전 차단 | TypeScript 플러그인의 `before_tool_call` → 로컬 소켓 → 데몬 판정. 모든 툴에 block·`requireApproval`(사용자 승인)·결과 기록. 데몬 없으면 단계적 처리 + 라벨. 어댑터가 본 실행 중 플러그인 판정이 없는 것을 우회 finding으로. 플러그인 신호 감시(`sensor.health`, 끊김 finding·복구 기록), 상시 운영(LaunchAgent). 실환경에서 OpenClaw·Codex 런타임 차단, 데몬 꺼짐 시 단계적 차단, 끊김·우회·복구 확인 | ✅ |
 | M5d | 실행 격리·외부 통신·기준선 | OpenClaw 샌드박스·권한 모드·exec 정책이 회사 기준선대로인지 점검, 네트워크 프록시를 egress 프록시(허용 도메인)로 연결, 플러그인·스킬 허용 목록과 버전 변경 시 재승인, 직원 PC의 비관리 OpenClaw 설치 탐지, **모든 모델의 런타임 고정과 Codex에 묶인 세션 점검**(T19) | |
 | M7 | Console v1 | 장비/사용자 인벤토리, 위협 타임라인, finding 상세(룰 근거, 마스킹된 증거), 사용자 승인 감사 목록 | |
 | M9 | 정책 관리 | 공통 정책 + 팀별 정책 계층(룰 on/off, 응답 단계·허용 목록 덮어쓰기), 정책 버전, 콘솔 편집기, 센서 pull 반영, 변경 감사 로그 | |

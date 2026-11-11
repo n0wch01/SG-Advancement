@@ -209,6 +209,101 @@ v4 녹화 프레임은 [openclaw-2026.11.3-tool-run.jsonl](../tests/fixtures/ope
 에이전트 한 번 실행에 qwen3:8b로 약 5분(첫 실행, MacBook Air M3)이 걸렸다.
 `exec.approval.resolved`에는 결정자(`resolvedBy`)가 들어 있어, M7의 사용자 승인 감사에 그대로 쓸 수 있다.
 
+## OpenClaw 플러그인 (실행 전 차단, M5c)
+
+[integrations/openclaw-plugin/](../integrations/openclaw-plugin/). 게이트웨이 안에서 `before_tool_call` hook으로 **모든 툴 호출을 실행 전에** 판정한다.
+v4 게이트웨이는 외부 클라이언트에게 실행 중단·승인 열람을 `operator.admin` 없이는 허락하지 않으므로, 차단은 이 플러그인이 맡는다(결정 B).
+
+```
+OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──▶ unix 소켓 (SENTINEL_HOME/sentinel.sock, 0600)
+                                        ◀── {decision: allow | block | approve} ── 센서 데몬 (룰 엔진, 기록)
+```
+
+| 데몬 판정 | 플러그인이 하는 일 | finding의 `response.detail` |
+|---|---|---|
+| `block` 이상 | `{block: true}` — 툴이 실행되지 않는다 | `pre-exec: openclaw plugin blocked the tool call` |
+| `require_approval` | `requireApproval` — OpenClaw 승인 창에서 **사용자**가 결정 (한 번 허용 / 거부만, 영구 허용은 막음) | `pre-exec: user approval requested through OpenClaw` |
+| `allow`, `alert` | 아무것도 하지 않음 | (alert면 기록만) |
+
+**판정할 수 없을 때** (방향 섹션의 단계적 처리):
+
+| 상황 | 플러그인 동작 | 기록 |
+|---|---|---|
+| 데몬 정상 | 데몬 판정 (시퀀스·빈도 룰 포함) | 이벤트 `source.sensor = openclaw_plugin` |
+| 데몬이 응답 없음 | `sentinel-sensor evaluate` 실행 → 서명된 정책 캐시로 판정 (상태 없는 룰만) | `labels.sentinel_verdict = degraded` |
+| 캐시도 없음 | 읽기 전용 툴(`read`, `memory_search`, `memory_get`, `session_status`)만 통과, 나머지는 사용자 승인 | 기록 없음 (센서가 없으므로) |
+
+`before_tool_call`은 핸들러가 예외를 던지거나 15초를 넘기면 OpenClaw가 그 호출을 **막는다**. 플러그인은 예외를 밖으로 내지 않고 위 순서로 직접 처리한다.
+
+**우회 탐지**: 플러그인이 판정한 호출 ID는 데몬에 등록된다. WebSocket 어댑터는 등록된 호출을 다시 판정하지 않고(중복 방지),
+플러그인이 최근 5분 안에 연결된 상태인데 등록되지 않은 호출을 보면 `labels.sentinel_plugin = missing`을 붙인다.
+룰 `openclaw-plugin-bypass`(alert)가 이를 finding으로 만든다. 플러그인이 꺼졌거나 우회된 실행 경로를 보안팀이 알 수 있다.
+
+### 플러그인 신호 감시
+
+플러그인은 60초마다 데몬에 인사(`hello`)를 보낸다. 데몬은 한 번이라도 인사를 받으면 그 뒤로 **이 장비에는 플러그인이 있어야 한다**고 기억한다
+(`<home>/plugin-state.json`, 데몬을 재시작해도 유지). 그래서 플러그인을 끄고 기다리거나 데몬을 재시작해도 우회 탐지가 꺼지지 않는다.
+
+| 상황 | 이벤트 | 룰 |
+|---|---|---|
+| 마지막 인사 후 150초가 지남 (30초마다 점검) | `sensor.health` `status: lost` (한 번만) | `openclaw-plugin-heartbeat-lost` (alert, high) |
+| 끊긴 뒤 다시 인사가 옴 | `sensor.health` `status: recovered` | 없음 (기록만) |
+| 신호가 끊긴 동안 실행된 툴 호출 | `tool.call` + `labels.sentinel_plugin: missing` | `openclaw-plugin-bypass` |
+
+`sensor.health`는 이번에 추가한 이벤트 종류다. 툴 호출이 아니라 **통제 장치 자체의 상태**를 나타낸다.
+
+### 상시 운영
+
+```bash
+sentinel-sensor enroll --server http://127.0.0.1:18100 --device-id my-mac   # 센서 폴더: ~/.agent-sentinel
+install -m 600 /dev/stdin ~/.agent-sentinel/openclaw-token <<< "<gateway token>"  # 토큰은 파일로 (0600 아니면 거부)
+sentinel-sensor service install --openclaw     # macOS LaunchAgent: 로그인 시 시작, 죽으면 재시작
+sentinel-sensor service status | uninstall
+```
+
+- 서비스 정의(plist)에는 비밀값이 들어가지 않는다. 게이트웨이 토큰은 `<home>/openclaw-token`에서 읽는다(`OPENCLAW_GATEWAY_TOKEN`이 있으면 그것을 우선).
+- 로그는 `<home>/logs/sensor.log`. Linux는 `--dry-run`으로 systemd 사용자 유닛만 출력한다.
+- 중앙 서버는 `docker compose up -d`(재시작 정책 `unless-stopped`)로 상시 띄운다.
+
+### 실제 게이트웨이 확인 (2026-11-11, OpenClaw 2026.11.3)
+
+같은 요청(`rm -rf /tmp/sentinel-test/junk`)을 Control UI에서 보냈다. 네 경우 모두 폴더는 지워지지 않았다.
+
+| 경우 | 결과 |
+|---|---|
+| OpenClaw 런타임 (GPT-6-Luna) | ✅ 플러그인이 차단. 툴 출력에 `Agent Sentinel: 파괴적 셸 명령`. finding 집행 주체 `openclaw_plugin` |
+| **Codex 런타임** (GPT-6.1-Sol, 런타임 고정 없음) | ✅ **Codex 네이티브 툴도 차단**. `codex_app_server.hook` 중계로 플러그인이 호출됐다. 지난 시험에서 "탐지만 하고 못 막던" T19 상황이 해소됐다 |
+| 데몬 꺼짐 | ✅ 플러그인이 `sentinel-sensor evaluate`로 캐시 판정해 차단. `sentinel_verdict: degraded`로 대기열에 남았다가 데몬이 돌아오자 전송됐다 |
+| 순서 경쟁 | ⚠️ 실제 게이트웨이는 툴 시작 이벤트를 플러그인 요청과 **같은 순간**에 보낸다. 처음엔 WS 어댑터가 먼저 판정해 우회로 오탐했다 → 어댑터가 최대 3초(`plugin_grace`) 플러그인 판정을 기다리도록 고쳤다 |
+
+상시 운영 상태(LaunchAgent 데몬 + compose 중앙 서버)에서 플러그인을 끄고 다시 켰다.
+
+| 시각 (KST) | 일어난 일 | 결과 |
+|---|---|---|
+| 16:07:30 | 마지막 인사 | |
+| 16:07:47 | `openclaw plugins disable agent-sentinel` 후 게이트웨이 재시작 | WS 센서는 16:08:04에 자동 재연결 |
+| 16:10:11 | 마지막 인사 후 161초 | ✅ `sensor.health lost` → `openclaw-plugin-heartbeat-lost` (high) |
+| 16:10:52 | 에이전트가 `pwd` 실행 (플러그인 없이 그대로 실행) | ✅ `openclaw-plugin-bypass` (high) |
+| 16:12:27 | `plugins enable` 후 게이트웨이 재시작, 인사 재개 | ✅ `sensor.health recovered` |
+
+- `plugins disable`만으로는 **실행 중인 게이트웨이에서 플러그인이 내려가지 않는다**(재시작 전까지 인사가 계속 왔다).
+  통제를 끄려면 게이트웨이를 재시작해야 하고, 그 재시작은 신호 감시가 약 2.5분 안에 잡는다.
+- 그 사이 툴은 막히지 않고 실행된다. 이 공백은 실시간 우회 finding이 메운다(사후 탐지). 공백을 없애려면 M5d의 설정 변경 감시가 필요하다.
+
+### 설치
+
+```bash
+openclaw plugins install --link "$PWD/integrations/openclaw-plugin" --force --accept-capabilities
+openclaw plugins enable agent-sentinel --accept-capabilities
+openclaw config set 'plugins.entries["agent-sentinel"].config.sensorHome' '"~/.agent-sentinel"' --strict-json
+openclaw config set 'plugins.entries["agent-sentinel"].config.sensorCli' '"<venv>/bin/sentinel-sensor"' --strict-json
+sentinel-sensor run --openclaw          # 데몬이 <home>/sentinel.sock을 연다 (--socket으로 바꿀 수 있음)
+```
+
+- `--force`는 ClawHub 검토를 받지 않은 로컬 소스라는 확인, `--accept-capabilities`는 서드파티 플러그인 권한 동의다. 회사 배포에서는 이 두 단계를 보안팀이 한다.
+- unix 소켓 경로는 104바이트(macOS)를 넘을 수 없다. 센서 폴더가 깊으면 `--socket`과 플러그인 `socketPath`를 짧은 경로로 맞춘다.
+- 테스트: `node --test integrations/openclaw-plugin/policy.test.ts`(Node ≥ 22.18), Python 쪽은 `tests/test_plugin_api.py`(실제 TypeScript 코드가 실제 데몬 소켓에 묻는 테스트 포함).
+
 ## 어댑터 계약
 
 [adapters/base.py](../src/agent_sentinel/sensor/adapters/base.py)
