@@ -8,11 +8,11 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
       # Node runs the OpenClaw plugin's tests and the plugin<->daemon test in pytest
       # (TypeScript type stripping needs Node >= 22.18).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
       - run: uv sync
