@@ -58,6 +58,7 @@
 | T17 | 셸 밖 파괴적 행동 (SQL `DROP`, 클라우드 API 삭제) | ② | `destructive-sql`, `destructive-cloud-command` 룰 (require_approval) | 룰 초안 |
 | T18 | 에이전트 간 위임을 통한 인젝션 전파 (하위 에이전트가 읽은 문서 → 총괄 → 다른 에이전트의 행동) | ①② | 위임 체인을 따라 세션을 묶어 시퀀스 판정 | M5b |
 | T19 | 네이티브 런타임(Codex 등)이 OpenClaw 승인을 거치지 않음 (Codex 기본값 `yolo`, `approvalPolicy: never`) | ② | 런타임 가시성 확인, 필요하면 해당 CLI를 직접 관측 | X1 |
+| T20 | 게이트웨이 공용 토큰 유출 → 페어링 없이 전권 접속 (v4에서 확인: 루프백 + 공용 토큰이면 요청한 권한을 그대로 받음) | ④ | 공용 토큰은 최초 페어링에만 쓰고 이후 `deviceToken`, 공용 게이트웨이는 비밀 저장소로 토큰 관리 | M5b·M5d |
 
 ## 범위 밖
 

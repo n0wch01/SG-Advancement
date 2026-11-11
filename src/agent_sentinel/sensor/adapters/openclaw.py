@@ -35,6 +35,7 @@ import asyncio
 import json
 import logging
 import os
+from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -97,13 +98,21 @@ class OpenClawMapper:
         self.pending_results: dict[str, dict[str, Any]] = {}  # result frames without output text
         self.command_outputs: dict[str, str] = {}  # shell output that arrived before its result frame
         self._seq = 0
+        self.seen_messages: set[str] = set()
+        self._message_order: deque[str] = deque()
 
     def _event(
-        self, session_key: str, payload: dict[str, Any], ts: Any = None, run_id: str | None = None
+        self,
+        session_key: str,
+        payload: dict[str, Any],
+        ts: Any = None,
+        run_id: str | None = None,
+        labels: dict[str, str] | None = None,
     ) -> AgentEvent:
         self._seq += 1
         return AgentEvent.model_validate(
             {
+                "labels": labels or {},
                 "ts": _ts(ts),
                 "endpoint": {"device_id": "pending", "hostname": self.hostname},  # sensor core stamps the id
                 "principal": {"user_id": self.user_id},
@@ -284,6 +293,15 @@ class OpenClawMapper:
         if phase == "start":
             args = data.get("args")
             arguments = args if isinstance(args, dict) else ({} if args is None else {"input": args})
+            # v4 Code Mode: the model calls an outer `exec` whose args are JavaScript, which in turn
+            # runs inner tool calls (same name, `parentToolCallId` set). The inner call carries the
+            # command that really runs — JS can assemble it dynamically — so rules rely on it; the
+            # labels keep the link for investigation.
+            labels: dict[str, str] = {}
+            if isinstance(data.get("parentToolCallId"), str):
+                labels["openclaw.parent_call_id"] = data["parentToolCallId"]
+            if isinstance(arguments.get("code"), str):
+                labels["openclaw.tool_kind"] = "code_mode"
             out.append(
                 self._event(
                     key,
@@ -296,6 +314,7 @@ class OpenClawMapper:
                     },
                     p.get("ts"),
                     run_id,
+                    labels,
                 )
             )
         elif phase == "result" and call_id not in self.results_emitted:
@@ -354,6 +373,15 @@ class OpenClawMapper:
         key, msg = p.get("sessionKey"), p.get("message")
         if not (isinstance(key, str) and isinstance(msg, dict)):
             return []
+        # v4 can deliver the same transcript message twice (seen live); its id is stable.
+        msg_id = p.get("messageId") or (msg.get("__openclaw") or {}).get("id")
+        if isinstance(msg_id, str):
+            if msg_id in self.seen_messages:
+                return []
+            self.seen_messages.add(msg_id)
+            self._message_order.append(msg_id)
+            if len(self._message_order) > 10_000:  # bounded memory on long-running gateways
+                self.seen_messages.discard(self._message_order.popleft())
         role, ts = msg.get("role"), msg.get("timestamp")
         out = self._session_start(key, ts, None, "observed")
         if role == "user":

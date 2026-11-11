@@ -167,6 +167,21 @@ sentinel-sensor run --openclaw                # 4. 이후에는 공용 토큰 �
 - 장치 증명의 서명 시각은 `connect.challenge`의 `ts`를 쓴다. 장치 ID는 공개키의 sha256이다(게이트웨이가 검사한다).
 - `deviceToken`으로 접속할 때는 그 토큰이 발급된 권한만 요청한다. 권한을 늘리면 새 페어링 승인이 필요하다.
 
+### 실제 게이트웨이 확인 (2026-11-11, OpenClaw 2026.11.3, 프로토콜 v4)
+
+Codex 구독 모델 + OpenClaw 런타임으로 확인했다(실행 한 번에 약 10초).
+
+| 항목 | 결과 |
+|---|---|
+| 프로토콜 협상, 센서 자체 장치 신원 | ✅ v4로 접속. 공용 토큰을 가진 루프백 클라이언트는 **페어링 없이** 요청한 권한을 전부 받았다(`hello-ok.auth.method: token`) |
+| `tool-events` 선언 → 툴 이벤트 | ✅ `session.tool` start/result, `command_output` 수신 |
+| Code Mode | ⚠️ 새 구조: 바깥 `exec`(JavaScript) 안에서 안쪽 `exec`(실제 셸 명령, `parentToolCallId`)가 돈다. 둘 다 `tool.call`로 내고 라벨로 잇는다. 명령은 JS에서 조립될 수 있으므로 안쪽 호출이 기준이다 |
+| 대화 기록 메시지 | ⚠️ 같은 사용자 메시지가 **같은 ID로 두 번** 왔다 → 메시지 ID로 중복 제거 |
+| 실행 중 `sessions.abort` | ❌ `unauthorized`. v4는 그 실행을 시작한 장치·연결이거나 `operator.admin`일 때만 중단을 허락한다 |
+| 셸 실행 전 거절 | ⏳ CLI(`openclaw agent`)에서 시킨 실행은 대화형 승인을 요청할 수 없어 OpenClaw가 명령 자체를 막았다. Control UI나 채팅 채널에서 확인해야 한다 |
+
+v4 녹화 프레임은 [openclaw-2026.11.3-tool-run.jsonl](../tests/fixtures/openclaw-2026.11.3-tool-run.jsonl)에 회귀 테스트로 고정했다.
+
 ### 실제 게이트웨이 확인 (2026-11-10, OpenClaw 2026.4.15)
 
 | 항목 | 결과 |

@@ -733,3 +733,32 @@ async def test_pairing_then_device_token(enrolled: Sensor, caplog) -> None:
             assert "token" not in last["auth"] and last["auth"]["deviceToken"].startswith("dt-")
         finally:
             task2.cancel()
+
+
+REAL_V4 = Path(__file__).parent / "fixtures" / "openclaw-2026.11.3-tool-run.jsonl"
+
+
+def test_real_v4_run_code_mode_and_duplicate_messages() -> None:
+    """Live run on the 2026.11.3 gateway (protocol 4, Codex-subscription model, OpenClaw runtime):
+    `ls -la /tmp/sentinel-test`. The model went through Code Mode, and the user message arrived twice."""
+    frames = [json.loads(line) for line in REAL_V4.read_text("utf-8").splitlines()]
+    user_frames = [f for f in frames if (f["payload"].get("message") or {}).get("role") == "user"]
+    assert (
+        len(user_frames) == 2
+        and user_frames[0]["payload"]["messageId"] == user_frames[1]["payload"]["messageId"]
+    )
+
+    m = OpenClawMapper("alice")
+    m.inventory({"groups": [{"source": "core", "tools": [{"id": "exec"}]}]})
+    events = [e for f in frames for e in m.map_frame(f)]
+    assert kinds(events).count("prompt.user") == 1  # deduplicated by message id
+
+    calls = [e for e in events if e.kind.value == "tool.call"]
+    outer, inner = calls
+    assert (
+        outer.labels.get("openclaw.tool_kind") == "code_mode" and "ls -la" in outer.payload.arguments["code"]
+    )
+    assert inner.payload.arguments["command"] == "ls -la /tmp/sentinel-test"
+    assert inner.labels["openclaw.parent_call_id"] == outer.payload.call_id
+    results = {e.payload.call_id: e for e in events if e.kind.value == "tool.result"}
+    assert ".env" in (results[inner.payload.call_id].payload.output_preview or "")
