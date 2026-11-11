@@ -5,6 +5,9 @@
 조직 구성원이 각자 다른 AI 에이전트(OpenClaw, Claude Code, Gemini CLI, Codex CLI, LangGraph 기반 사내 에이전트 등)를 쓰더라도
 **정책은 중앙에서 한 번 정의해 배포**하고, **위협은 한 화면에서** 확인·대응할 수 있게 하는 것이 목표입니다.
 
+> **지금 단계: 사내 OpenClaw 안전 운영.** 회사가 운영하는 팀 공용 OpenClaw 게이트웨이를 기준으로, 게이트웨이 플러그인(실행 전 판정)과
+> WebSocket 관측을 겹쳐 통제합니다. 다른 에이전트는 같은 스키마·센서 위에 이어서 붙입니다. 진행 상황은 [docs/roadmap.md](docs/roadmap.md).
+
 > 이 프로젝트는 팀 프로젝트 [ajou-samsung-giants](https://github.com/n0wch01/ajou-samsung-giants)
 > (OpenClaw 단일 게이트웨이 대상 보안 가시화 MVP)에서 출발해, 다중 에이전트·중앙 관제 구조로 단독 재설계한 것입니다.
 
