@@ -21,8 +21,8 @@ SG는 **OpenClaw 게이트웨이 하나**를 대상으로 한 보안 가시화 M
 ## OpenClaw 연동 (M5)
 
 SG의 `scripts/openclaw_ws.py`, `sentinel/ingest.py`, `sentinel/respond.py`가
-[sensor/adapters/openclaw_gateway.py](../src/agent_sentinel/sensor/adapters/openclaw_gateway.py)와
-[sensor/adapters/openclaw.py](../src/agent_sentinel/sensor/adapters/openclaw.py)로 옮겨왔다.
+[sensor/adapters/openclaw_gateway.py](../src/sg_advance/sensor/adapters/openclaw_gateway.py)와
+[sensor/adapters/openclaw.py](../src/sg_advance/sensor/adapters/openclaw.py)로 옮겨왔다.
 
 ### 그대로 가져온 것
 

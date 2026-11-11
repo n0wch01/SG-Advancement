@@ -1,6 +1,6 @@
 """Bearer-token auth for the control plane.
 
-- Admin: one shared token from ``SENTINEL_ADMIN_TOKEN`` (console login replaces this in M7).
+- Admin: one shared token from ``SGA_ADMIN_TOKEN`` (console login replaces this in M7).
 - Sensor: a per-device token issued at enrollment. Only its sha256 is stored, so a leaked DB
   does not leak usable tokens. Tokens are 256-bit random, so a fast hash is sufficient.
 """
@@ -20,8 +20,8 @@ from sqlalchemy.orm import Session
 
 from .db import Device
 
-ENROLL_PREFIX = "set_"  # sentinel enrollment token
-DEVICE_PREFIX = "sdt_"  # sentinel device token
+ENROLL_PREFIX = "set_"  # SG-Advance enrollment token (prefix kept: existing tokens stay valid)
+DEVICE_PREFIX = "sdt_"  # SG-Advance device token
 
 _bearer = HTTPBearer(auto_error=False)
 

@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_sentinel.detect import Engine, RuleSet
-from agent_sentinel.detect.cli import load_events, main
-from agent_sentinel.schema import ResponseAction
+from sg_advance.detect import Engine, RuleSet
+from sg_advance.detect.cli import load_events, main
+from sg_advance.schema import ResponseAction
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples" / "events"

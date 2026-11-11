@@ -1,8 +1,8 @@
-"""sentinel-detect: replay AgentEvent JSONL through the rules and explain every hit.
+"""sga-detect: replay AgentEvent JSONL through the rules and explain every hit.
 
-uv run sentinel-detect examples/events/*.jsonl
-uv run sentinel-detect events.jsonl --rule sensitive-file-access --all
-uv run sentinel-detect events.jsonl --json > findings.jsonl
+uv run sga-detect examples/events/*.jsonl
+uv run sga-detect events.jsonl --rule sensitive-file-access --all
+uv run sga-detect events.jsonl --json > findings.jsonl
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from ..schema import AgentEvent
 from .engine import Engine, Verdict
 from .rules import RuleLoadError, RuleSet
 
-DEFAULT_RULES = Path(os.environ.get("SENTINEL_RULES_DIR", "rules"))
+DEFAULT_RULES = Path(os.environ.get("SGA_RULES_DIR", "rules"))
 
 
 def load_events(paths: list[Path]) -> list[AgentEvent]:
@@ -53,7 +53,7 @@ def print_verdict(v: Verdict, show_all: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="sentinel-detect", description=__doc__.split("\n\n")[0])
+    ap = argparse.ArgumentParser(prog="sga-detect", description=__doc__.split("\n\n")[0])
     ap.add_argument("events", nargs="+", type=Path, help="AgentEvent JSONL files")
     ap.add_argument("--rules", type=Path, default=DEFAULT_RULES, help="rule dir or file (default: rules/)")
     ap.add_argument("--rule", action="append", default=[], help="only evaluate these rule ids")

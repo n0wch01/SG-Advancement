@@ -100,7 +100,7 @@ class Sensor:
     def __init__(self, home: SensorHome, transport: Transport | None = None) -> None:
         creds = home.load_credentials()
         if creds is None:
-            raise NotEnrolled(f"not enrolled: run `sentinel-sensor enroll` (looked in {home.root})")
+            raise NotEnrolled(f"not enrolled: run `sga-sensor enroll` (looked in {home.root})")
         self.home = home
         self.creds = creds
         self._key = load_public_key(creds.policy_public_key)

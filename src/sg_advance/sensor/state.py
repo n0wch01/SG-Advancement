@@ -1,4 +1,4 @@
-"""On-disk sensor state under ``SENTINEL_HOME`` (default ``~/.agent-sentinel``).
+"""On-disk sensor state under ``SGA_HOME`` (default ``~/.sg-advance``).
 
 credentials.json   device id/token, server URL, trusted policy key   (0600)
 policy.json        last signed policy bundle (verified again on every load)
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-DEFAULT_HOME = Path("~/.agent-sentinel")
+DEFAULT_HOME = Path("~/.sg-advance")
 
 
 class Credentials(BaseModel):
@@ -42,7 +42,7 @@ def write_private(path: Path, data: str) -> None:
 
 class SensorHome:
     def __init__(self, root: Path | None = None) -> None:
-        env = os.environ.get("SENTINEL_HOME")
+        env = os.environ.get("SGA_HOME")
         self.root = (root or (Path(env) if env else DEFAULT_HOME)).expanduser()
 
     @property

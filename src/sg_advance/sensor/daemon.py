@@ -1,4 +1,4 @@
-"""Local sensor daemon (``sentinel-sensor run``).
+"""Local sensor daemon (``sga-sensor run``).
 
 One long-running process per endpoint. It owns the rule engine, so stateful rules (sequence,
 rate, repeat) see every event from every adapter on this machine:
@@ -35,6 +35,8 @@ class DaemonStats:
     flushes: int = 0
     last_flush: FlushResult | None = None
     last_sync: SyncStatus | None = None
+    flush_errors: int = 0
+    last_flush_error: str | None = None
     adapter_errors: dict[str, str] = field(default_factory=dict)
 
 
@@ -113,7 +115,15 @@ class Daemon:
     async def _flush_loop(self) -> None:
         while True:
             await asyncio.sleep(self.flush_interval)
-            await self.flush_once()
+            try:
+                await self.flush_once()
+            except Exception as e:  # noqa: BLE001 - a bad flush must not take the sensor down
+                # Offline/auth are handled inside the spool; anything else (a corrupt row, an
+                # unexpected HTTP library error) is logged and retried on the next tick. Before this,
+                # one such error ended run() and with it the plugin socket and every adapter.
+                self.stats.flush_errors += 1
+                self.stats.last_flush_error = repr(e)
+                log.exception("flush failed; retrying in %.1fs", self.flush_interval)
 
     async def _run_adapter(self, adapter: Adapter) -> None:
         try:

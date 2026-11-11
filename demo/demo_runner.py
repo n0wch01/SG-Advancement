@@ -19,9 +19,9 @@ from typing import Any
 
 import yaml
 
-from agent_sentinel.detect import Engine, RuleSet, Verdict
-from agent_sentinel.schema import ResponseAction
-from agent_sentinel.shorthand import build_event
+from sg_advance.detect import Engine, RuleSet, Verdict
+from sg_advance.schema import ResponseAction
+from sg_advance.shorthand import build_event
 
 DEMO_DIR = Path(__file__).resolve().parent
 SCENARIO_DIR = DEMO_DIR / "scenarios"

@@ -3,56 +3,6 @@ revision = 5
 requires-python = ">=3.12"
 
 [[package]]
-name = "agent-sentinel"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "cryptography" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-]
-
-[package.optional-dependencies]
-openclaw = [
-    { name = "websockets" },
-]
-server = [
-    { name = "fastapi" },
-    { name = "sqlalchemy" },
-    { name = "uvicorn" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "agent-sentinel", extra = ["openclaw", "server"] },
-    { name = "httpx2" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cryptography", specifier = ">=43" },
-    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
-    { name = "pydantic", specifier = ">=2.9" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "sqlalchemy", marker = "extra == 'server'", specifier = ">=2.0" },
-    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.32" },
-    { name = "websockets", marker = "extra == 'openclaw'", specifier = ">=13" },
-]
-provides-extras = ["openclaw", "server"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "agent-sentinel", extras = ["server", "openclaw"] },
-    { name = "httpx2", specifier = ">=2.16" },
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-    { name = "ruff", specifier = ">=0.7" },
-]
-
-[[package]]
 name = "annotated-doc"
 version = "0.0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -602,6 +552,56 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b9/ab/d8e407669ffe5014429baf780c2df47e001968a6e4c17f615e2e7b13a9ba/ruff-0.17.4-py3-none-win32.whl", hash = "sha256:3971a78cba76298b284c8321e6d40d93045ed348bec5c369d85099efc97fb7cf", size = 9931993, upload-time = "2026-11-05T18:52:11.169Z" },
     { url = "https://files.pythonhosted.org/packages/bd/15/42af8a72d8946e3c9efd2bbf6641e462b6832783b0d043d63ef5b280ba7f/ruff-0.17.4-py3-none-win_amd64.whl", hash = "sha256:67c5a894fc054cf41f75f7afa24815de5a74329d97634126c2a1015740ff4e8c", size = 10292922, upload-time = "2026-11-05T18:52:13.436Z" },
     { url = "https://files.pythonhosted.org/packages/68/9e/f1dbffcfb8ff25dadbc21f87a8b73c3848abe4abada9d4b08ccef8bec40c/ruff-0.17.4-py3-none-win_arm64.whl", hash = "sha256:181ae38a9a8fb94925bf7d0794327b48d7fd7f4b50cfd84c0e999cc09ef8d131", size = 9889396, upload-time = "2026-11-05T18:52:15.549Z" },
+]
+
+[[package]]
+name = "sg-advance"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "cryptography" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.optional-dependencies]
+openclaw = [
+    { name = "websockets" },
+]
+server = [
+    { name = "fastapi" },
+    { name = "sqlalchemy" },
+    { name = "uvicorn" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx2" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+    { name = "sg-advance", extra = ["openclaw", "server"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = ">=43" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
+    { name = "pydantic", specifier = ">=2.9" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "sqlalchemy", marker = "extra == 'server'", specifier = ">=2.0" },
+    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.32" },
+    { name = "websockets", marker = "extra == 'openclaw'", specifier = ">=13" },
+]
+provides-extras = ["openclaw", "server"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx2", specifier = ">=2.16" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "ruff", specifier = ">=0.7" },
+    { name = "sg-advance", extras = ["server", "openclaw"] },
 ]
 
 [[package]]

@@ -9,7 +9,7 @@ Frames are JSON objects ``{"type": "req"|"res"|"event", ...}``. Handshake:
 3. server answers ``hello-ok``. After the device was approved once, ``hello-ok.auth.deviceToken`` is
    the credential for later connections.
 
-Identity: the sensor has its **own** device identity (``SENTINEL_HOME/openclaw-device.json``, 0600),
+Identity: the sensor has its **own** device identity (``SGA_HOME/openclaw-device.json``, 0600),
 paired like any third-party client (``openclaw devices approve <requestId>``). It never borrows the
 OpenClaw CLI's key: least privilege, visible in ``openclaw devices list``, revocable on its own.
 
@@ -265,7 +265,7 @@ class GatewayConnection:
             "maxProtocol": MAX_PROTOCOL,
             "client": {
                 "id": CLIENT_ID,
-                "version": "agent-sentinel",
+                "version": "sg-advance",
                 "platform": platform,
                 "mode": CLIENT_MODE,
             },
@@ -275,7 +275,7 @@ class GatewayConnection:
             "commands": [],
             "permissions": {},
             "locale": "en-US",
-            "userAgent": "agent-sentinel",
+            "userAgent": "sg-advance",
         }
         if auth:
             params["auth"] = auth

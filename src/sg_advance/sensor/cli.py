@@ -1,15 +1,15 @@
-"""sentinel-sensor: enroll this endpoint, sync policy, replay events, ship the spool.
+"""sga-sensor: enroll this endpoint, sync policy, replay events, ship the spool.
 
-    sentinel-sensor enroll --server http://127.0.0.1:8000 --token set_...      # key from server (A)
-    sentinel-sensor enroll --server ... --token ... --pin-key <base64>         # pinned key (B)
-    sentinel-sensor status
-    sentinel-sensor sync                       # pull policy + flush spool
-    sentinel-sensor replay examples/events/claude_code.jsonl
-    sentinel-sensor run --openclaw                  # daemon: watch the local OpenClaw gateway
+    sga-sensor enroll --server http://127.0.0.1:8000 --token set_...      # key from server (A)
+    sga-sensor enroll --server ... --token ... --pin-key <base64>         # pinned key (B)
+    sga-sensor status
+    sga-sensor sync                       # pull policy + flush spool
+    sga-sensor replay examples/events/claude_code.jsonl
+    sga-sensor run --openclaw                  # daemon: watch the local OpenClaw gateway
 
 The OpenClaw gateway token comes from OPENCLAW_GATEWAY_TOKEN (never from argv).
-The enrollment token can also come from SENTINEL_ENROLL_TOKEN (keeps it out of shell history
-and the process list). SENTINEL_HOME overrides the state directory (default ~/.agent-sentinel).
+The enrollment token can also come from SGA_ENROLL_TOKEN (keeps it out of shell history
+and the process list). SGA_HOME overrides the state directory (default ~/.sg-advance).
 """
 
 from __future__ import annotations
@@ -39,9 +39,9 @@ def _print_flush(r: FlushResult) -> None:
 
 
 def _cmd_enroll(home: SensorHome, args: argparse.Namespace) -> int:
-    token = args.token or os.environ.get("SENTINEL_ENROLL_TOKEN")
+    token = args.token or os.environ.get("SGA_ENROLL_TOKEN")
     if not token:
-        print("enrollment token required: --token or SENTINEL_ENROLL_TOKEN", file=sys.stderr)
+        print("enrollment token required: --token or SGA_ENROLL_TOKEN", file=sys.stderr)
         return 2
     creds = enroll(home, args.server, token, device_id=args.device_id, pinned_key=args.pin_key)
     mode = "pinned at install" if creds.key_pinned else "trusted from enroll response"
@@ -99,7 +99,7 @@ def _cmd_replay(home: SensorHome, args: argparse.Namespace) -> int:
         print_verdict(res.verdict, args.all)
     print(f"\nverdicts: {dict(actions)}")
     if args.no_flush:
-        print("not flushed (--no-flush); run `sentinel-sensor sync` later")
+        print("not flushed (--no-flush); run `sga-sensor sync` later")
         return 0
     r = sensor.flush()
     _print_flush(r)
@@ -133,7 +133,7 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
             import websockets  # noqa: F401  # optional dependency
         except ImportError:
             print(
-                "--openclaw needs the websockets package: install agent-sentinel[openclaw]", file=sys.stderr
+                "--openclaw needs the websockets package: install sg-advance[openclaw]", file=sys.stderr
             )
             return 2
         from .adapters.openclaw import OpenClawAdapter
@@ -160,7 +160,7 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
     if not args.no_local_api:
         from .plugin_api import LocalApiServer
 
-        sock = args.socket or home.root / "sentinel.sock"
+        sock = args.socket or home.root / "sga.sock"
         if len(str(sock).encode()) > 100:  # AF_UNIX path limit (104 on macOS, 108 on Linux)
             print(f"socket path too long for a unix socket: {sock} (use --socket)", file=sys.stderr)
             return 2
@@ -206,7 +206,7 @@ def _cmd_evaluate(home: SensorHome, args: argparse.Namespace) -> int:
         print(json.dumps({"ok": False, "error": "no valid cached policy"}))
         return 3
     ctx = AdapterContext(sensor, user_id=args.user, hostname=socket.gethostname())
-    print(json.dumps(judge(ctx, req, labels={"sentinel_verdict": "degraded"})))
+    print(json.dumps(judge(ctx, req, labels={"sga_verdict": "degraded"})))
     return 0
 
 
@@ -230,13 +230,13 @@ def _cmd_service(home: SensorHome, args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="sentinel-sensor", description=__doc__.split("\n\n")[0])
-    ap.add_argument("--home", type=Path, help="state dir (default: $SENTINEL_HOME or ~/.agent-sentinel)")
+    ap = argparse.ArgumentParser(prog="sga-sensor", description=__doc__.split("\n\n")[0])
+    ap.add_argument("--home", type=Path, help="state dir (default: $SGA_HOME or ~/.sg-advance)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("enroll", help="register this endpoint with the control plane")
     p.add_argument("--server", required=True)
-    p.add_argument("--token", help="enrollment token (or SENTINEL_ENROLL_TOKEN)")
+    p.add_argument("--token", help="enrollment token (or SGA_ENROLL_TOKEN)")
     p.add_argument("--device-id")
     p.add_argument("--pin-key", help="base64 policy public key to require (option B)")
     p.set_defaults(fn=_cmd_enroll)
@@ -261,12 +261,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--capture", type=Path, metavar="JSONL", help="append raw gateway frames (masked) here")
     p.add_argument("--replay", nargs="+", type=Path, metavar="JSONL", help="also replay event files (demo)")
     p.add_argument("--replay-delay", type=float, default=0.0, help="seconds between replayed events")
-    p.add_argument("--user", default=os.environ.get("SENTINEL_USER") or getpass.getuser(), help="employee id")
+    p.add_argument("--user", default=os.environ.get("SGA_USER") or getpass.getuser(), help="employee id")
     p.add_argument("--sync-interval", type=float, default=60.0)
     p.add_argument("--flush-interval", type=float, default=5.0)
     p.add_argument("--duration", type=float, default=0.0, help="stop after N seconds (0 = run until Ctrl+C)")
     p.add_argument("--log-level", default="info")
-    p.add_argument("--socket", type=Path, help="local verdict API socket (default: <home>/sentinel.sock)")
+    p.add_argument("--socket", type=Path, help="local verdict API socket (default: <home>/sga.sock)")
     p.add_argument("--no-local-api", action="store_true", help="don't serve verdicts to gateway plugins")
     p.add_argument(
         "--openclaw-token-file",
@@ -280,12 +280,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--openclaw", nargs="?", const="ws://127.0.0.1:18789", metavar="URL", help="watch an OpenClaw gateway"
     )
-    p.add_argument("--user", default=os.environ.get("SENTINEL_USER") or getpass.getuser(), help="employee id")
+    p.add_argument("--user", default=os.environ.get("SGA_USER") or getpass.getuser(), help="employee id")
     p.add_argument("--dry-run", action="store_true", help="print the service definition, change nothing")
     p.set_defaults(fn=_cmd_service)
 
     p = sub.add_parser("evaluate", help="judge one plugin request from stdin with the cached policy")
-    p.add_argument("--user", default=os.environ.get("SENTINEL_USER") or getpass.getuser(), help="employee id")
+    p.add_argument("--user", default=os.environ.get("SGA_USER") or getpass.getuser(), help="employee id")
     p.set_defaults(fn=_cmd_evaluate)
 
     args = ap.parse_args(argv)

@@ -2,12 +2,12 @@
 
 The OpenClaw gateway plugin calls this from ``before_tool_call`` *before* a tool runs::
 
-    plugin ──JSON line──▶ unix socket (SENTINEL_HOME/sentinel.sock, 0600) ──▶ daemon engine
+    plugin ──JSON line──▶ unix socket (SGA_HOME/sga.sock, 0600) ──▶ daemon engine
            ◀──verdict────
 
 Protocol: one JSON object per line, one response line per request.
 
-``{"op": "hello", "plugin": "agent-sentinel", "version": ...}``
+``{"op": "hello", "plugin": "sg-advance", "version": ...}``
     → ``{"ok": true}``. Marks the plugin as present (enables bypass detection).
 ``{"op": "tool_call", "agentId", "sessionKey", "sessionId", "runId", "toolCallId", "toolName",
    "toolKind", "params", "requester": {...}}``
@@ -15,8 +15,8 @@ Protocol: one JSON object per line, one response line per request.
 
 The daemon judges with its stateful engine (sequence/rate rules see every adapter's events) and
 records the event with the enforcement the plugin is about to apply. When the daemon is down the
-plugin runs ``sentinel-sensor evaluate`` instead: same request on stdin, stateless judgement from
-the signed policy cache, recorded with ``labels.sentinel_verdict = "degraded"``.
+plugin runs ``sga-sensor evaluate`` instead: same request on stdin, stateless judgement from
+the signed policy cache, recorded with ``labels.sga_verdict = "degraded"``.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from .adapters.base import AdapterContext
 
 log = logging.getLogger(__name__)
 
-SOCKET_NAME = "sentinel.sock"
+SOCKET_NAME = "sga.sock"
 _BLOCKING = {ResponseAction.BLOCK, ResponseAction.ABORT_SESSION, ResponseAction.QUARANTINE}
 
 
@@ -54,7 +54,7 @@ def plugin_event(
         provider = {"kind": "plugin", "plugin_id": tool_plugins[tool]}
     else:
         provider = {"kind": "builtin"} if tool_plugins else {"kind": "unknown"}
-    labels = {"sentinel_source": "openclaw_plugin"}
+    labels = {"sga_source": "openclaw_plugin"}
     requester = req.get("requester") if isinstance(req.get("requester"), dict) else {}
     for key in ("channel", "senderId"):  # who asked for this run (M5b attributes users from it)
         if isinstance(requester.get(key), str):
@@ -94,12 +94,12 @@ def plugin_response(verdict: Verdict) -> tuple[dict[str, Any], Enforcement | Non
     base = {"ok": True, "action": action.value, "rules": rules}
     if action in _BLOCKING:
         detail = "pre-exec: openclaw plugin blocked the tool call"
-        return base | {"decision": "block", "reason": f"Agent Sentinel: {reason}"}, Enforcement(
+        return base | {"decision": "block", "reason": f"SG-Advance: {reason}"}, Enforcement(
             action=action, enforced=True, enforcer=sensor, detail=detail
         )
     if action is ResponseAction.REQUIRE_APPROVAL:
         detail = "pre-exec: user approval requested through OpenClaw"
-        return base | {"decision": "approve", "title": "Agent Sentinel", "reason": reason}, Enforcement(
+        return base | {"decision": "approve", "title": "SG-Advance", "reason": reason}, Enforcement(
             action=action, enforced=True, enforcer=sensor, detail=detail
         )
     return base | {"decision": "allow"}, None

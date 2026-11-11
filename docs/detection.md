@@ -1,6 +1,6 @@
 # 로컬 탐지 엔진과 룰 튜닝
 
-엔드포인트 센서 안에서 도는 탐지 엔진([src/agent_sentinel/detect/](../src/agent_sentinel/detect/))과
+엔드포인트 센서 안에서 도는 탐지 엔진([src/sg_advance/detect/](../src/sg_advance/detect/))과
 선언형 룰([rules/](../rules/))의 형식, 그리고 오탐/미탐을 고치는 절차를 정리한다.
 
 ## 동작 방식
@@ -76,10 +76,10 @@ YAML 인라인 리스트 안에 `[]`가 들어간 경로를 쓸 때는 따옴표
 ### 1. 무엇이 왜 걸렸는지 보기
 
 ```bash
-uv run sentinel-detect examples/events/*.jsonl            # hit가 있는 이벤트만 표시
-uv run sentinel-detect my.jsonl --all                     # 모든 이벤트 표시
-uv run sentinel-detect my.jsonl --rule vigil-ipv4         # 특정 룰만 평가
-uv run sentinel-detect my.jsonl --json > findings.jsonl   # Finding JSON
+uv run sga-detect examples/events/*.jsonl            # hit가 있는 이벤트만 표시
+uv run sga-detect my.jsonl --all                     # 모든 이벤트 표시
+uv run sga-detect my.jsonl --rule vigil-ipv4         # 특정 룰만 평가
+uv run sga-detect my.jsonl --json > findings.jsonl   # Finding JSON
 ```
 
 출력 예:

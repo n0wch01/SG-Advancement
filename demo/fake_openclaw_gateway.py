@@ -7,7 +7,7 @@ attack scenario as real-shaped frames. Prints every sessions.abort it receives.
     uv run python demo/fake_openclaw_gateway.py S1          # malicious plugin
     uv run python demo/fake_openclaw_gateway.py S2          # README injection → .env exfil
     uv run python demo/fake_openclaw_gateway.py EXEC        # shell approvals (sensor needs --gate-exec)
-    OPENCLAW_GATEWAY_TOKEN=demo uv run sentinel-sensor run --openclaw ws://127.0.0.1:18789
+    OPENCLAW_GATEWAY_TOKEN=demo uv run sga-sensor run --openclaw ws://127.0.0.1:18789
 """
 
 from __future__ import annotations

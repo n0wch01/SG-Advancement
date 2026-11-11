@@ -1,9 +1,9 @@
 {
-  "name": "agent-sentinel-openclaw",
+  "name": "sg-advance-openclaw",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Agent Sentinel pre-execution check for OpenClaw tool calls",
+  "description": "SG-Advance pre-execution check for OpenClaw tool calls",
   "openclaw": { "extensions": ["./index.ts"] },
   "scripts": { "test": "node --test policy.test.ts" }
 }

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from agent_sentinel.schema import (
+from sg_advance.schema import (
     AgentEvent,
     AgentType,
     EventKind,

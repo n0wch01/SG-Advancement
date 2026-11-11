@@ -13,12 +13,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from agent_sentinel.detect import Engine
-from agent_sentinel.detect.cli import load_events
-from agent_sentinel.policy import PolicyBundle
-from agent_sentinel.redact import redact_event
-from agent_sentinel.server import Settings, create_app
-from agent_sentinel.server.db import EnrollmentToken, EventRow, utcnow
+from sg_advance.detect import Engine
+from sg_advance.detect.cli import load_events
+from sg_advance.policy import PolicyBundle
+from sg_advance.redact import redact_event
+from sg_advance.server import Settings, create_app
+from sg_advance.server.db import EnrollmentToken, EventRow, utcnow
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples" / "events"

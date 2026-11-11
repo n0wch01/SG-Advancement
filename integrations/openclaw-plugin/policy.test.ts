@@ -26,11 +26,11 @@ test("request carries what the daemon needs", () => {
 
 test("daemon block -> block", async () => {
   const { result, source } = await decide(event, ctx, s, {
-    askDaemon: ok({ decision: "block", reason: "Agent Sentinel: 파괴적 셸 명령" }),
+    askDaemon: ok({ decision: "block", reason: "SG-Advance: 파괴적 셸 명령" }),
     askCli: down,
   });
   assert.equal(source, "daemon");
-  assert.deepEqual(result, { block: true, blockReason: "Agent Sentinel: 파괴적 셸 명령" });
+  assert.deepEqual(result, { block: true, blockReason: "SG-Advance: 파괴적 셸 명령" });
 });
 
 test("daemon approve -> requireApproval, no permanent allow", async () => {
@@ -64,7 +64,7 @@ test("everything down -> read-only passes, others ask the user", async () => {
   assert.equal(read.source, "fallback");
   assert.equal(read.result, undefined);
   const exec = await decide(event, ctx, s, deps);
-  assert.equal((exec.result as any).requireApproval.title, "Agent Sentinel unavailable");
+  assert.equal((exec.result as any).requireApproval.title, "SG-Advance unavailable");
 });
 
 test("daemon answering ok:false is treated as unavailable", async () => {

@@ -1,6 +1,6 @@
 # 와이어 스키마 v1
 
-소스 오브 트루스는 Python 모델([src/agent_sentinel/schema/](../src/agent_sentinel/schema/))이며,
+소스 오브 트루스는 Python 모델([src/sg_advance/schema/](../src/sg_advance/schema/))이며,
 [schemas/](../schemas/)의 JSON Schema는 `scripts/export_schema.py`로 생성한다. 테스트가 둘의 불일치를 잡는다.
 
 ## AgentEvent
@@ -29,8 +29,17 @@ AgentEvent
 | `llm.call` | LLM API 호출 | provider, model, tokens, cost_usd |
 | `net.egress` | 외부 네트워크 요청 | method, url, host, bytes_out, destination |
 | `inventory.snapshot` | 사용 가능한 툴·플러그인·MCP 서버 목록 | tools, plugins, mcp_servers |
+| `sensor.health` | 통제 장치 자체의 상태 (툴 호출이 아님) | component(`openclaw_plugin` 등), status(`up \| lost \| recovered`), detail, last_seen |
 
 `provider.kind`는 툴의 출처를 나타낸다: `builtin | plugin | mcp | function | unknown`.
+
+센서가 붙이는 예약 라벨(룰의 `when`에서 `labels.<key>`로 쓴다):
+
+| 라벨 | 값 | 뜻 |
+|---|---|---|
+| `sga_source` | `openclaw_plugin` | 게이트웨이 플러그인이 실행 전에 보낸 판정 요청 |
+| `sga_plugin` | `missing` | 플러그인이 있어야 하는 장비에서 플러그인 판정 없이 실행된 툴 → `openclaw-plugin-bypass` |
+| `sga_verdict` | `degraded` | 데몬이 없어 `sga-sensor evaluate`(캐시 정책)로 판정한 결과 |
 
 ### 에이전트별 원시 이벤트 → kind 매핑 (초안)
 
@@ -40,6 +49,8 @@ AgentEvent
 | OpenClaw `session.tool` (call / result) | `tool.call` / `tool.result` |
 | OpenClaw `tools.effective` / `tools.catalog` RPC | `inventory.snapshot` |
 | OpenClaw `agent` lifecycle start / end | `session.start` / `session.end` |
+| OpenClaw 플러그인 `before_tool_call` (센서 `openclaw_plugin`) | `tool.call` (실행 전, 판정과 함께) |
+| OpenClaw 플러그인 인사(60초) 끊김·재개 | `sensor.health` lost / recovered |
 | Claude Code `SessionStart` / `SessionEnd` hook | `session.start` / `session.end` |
 | Claude Code `UserPromptSubmit` hook | `prompt.user` |
 | Claude Code `PreToolUse` / `PostToolUse` hook | `tool.call` / `tool.result` |

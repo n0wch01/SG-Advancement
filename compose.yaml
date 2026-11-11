@@ -1,6 +1,6 @@
 # Demo topology (docs/architecture.md). M3: control plane only.
 # Endpoints (M4~) join corp-net; attacker services (M8~) live on internet-sim.
-name: agent-sentinel
+name: sg-advance
 
 services:
   control-plane:
@@ -8,11 +8,11 @@ services:
       context: .
       dockerfile: deploy/control-plane.Dockerfile
     environment:
-      SENTINEL_ADMIN_TOKEN: ${SENTINEL_ADMIN_TOKEN:?set SENTINEL_ADMIN_TOKEN in .env}
+      SGA_ADMIN_TOKEN: ${SGA_ADMIN_TOKEN:?set SGA_ADMIN_TOKEN in .env}
     volumes:
       - control-plane-data:/data
     ports:
-      - "127.0.0.1:${SENTINEL_PORT:-8000}:8000"
+      - "127.0.0.1:${SGA_PORT:-8000}:8000"
     networks: [corp-net]
     restart: unless-stopped
 

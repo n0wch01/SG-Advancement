@@ -1,14 +1,14 @@
 {
-  "id": "agent-sentinel",
-  "name": "Agent Sentinel",
+  "id": "sg-advance",
+  "name": "SG-Advance",
   "activation": { "onStartup": true },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "sensorHome": { "type": "string", "description": "Sensor state dir (default $SENTINEL_HOME or ~/.agent-sentinel)" },
-      "socketPath": { "type": "string", "description": "Daemon socket (default <sensorHome>/sentinel.sock)" },
-      "sensorCli": { "type": "string", "description": "Path to sentinel-sensor for the degraded path" },
+      "sensorHome": { "type": "string", "description": "Sensor state dir (default $SGA_HOME or ~/.sg-advance)" },
+      "socketPath": { "type": "string", "description": "Daemon socket (default <sensorHome>/sga.sock)" },
+      "sensorCli": { "type": "string", "description": "Path to sga-sensor for the degraded path" },
       "readOnlyTools": { "type": "array", "items": { "type": "string" } },
       "daemonTimeoutMs": { "type": "integer", "minimum": 100 },
       "cliTimeoutMs": { "type": "integer", "minimum": 500 },

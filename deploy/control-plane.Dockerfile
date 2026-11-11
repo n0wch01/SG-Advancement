@@ -11,10 +11,10 @@ COPY src ./src
 COPY rules ./rules
 RUN uv sync --frozen --no-dev --extra server
 
-ENV SENTINEL_DB_URL=sqlite:////data/sentinel.db SENTINEL_RULES_DIR=/app/rules \
-    SENTINEL_SIGNING_KEY=/data/policy_signing_key.pem
+ENV SGA_DB_URL=sqlite:////data/sga.db SGA_RULES_DIR=/app/rules \
+    SGA_SIGNING_KEY=/data/policy_signing_key.pem
 VOLUME /data
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"
-CMD ["sentinel-server", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sga-server", "--host", "0.0.0.0", "--port", "8000"]

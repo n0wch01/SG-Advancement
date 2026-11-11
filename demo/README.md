@@ -39,18 +39,18 @@ steps:
 
 ```bash
 # 터미널 1: 중앙 서버
-SENTINEL_ADMIN_TOKEN=demo-admin uv run sentinel-server
+SGA_ADMIN_TOKEN=demo-admin uv run sga-server
 
 # 터미널 2: 센서 등록
-export SENTINEL_ENROLL_TOKEN=$(curl -s -X POST http://127.0.0.1:8000/v1/admin/enrollment-tokens \
+export SGA_ENROLL_TOKEN=$(curl -s -X POST http://127.0.0.1:8000/v1/admin/enrollment-tokens \
   -H "Authorization: Bearer demo-admin" -H 'content-type: application/json' -d '{}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
-uv run sentinel-sensor --home /tmp/alice enroll --server http://127.0.0.1:8000 --device-id dev-alice
+uv run sga-sensor --home /tmp/alice enroll --server http://127.0.0.1:8000 --device-id dev-alice
 
 # 터미널 3: 가짜 게이트웨이 (S1 악성 플러그인 / S2 README 인젝션)
 uv run python demo/fake_openclaw_gateway.py S2
 
 # 터미널 2: 센서 데몬
-OPENCLAW_GATEWAY_TOKEN=demo uv run sentinel-sensor --home /tmp/alice run --openclaw --user alice
+OPENCLAW_GATEWAY_TOKEN=demo uv run sga-sensor --home /tmp/alice run --openclaw --user alice
 ```
 
 터미널 3에 `✋ sessions.abort {'key': 'agent:main:main', 'runId': 'r2'}`가 찍히고,

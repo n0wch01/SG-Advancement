@@ -1,4 +1,4 @@
-"""sentinel-sensor CLI over real HTTP (uvicorn on a free port) — exercises the urllib transport."""
+"""sga-sensor CLI over real HTTP (uvicorn on a free port) — exercises the urllib transport."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from agent_sentinel.sensor.cli import main
-from agent_sentinel.server import Settings, create_app
+from sg_advance.sensor.cli import main
+from sg_advance.server import Settings, create_app
 
 ROOT = Path(__file__).resolve().parents[1]
 ADMIN = {"Authorization": "Bearer admin-test"}
@@ -62,7 +62,7 @@ def test_cli_enroll_replay_status_sync(
     url, admin = live
     home = ["--home", str(tmp_path / "home")]
     token = admin.post("/v1/admin/enrollment-tokens", json={}, headers=ADMIN).json()["token"]
-    monkeypatch.setenv("SENTINEL_ENROLL_TOKEN", token)
+    monkeypatch.setenv("SGA_ENROLL_TOKEN", token)
 
     assert main([*home, "enroll", "--server", url, "--device-id", "dev-bob"]) == 0
     assert "enrolled as dev-bob" in capsys.readouterr().out

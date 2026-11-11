@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from agent_sentinel.sensor import Sensor, SensorHome, enroll
-from agent_sentinel.sensor.client import HttpResponse
-from agent_sentinel.server import Settings, create_app
+from sg_advance.sensor import Sensor, SensorHome, enroll
+from sg_advance.sensor.client import HttpResponse
+from sg_advance.server import Settings, create_app
 
 ROOT = Path(__file__).resolve().parents[1]
 CP_URL = "http://testserver"

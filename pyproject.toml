@@ -1,5 +1,5 @@
 [project]
-name = "agent-sentinel"
+name = "sg-advance"
 version = "0.1.0"
 description = "Central policy & threat control plane for heterogeneous AI agents (OpenClaw, Claude Code, MCP, LangGraph, Gemini CLI, Codex CLI)"
 readme = "README.md"
@@ -23,13 +23,13 @@ server = [
 ]
 
 [project.scripts]
-sentinel-detect = "agent_sentinel.detect.cli:main"
-sentinel-server = "agent_sentinel.server.cli:main"
-sentinel-sensor = "agent_sentinel.sensor.cli:main"
+sga-detect = "sg_advance.detect.cli:main"
+sga-server = "sg_advance.server.cli:main"
+sga-sensor = "sg_advance.sensor.cli:main"
 
 [dependency-groups]
 dev = [
-    "agent-sentinel[server,openclaw]",
+    "sg-advance[server,openclaw]",
     "httpx2>=2.16",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
@@ -41,7 +41,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent_sentinel"]
+packages = ["src/sg_advance"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "demo"]  # demo/ is optional; missing paths are skipped

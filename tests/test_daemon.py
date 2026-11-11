@@ -7,10 +7,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from agent_sentinel.sensor import Sensor, SensorHome, enroll
-from agent_sentinel.sensor.adapters import AdapterContext, ReplayAdapter
-from agent_sentinel.sensor.daemon import Daemon
 from conftest import CP_ADMIN, CP_URL, CpTransport
+from sg_advance.sensor import Sensor, SensorHome, enroll
+from sg_advance.sensor.adapters import AdapterContext, ReplayAdapter
+from sg_advance.sensor.daemon import Daemon
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples" / "events"
@@ -20,12 +20,14 @@ def events_on_server(cp: TestClient) -> int:
     return len(cp.get("/v1/admin/events", params={"limit": 1000}, headers=CP_ADMIN).json())
 
 
-async def until(cond, timeout: float = 5.0) -> None:
+async def until(cond, timeout: float = 15.0, describe=None) -> None:
+    # Generous upper bound: CI runners are ~2x slower than a laptop and the first test of the
+    # session also pays cold imports. A passing test returns as soon as the condition holds.
     for _ in range(int(timeout / 0.02)):
         if cond():
             return
         await asyncio.sleep(0.02)
-    raise AssertionError("condition not met in time")
+    raise AssertionError("condition not met in time" + (f": {describe()}" if describe else ""))
 
 
 async def test_daemon_ships_replayed_events_periodically(enrolled: Sensor, cp: TestClient) -> None:
@@ -37,7 +39,39 @@ async def test_daemon_ships_replayed_events_periodically(enrolled: Sensor, cp: T
         # flush runs in a worker thread and bumps the counter after it returns, so the server
         # can already hold the events while the counter is still 0: wait for both.
         n = len(list(replay.events()))
+        await until(
+            lambda: events_on_server(cp) == n and daemon.stats.flushes >= 1,
+            describe=lambda: (
+                f"server={events_on_server(cp)} expected={n} daemon_done={task.done()} stats={daemon.stats}"
+            ),
+        )
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_flush_error_does_not_stop_the_daemon(enrolled: Sensor, cp: TestClient, monkeypatch) -> None:
+    """An unexpected error during one flush is logged and the next tick tries again."""
+    real = enrolled.flush
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("corrupt row")
+        return real()
+
+    monkeypatch.setattr(enrolled, "flush", flaky)
+    replay = ReplayAdapter([EXAMPLES / "openclaw.jsonl"])
+    daemon = Daemon(enrolled, [replay], AdapterContext(enrolled, "alice"), flush_interval=0.05)
+    task = asyncio.create_task(daemon.run())
+    try:
+        await asyncio.wait_for(replay.done.wait(), 5)
+        n = len(list(replay.events()))
         await until(lambda: events_on_server(cp) == n and daemon.stats.flushes >= 1)
+        assert not task.done()
+        assert daemon.stats.flush_errors == 1
+        assert "corrupt row" in (daemon.stats.last_flush_error or "")
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

@@ -16,12 +16,12 @@ import pytest
 from fastapi.testclient import TestClient
 from websockets.asyncio.server import ServerConnection, serve
 
-from agent_sentinel.schema import ResponseAction
-from agent_sentinel.sensor import Sensor
-from agent_sentinel.sensor.adapters import AdapterContext
-from agent_sentinel.sensor.adapters.openclaw import OpenClawAdapter, OpenClawMapper
-from agent_sentinel.sensor.adapters.openclaw_gateway import DeviceIdentity
 from conftest import CP_ADMIN
+from sg_advance.schema import ResponseAction
+from sg_advance.sensor import Sensor
+from sg_advance.sensor.adapters import AdapterContext
+from sg_advance.sensor.adapters.openclaw import OpenClawAdapter, OpenClawMapper
+from sg_advance.sensor.adapters.openclaw_gateway import DeviceIdentity
 
 KEY = "agent:main:main"
 CATALOG = {
@@ -496,7 +496,7 @@ async def test_bad_token_keeps_retrying_without_crashing(gateway, enrolled: Sens
 
 def test_verdict_actions_cover_openclaw_enforcement() -> None:
     """Guard: every action is handled deliberately by the adapter."""
-    from agent_sentinel.sensor.adapters import openclaw
+    from sg_advance.sensor.adapters import openclaw
 
     handled = openclaw._ABORTING | {
         ResponseAction.ALLOW,
@@ -597,7 +597,7 @@ async def test_capture_writes_masked_frames(gateway, enrolled: Sensor, tmp_path)
 
 
 # ── real gateway capture (OpenClaw 2026.4.15) ───────────────────────────────
-# Recorded with `sentinel-sensor run --openclaw --capture` against a real gateway: one agent
+# Recorded with `sga-sensor run --openclaw --capture` against a real gateway: one agent
 # turn that failed at the LLM (lifecycle start/error + user/assistant messages) and two real
 # exec approval requests (one denied by the sensor, one left to expire). Host-identifying
 # frames (presence, health) and session snapshots were stripped.

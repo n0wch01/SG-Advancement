@@ -428,7 +428,7 @@ class OpenClawAdapter:
         self.url = url
         self.token = token if token is not None else os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
         self.enforce = enforce
-        # Default: SENTINEL_HOME/openclaw-device.json, resolved in run() from the sensor's home.
+        # Default: SGA_HOME/openclaw-device.json, resolved in run() from the sensor's home.
         self.identity_path = identity_path
         self._pairing_hint_shown: str | None = None
         self.inventory_interval = inventory_interval
@@ -588,7 +588,7 @@ class OpenClawAdapter:
             if ctx.plugins.active and not call_id.startswith("approval:"):
                 # The plugin is running but never saw this call: it was disabled, failed, or the
                 # call took a path it doesn't cover. Rules decide how loud this is.
-                event = event.model_copy(update={"labels": event.labels | {"sentinel_plugin": "missing"}})
+                event = event.model_copy(update={"labels": event.labels | {"sga_plugin": "missing"}})
         result = ctx.evaluate(event)
         ctx.record(result, await self._enforce(conn, event, result.verdict.action))
 

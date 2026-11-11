@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .detect.rules import Rule, RuleSet
 
 # Domain separation: a signature over a policy version can't be replayed as anything else.
-_SIGNING_CONTEXT = b"agent-sentinel/policy-bundle/v1:"
+_SIGNING_CONTEXT = b"sg-advance/policy-bundle/v1:"
 
 
 class PolicyVerificationError(ValueError):

@@ -15,10 +15,10 @@ from typing import Any
 
 import pytest
 
-from agent_sentinel.sensor import Sensor
-from agent_sentinel.sensor.adapters import AdapterContext
-from agent_sentinel.sensor.cli import main as sensor_main
-from agent_sentinel.sensor.plugin_api import LocalApiServer
+from sg_advance.sensor import Sensor
+from sg_advance.sensor.adapters import AdapterContext
+from sg_advance.sensor.cli import main as sensor_main
+from sg_advance.sensor.plugin_api import LocalApiServer
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = ROOT / "integrations" / "openclaw-plugin"
@@ -74,7 +74,7 @@ async def test_verdicts_map_to_plugin_decisions(api, enrolled: Sensor) -> None:
     server, path = api
     hello, block, approve, allow = await ask(
         path,
-        {"op": "hello", "plugin": "agent-sentinel", "version": "0.1.0"},
+        {"op": "hello", "plugin": "sg-advance", "version": "0.1.0"},
         req("c1", command="rm -rf ~/projects"),
         req("c2", command="psql $DB -c 'DROP TABLE users;'"),
         req("c3", tool="read", path="README.md"),
@@ -111,7 +111,7 @@ async def test_bad_requests_are_answered_not_crashed(api) -> None:
 async def test_ws_adapter_skips_plugin_judged_calls_and_flags_bypass(enrolled: Sensor) -> None:
     from websockets.asyncio.server import serve
 
-    from agent_sentinel.sensor.adapters.openclaw import OpenClawAdapter
+    from sg_advance.sensor.adapters.openclaw import OpenClawAdapter
     from test_openclaw_adapter import FakeGateway, tool, until
 
     gw = FakeGateway()
@@ -135,7 +135,7 @@ async def test_ws_adapter_skips_plugin_judged_calls_and_flags_bypass(enrolled: S
             task.cancel()
     calls = [e for e in spooled(enrolled, "event") if e["payload"]["kind"] == "tool.call"]
     assert [e["payload"]["call_id"] for e in calls] == ["c2"]  # c1 was the plugin's, not judged twice
-    assert calls[0]["labels"]["sentinel_plugin"] == "missing"
+    assert calls[0]["labels"]["sga_plugin"] == "missing"
 
 
 def test_evaluate_cli_degraded_path(enrolled: Sensor, monkeypatch, capsys) -> None:
@@ -144,7 +144,7 @@ def test_evaluate_cli_degraded_path(enrolled: Sensor, monkeypatch, capsys) -> No
     out = json.loads(capsys.readouterr().out)
     assert out["decision"] == "block"
     ev = next(e for e in spooled(enrolled, "event") if e["payload"]["call_id"] == "c9")
-    assert ev["labels"]["sentinel_verdict"] == "degraded"
+    assert ev["labels"]["sga_verdict"] == "degraded"
 
 
 def test_evaluate_cli_without_cache_says_so(tmp_path, monkeypatch, capsys) -> None:
@@ -197,7 +197,7 @@ async def test_plugin_judgement_arriving_after_the_tool_start_is_not_a_bypass(en
     The adapter must wait briefly instead of judging the call itself and flagging a bypass."""
     from websockets.asyncio.server import serve
 
-    from agent_sentinel.sensor.adapters.openclaw import OpenClawAdapter
+    from sg_advance.sensor.adapters.openclaw import OpenClawAdapter
     from test_openclaw_adapter import FakeGateway, tool
 
     gw = FakeGateway()
@@ -224,7 +224,7 @@ async def test_plugin_judgement_arriving_after_the_tool_start_is_not_a_bypass(en
 
 
 def test_registry_expectation_is_sticky_and_persisted(tmp_path) -> None:
-    from agent_sentinel.sensor.registry import PluginRegistry
+    from sg_advance.sensor.registry import PluginRegistry
 
     state = tmp_path / "plugin-state.json"
     r = PluginRegistry(lost_after=150, state_path=state)
@@ -243,8 +243,8 @@ def test_registry_expectation_is_sticky_and_persisted(tmp_path) -> None:
 
 
 def test_daemon_reports_lost_heartbeat_as_finding(enrolled: Sensor) -> None:
-    from agent_sentinel.sensor.daemon import Daemon
-    from agent_sentinel.sensor.registry import PluginRegistry
+    from sg_advance.sensor.daemon import Daemon
+    from sg_advance.sensor.registry import PluginRegistry
 
     ctx = AdapterContext(enrolled, "alice", plugins=PluginRegistry(lost_after=150))
     ctx.plugins.heartbeat(now=1_000)
@@ -261,7 +261,7 @@ async def test_hello_after_loss_reports_recovery(api, enrolled: Sensor) -> None:
     server, path = api
     server.ctx.plugins.heartbeat()
     server.ctx.plugins.lost_reported = True  # an outage was reported earlier
-    await ask(path, {"op": "hello", "plugin": "agent-sentinel", "version": "0.1.0"})
+    await ask(path, {"op": "hello", "plugin": "sg-advance", "version": "0.1.0"})
     statuses = [
         e["payload"]["status"] for e in spooled(enrolled, "event") if e["payload"]["kind"] == "sensor.health"
     ]
@@ -273,8 +273,8 @@ async def test_hello_after_loss_reports_recovery(api, enrolled: Sensor) -> None:
 
 
 def test_gateway_token_file_must_be_private(tmp_path, monkeypatch) -> None:
-    from agent_sentinel.sensor import SensorError, SensorHome
-    from agent_sentinel.sensor.cli import _openclaw_token
+    from sg_advance.sensor import SensorError, SensorHome
+    from sg_advance.sensor.cli import _openclaw_token
 
     monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
     home = SensorHome(tmp_path)
@@ -293,15 +293,15 @@ def test_gateway_token_file_must_be_private(tmp_path, monkeypatch) -> None:
 def test_service_definition_keeps_secrets_out(tmp_path) -> None:
     import plistlib
 
-    from agent_sentinel.sensor.service import launchd_plist, systemd_unit
+    from sg_advance.sensor.service import launchd_plist, systemd_unit
 
     doc = plistlib.loads(
         launchd_plist(
-            tmp_path, ["--user", "alice", "--openclaw", "ws://127.0.0.1:18789"], exe="/v/bin/sentinel-sensor"
+            tmp_path, ["--user", "alice", "--openclaw", "ws://127.0.0.1:18789"], exe="/v/bin/sga-sensor"
         )
     )
     assert doc["ProgramArguments"] == [
-        "/v/bin/sentinel-sensor",
+        "/v/bin/sga-sensor",
         "--home",
         str(tmp_path),
         "run",
@@ -312,4 +312,4 @@ def test_service_definition_keeps_secrets_out(tmp_path) -> None:
     ]
     assert doc["KeepAlive"] is True and doc["RunAtLoad"] is True
     assert "EnvironmentVariables" not in doc  # gateway token comes from <home>/openclaw-token
-    assert "Restart=always" in systemd_unit(tmp_path, ["--openclaw"], exe="/v/bin/sentinel-sensor")
+    assert "Restart=always" in systemd_unit(tmp_path, ["--openclaw"], exe="/v/bin/sga-sensor")

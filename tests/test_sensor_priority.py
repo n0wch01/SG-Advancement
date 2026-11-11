@@ -7,11 +7,11 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from agent_sentinel.detect import Engine, RuleSet
-from agent_sentinel.schema import AgentEvent, Finding
-from agent_sentinel.sensor.priority import Priority, event_priority
-from agent_sentinel.sensor.spool import Spool
-from agent_sentinel.shorthand import build_event
+from sg_advance.detect import Engine, RuleSet
+from sg_advance.schema import AgentEvent, Finding
+from sg_advance.sensor.priority import Priority, event_priority
+from sg_advance.sensor.spool import Spool
+from sg_advance.shorthand import build_event
 
 ROOT = Path(__file__).resolve().parents[1]
 

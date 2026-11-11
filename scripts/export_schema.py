@@ -13,7 +13,7 @@ import json
 import sys
 from pathlib import Path
 
-from agent_sentinel.schema import AgentEvent, Finding
+from sg_advance.schema import AgentEvent, Finding
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "schemas"

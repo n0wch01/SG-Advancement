@@ -69,14 +69,14 @@ cases:
     agent: openclaw
     sensor: openclaw_gateway
     events:
-      - {kind: tool.call, tool: exec, arguments: {command: "ls"}, labels: {sentinel_plugin: missing}}
+      - {kind: tool.call, tool: exec, arguments: {command: "ls"}, labels: {sga_plugin: missing}}
     expect: [openclaw-plugin-bypass]
 
   - name: 플러그인이 판정한 호출과 플러그인이 없는 환경은 정상
     agent: openclaw
     sensor: openclaw_gateway
     events:
-      - {kind: tool.call, tool: exec, arguments: {command: "ls"}, labels: {sentinel_source: openclaw_plugin}}
+      - {kind: tool.call, tool: exec, arguments: {command: "ls"}, labels: {sga_source: openclaw_plugin}}
       - {kind: tool.call, tool: exec, arguments: {command: "ls"}}
     expect_not: [openclaw-plugin-bypass]
 

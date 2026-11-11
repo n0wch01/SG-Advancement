@@ -1,6 +1,6 @@
 """Agent adapters. Each one turns agent-native activity into AgentEvents.
 
-``openclaw`` needs the optional ``websockets`` dependency (``agent-sentinel[openclaw]``), so it
+``openclaw`` needs the optional ``websockets`` dependency (``sg-advance[openclaw]``), so it
 is imported explicitly by whoever uses it, not re-exported here.
 """
 

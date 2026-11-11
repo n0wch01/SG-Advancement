@@ -1,7 +1,7 @@
 # 센서 코어
 
-직원 PC(엔드포인트)에 설치되는 부분이다([src/agent_sentinel/sensor/](../src/agent_sentinel/sensor/)).
-UI 없이 CLI 하나(`sentinel-sensor`)로 동작하고, 서버용 패키지(FastAPI, SQLAlchemy)가 없어도 설치된다.
+직원 PC(엔드포인트)에 설치되는 부분이다([src/sg_advance/sensor/](../src/sg_advance/sensor/)).
+UI 없이 CLI 하나(`sga-sensor`)로 동작하고, 서버용 패키지(FastAPI, SQLAlchemy)가 없어도 설치된다.
 HTTP는 표준 라이브러리 `urllib`, 대기열은 표준 `sqlite3`를 쓴다. 추가 의존성은 서명 검증용 `cryptography` 하나다.
 
 ## 하는 일
@@ -26,14 +26,14 @@ curl -X POST http://127.0.0.1:8000/v1/admin/enrollment-tokens -H "Authorization:
      -H 'content-type: application/json' -d '{"label": "bob laptop"}'
 
 # 직원 PC
-export SENTINEL_ENROLL_TOKEN=set_...          # 셸 기록과 프로세스 목록에 토큰이 남지 않게 환경 변수로
-sentinel-sensor enroll --server http://127.0.0.1:8000 --device-id dev-bob
-sentinel-sensor replay examples/events/claude_code.jsonl    # 이벤트 재생 → 판정 출력 → 전송
-sentinel-sensor status                                       # 장비, 정책, 대기열 상태
-sentinel-sensor sync                                         # 정책 갱신 + 대기열 전송
+export SGA_ENROLL_TOKEN=set_...          # 셸 기록과 프로세스 목록에 토큰이 남지 않게 환경 변수로
+sga-sensor enroll --server http://127.0.0.1:8000 --device-id dev-bob
+sga-sensor replay examples/events/claude_code.jsonl    # 이벤트 재생 → 판정 출력 → 전송
+sga-sensor status                                       # 장비, 정책, 대기열 상태
+sga-sensor sync                                         # 정책 갱신 + 대기열 전송
 ```
 
-상태는 `~/.agent-sentinel/`(또는 `SENTINEL_HOME`, `--home`)에 저장된다.
+상태는 `~/.sg-advance/`(또는 `SGA_HOME`, `--home`)에 저장된다.
 
 | 파일 | 내용 | 권한 |
 |---|---|---|
@@ -43,7 +43,7 @@ sentinel-sensor sync                                         # 정책 갱신 + �
 
 ## 정책 서명과 공개키
 
-서버는 시작할 때 Ed25519 키를 만들거나 읽어서(`SENTINEL_SIGNING_KEY`) 정책 묶음에 서명한다.
+서버는 시작할 때 Ed25519 키를 만들거나 읽어서(`SGA_SIGNING_KEY`) 정책 묶음에 서명한다.
 서명 대상은 `version`(룰 내용의 sha256)이다. 그래서 센서는 두 가지를 확인한다.
 
 1. 룰 내용을 다시 해시한 값이 `version`과 같은가 → 내용이 손상되지 않았다.
@@ -75,7 +75,7 @@ B는 등록 토큰을 쓰기 **전에** `/healthz`의 키 지문을 먼저 비�
 
 ## 대기열 우선순위
 
-[priority.py](../src/agent_sentinel/sensor/priority.py). 오래 끊겨 있을 때 무엇을 남기고 무엇을 먼저 보낼지 정한다.
+[priority.py](../src/sg_advance/sensor/priority.py). 오래 끊겨 있을 때 무엇을 남기고 무엇을 먼저 보낼지 정한다.
 
 | 등급 | 무엇 | 예 |
 |---|---|---|
@@ -93,18 +93,18 @@ B는 등록 토큰을 쓰기 **전에** `/healthz`의 키 지문을 먼저 비�
 - **사용자 프롬프트는 높음**: 사용자가 공격자인 경우(GTG-1002)와, 에이전트가 사용자 지시를 어긴 경우(Replit)의 근거가 된다.
 - 등급표는 지금 코드에 있다. M9에서 중앙 정책으로 옮겨 그룹별로 바꿀 수 있게 할 수 있다.
 
-## 로컬 데몬 (`sentinel-sensor run`)
+## 로컬 데몬 (`sga-sensor run`)
 
-[daemon.py](../src/agent_sentinel/sensor/daemon.py). 엔드포인트마다 하나 떠 있는 프로세스다.
+[daemon.py](../src/sg_advance/sensor/daemon.py). 엔드포인트마다 하나 떠 있는 프로세스다.
 룰 엔진을 데몬이 들고 있어서, 시퀀스·빈도 룰이 이 PC의 모든 어댑터에서 오는 이벤트를 함께 본다.
 
 ```bash
 export OPENCLAW_GATEWAY_TOKEN=...                       # 게이트웨이 토큰은 환경 변수로만 받는다
-sentinel-sensor run --openclaw                          # 기본 ws://127.0.0.1:18789
-sentinel-sensor run --openclaw --observe-only           # 탐지·보고만, 실행 중단은 하지 않음
-sentinel-sensor run --openclaw --gate-exec              # 셸 명령 승인 요청에 답한다 (위험하면 실행 전 거절)
-sentinel-sensor run --openclaw --capture frames.jsonl   # 게이트웨이 원본 프레임을 마스킹해서 기록 (디버깅)
-sentinel-sensor run --replay examples/events/*.jsonl    # 데모용: 파일을 재생
+sga-sensor run --openclaw                          # 기본 ws://127.0.0.1:18789
+sga-sensor run --openclaw --observe-only           # 탐지·보고만, 실행 중단은 하지 않음
+sga-sensor run --openclaw --gate-exec              # 셸 명령 승인 요청에 답한다 (위험하면 실행 전 거절)
+sga-sensor run --openclaw --capture frames.jsonl   # 게이트웨이 원본 프레임을 마스킹해서 기록 (디버깅)
+sga-sensor run --replay examples/events/*.jsonl    # 데모용: 파일을 재생
 ```
 
 | 하는 일 | 주기 | 비고 |
@@ -119,7 +119,7 @@ OpenClaw 플러그인(M5c)과 Claude Code hook(M6)처럼 툴 실행 직전에 �
 
 ## OpenClaw 어댑터
 
-[adapters/openclaw.py](../src/agent_sentinel/sensor/adapters/openclaw.py). 설치: `agent-sentinel[openclaw]`(websockets).
+[adapters/openclaw.py](../src/sg_advance/sensor/adapters/openclaw.py). 설치: `sg-advance[openclaw]`(websockets).
 SG 코드에서 무엇을 가져오고 고쳤는지는 [from-sg.md](from-sg.md#openclaw-연동-m5)에 있다.
 
 | 게이트웨이에서 | AgentEvent로 |
@@ -151,15 +151,15 @@ SG 코드에서 무엇을 가져오고 고쳤는지는 [from-sg.md](from-sg.md#o
 
 ### 게이트웨이에 붙는 방법 (프로토콜 v3·v4)
 
-센서는 **자기 장치 신원**(Ed25519 키, `SENTINEL_HOME/openclaw-device.json`, 0600)을 처음 실행할 때 만들고, 다른 외부 클라이언트처럼 페어링한다.
+센서는 **자기 장치 신원**(Ed25519 키, `SGA_HOME/openclaw-device.json`, 0600)을 처음 실행할 때 만들고, 다른 외부 클라이언트처럼 페어링한다.
 OpenClaw CLI의 키를 빌려 쓰지 않는다. 그래서 센서는 필요한 권한만 갖고, `openclaw devices list`에 따로 보이며, 따로 폐기할 수 있다.
 
 ```bash
 openclaw configure --section gateway          # 1. 게이트웨이 공용 토큰 설정 (기본값은 실행마다 바뀌는 임시 토큰이라 외부 클라이언트가 못 붙음)
 export OPENCLAW_GATEWAY_TOKEN=...             # 2. 처음 한 번, 공용 토큰으로 접속
-sentinel-sensor run --openclaw                #    → "pairing required — openclaw devices approve <requestId>" 로그
+sga-sensor run --openclaw                #    → "pairing required — openclaw devices approve <requestId>" 로그
 openclaw devices approve <requestId>          # 3. 게이트웨이 호스트에서 승인 → 센서가 deviceToken을 받아 저장
-sentinel-sensor run --openclaw                # 4. 이후에는 공용 토큰 없이 deviceToken으로 접속
+sga-sensor run --openclaw                # 4. 이후에는 공용 토큰 없이 deviceToken으로 접속
 ```
 
 - 접속할 때 프로토콜 3~4를 지원한다고 알린다. 2026.4.15(v3)와 2026.11.3(v4) 게이트웨이 모두에 붙는다.
@@ -215,7 +215,7 @@ v4 녹화 프레임은 [openclaw-2026.11.3-tool-run.jsonl](../tests/fixtures/ope
 v4 게이트웨이는 외부 클라이언트에게 실행 중단·승인 열람을 `operator.admin` 없이는 허락하지 않으므로, 차단은 이 플러그인이 맡는다(결정 B).
 
 ```
-OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──▶ unix 소켓 (SENTINEL_HOME/sentinel.sock, 0600)
+OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──▶ unix 소켓 (SGA_HOME/sga.sock, 0600)
                                         ◀── {decision: allow | block | approve} ── 센서 데몬 (룰 엔진, 기록)
 ```
 
@@ -230,13 +230,13 @@ OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──
 | 상황 | 플러그인 동작 | 기록 |
 |---|---|---|
 | 데몬 정상 | 데몬 판정 (시퀀스·빈도 룰 포함) | 이벤트 `source.sensor = openclaw_plugin` |
-| 데몬이 응답 없음 | `sentinel-sensor evaluate` 실행 → 서명된 정책 캐시로 판정 (상태 없는 룰만) | `labels.sentinel_verdict = degraded` |
+| 데몬이 응답 없음 | `sga-sensor evaluate` 실행 → 서명된 정책 캐시로 판정 (상태 없는 룰만) | `labels.sga_verdict = degraded` |
 | 캐시도 없음 | 읽기 전용 툴(`read`, `memory_search`, `memory_get`, `session_status`)만 통과, 나머지는 사용자 승인 | 기록 없음 (센서가 없으므로) |
 
 `before_tool_call`은 핸들러가 예외를 던지거나 15초를 넘기면 OpenClaw가 그 호출을 **막는다**. 플러그인은 예외를 밖으로 내지 않고 위 순서로 직접 처리한다.
 
 **우회 탐지**: 플러그인이 판정한 호출 ID는 데몬에 등록된다. WebSocket 어댑터는 등록된 호출을 다시 판정하지 않고(중복 방지),
-플러그인이 최근 5분 안에 연결된 상태인데 등록되지 않은 호출을 보면 `labels.sentinel_plugin = missing`을 붙인다.
+플러그인이 최근 5분 안에 연결된 상태인데 등록되지 않은 호출을 보면 `labels.sga_plugin = missing`을 붙인다.
 룰 `openclaw-plugin-bypass`(alert)가 이를 finding으로 만든다. 플러그인이 꺼졌거나 우회된 실행 경로를 보안팀이 알 수 있다.
 
 ### 플러그인 신호 감시
@@ -248,17 +248,17 @@ OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──
 |---|---|---|
 | 마지막 인사 후 150초가 지남 (30초마다 점검) | `sensor.health` `status: lost` (한 번만) | `openclaw-plugin-heartbeat-lost` (alert, high) |
 | 끊긴 뒤 다시 인사가 옴 | `sensor.health` `status: recovered` | 없음 (기록만) |
-| 신호가 끊긴 동안 실행된 툴 호출 | `tool.call` + `labels.sentinel_plugin: missing` | `openclaw-plugin-bypass` |
+| 신호가 끊긴 동안 실행된 툴 호출 | `tool.call` + `labels.sga_plugin: missing` | `openclaw-plugin-bypass` |
 
 `sensor.health`는 이번에 추가한 이벤트 종류다. 툴 호출이 아니라 **통제 장치 자체의 상태**를 나타낸다.
 
 ### 상시 운영
 
 ```bash
-sentinel-sensor enroll --server http://127.0.0.1:18100 --device-id my-mac   # 센서 폴더: ~/.agent-sentinel
-install -m 600 /dev/stdin ~/.agent-sentinel/openclaw-token <<< "<gateway token>"  # 토큰은 파일로 (0600 아니면 거부)
-sentinel-sensor service install --openclaw     # macOS LaunchAgent: 로그인 시 시작, 죽으면 재시작
-sentinel-sensor service status | uninstall
+sga-sensor enroll --server http://127.0.0.1:18100 --device-id my-mac   # 센서 폴더: ~/.sg-advance
+install -m 600 /dev/stdin ~/.sg-advance/openclaw-token <<< "<gateway token>"  # 토큰은 파일로 (0600 아니면 거부)
+sga-sensor service install --openclaw     # macOS LaunchAgent: 로그인 시 시작, 죽으면 재시작
+sga-sensor service status | uninstall
 ```
 
 - 서비스 정의(plist)에는 비밀값이 들어가지 않는다. 게이트웨이 토큰은 `<home>/openclaw-token`에서 읽는다(`OPENCLAW_GATEWAY_TOKEN`이 있으면 그것을 우선).
@@ -271,9 +271,9 @@ sentinel-sensor service status | uninstall
 
 | 경우 | 결과 |
 |---|---|
-| OpenClaw 런타임 (GPT-6-Luna) | ✅ 플러그인이 차단. 툴 출력에 `Agent Sentinel: 파괴적 셸 명령`. finding 집행 주체 `openclaw_plugin` |
+| OpenClaw 런타임 (GPT-6-Luna) | ✅ 플러그인이 차단. 툴 출력에 `SG-Advance: 파괴적 셸 명령`. finding 집행 주체 `openclaw_plugin` |
 | **Codex 런타임** (GPT-6.1-Sol, 런타임 고정 없음) | ✅ **Codex 네이티브 툴도 차단**. `codex_app_server.hook` 중계로 플러그인이 호출됐다. 지난 시험에서 "탐지만 하고 못 막던" T19 상황이 해소됐다 |
-| 데몬 꺼짐 | ✅ 플러그인이 `sentinel-sensor evaluate`로 캐시 판정해 차단. `sentinel_verdict: degraded`로 대기열에 남았다가 데몬이 돌아오자 전송됐다 |
+| 데몬 꺼짐 | ✅ 플러그인이 `sga-sensor evaluate`로 캐시 판정해 차단. `sga_verdict: degraded`로 대기열에 남았다가 데몬이 돌아오자 전송됐다 |
 | 순서 경쟁 | ⚠️ 실제 게이트웨이는 툴 시작 이벤트를 플러그인 요청과 **같은 순간**에 보낸다. 처음엔 WS 어댑터가 먼저 판정해 우회로 오탐했다 → 어댑터가 최대 3초(`plugin_grace`) 플러그인 판정을 기다리도록 고쳤다 |
 
 상시 운영 상태(LaunchAgent 데몬 + compose 중앙 서버)에서 플러그인을 끄고 다시 켰다.
@@ -281,7 +281,7 @@ sentinel-sensor service status | uninstall
 | 시각 (KST) | 일어난 일 | 결과 |
 |---|---|---|
 | 16:07:30 | 마지막 인사 | |
-| 16:07:47 | `openclaw plugins disable agent-sentinel` 후 게이트웨이 재시작 | WS 센서는 16:08:04에 자동 재연결 |
+| 16:07:47 | `openclaw plugins disable sg-advance` 후 게이트웨이 재시작 | WS 센서는 16:08:04에 자동 재연결 |
 | 16:10:11 | 마지막 인사 후 161초 | ✅ `sensor.health lost` → `openclaw-plugin-heartbeat-lost` (high) |
 | 16:10:52 | 에이전트가 `pwd` 실행 (플러그인 없이 그대로 실행) | ✅ `openclaw-plugin-bypass` (high) |
 | 16:12:27 | `plugins enable` 후 게이트웨이 재시작, 인사 재개 | ✅ `sensor.health recovered` |
@@ -294,10 +294,10 @@ sentinel-sensor service status | uninstall
 
 ```bash
 openclaw plugins install --link "$PWD/integrations/openclaw-plugin" --force --accept-capabilities
-openclaw plugins enable agent-sentinel --accept-capabilities
-openclaw config set 'plugins.entries["agent-sentinel"].config.sensorHome' '"~/.agent-sentinel"' --strict-json
-openclaw config set 'plugins.entries["agent-sentinel"].config.sensorCli' '"<venv>/bin/sentinel-sensor"' --strict-json
-sentinel-sensor run --openclaw          # 데몬이 <home>/sentinel.sock을 연다 (--socket으로 바꿀 수 있음)
+openclaw plugins enable sg-advance --accept-capabilities
+openclaw config set 'plugins.entries["sg-advance"].config.sensorHome' '"~/.sg-advance"' --strict-json
+openclaw config set 'plugins.entries["sg-advance"].config.sensorCli' '"<venv>/bin/sga-sensor"' --strict-json
+sga-sensor run --openclaw          # 데몬이 <home>/sga.sock을 연다 (--socket으로 바꿀 수 있음)
 ```
 
 - `--force`는 ClawHub 검토를 받지 않은 로컬 소스라는 확인, `--accept-capabilities`는 서드파티 플러그인 권한 동의다. 회사 배포에서는 이 두 단계를 보안팀이 한다.
@@ -306,7 +306,7 @@ sentinel-sensor run --openclaw          # 데몬이 <home>/sentinel.sock을 연�
 
 ## 어댑터 계약
 
-[adapters/base.py](../src/agent_sentinel/sensor/adapters/base.py)
+[adapters/base.py](../src/sg_advance/sensor/adapters/base.py)
 
 ```python
 class Adapter(Protocol):

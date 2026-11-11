@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_sentinel.detect import Engine, RuleSet
-from agent_sentinel.detect.cli import load_events
-from agent_sentinel.policy import PolicyBundle
+from sg_advance.detect import Engine, RuleSet
+from sg_advance.detect.cli import load_events
+from sg_advance.policy import PolicyBundle
 
 ROOT = Path(__file__).resolve().parents[1]
 

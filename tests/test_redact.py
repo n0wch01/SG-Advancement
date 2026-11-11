@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from agent_sentinel.redact import redact_event, redact_text
-from agent_sentinel.schema import AgentEvent
+from sg_advance.redact import redact_event, redact_text
+from sg_advance.schema import AgentEvent
 
 
 @pytest.mark.parametrize(

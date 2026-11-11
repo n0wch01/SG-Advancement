@@ -1,10 +1,10 @@
 """Run the sensor daemon as a per-user background service (macOS launchd LaunchAgent).
 
-    sentinel-sensor service install --openclaw     # write the plist and start it
-    sentinel-sensor service status
-    sentinel-sensor service uninstall
+    sga-sensor service install --openclaw     # write the plist and start it
+    sga-sensor service status
+    sga-sensor service uninstall
 
-The service runs ``sentinel-sensor --home <home> run ...`` at login and restarts it if it exits.
+The service runs ``sga-sensor --home <home> run ...`` at login and restarts it if it exits.
 No secrets go into the plist: the gateway token is read from ``<home>/openclaw-token`` (0600).
 Linux (systemd --user) is printed with ``--dry-run`` only for now.
 """
@@ -18,17 +18,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-LABEL = "com.agent-sentinel.sensor"
+LABEL = "com.sg-advance.sensor"
 
 
 def sensor_executable() -> str:
-    """The sentinel-sensor next to the running interpreter (the venv), else the one on PATH."""
-    beside = Path(sys.executable).parent / "sentinel-sensor"
+    """The sga-sensor next to the running interpreter (the venv), else the one on PATH."""
+    beside = Path(sys.executable).parent / "sga-sensor"
     if beside.exists():
         return str(beside)
-    found = shutil.which("sentinel-sensor")
+    found = shutil.which("sga-sensor")
     if not found:
-        raise RuntimeError("sentinel-sensor executable not found")
+        raise RuntimeError("sga-sensor executable not found")
     return found
 
 
@@ -55,7 +55,7 @@ def launchd_plist(home: Path, run_args: list[str], exe: str | None = None) -> by
 def systemd_unit(home: Path, run_args: list[str], exe: str | None = None) -> str:
     cmd = " ".join([exe or sensor_executable(), "--home", str(home), "run", *run_args])
     return (
-        "[Unit]\nDescription=Agent Sentinel sensor\n\n"
+        "[Unit]\nDescription=SG-Advance sensor\n\n"
         f"[Service]\nExecStart={cmd}\nRestart=always\nRestartSec=10\n\n"
         "[Install]\nWantedBy=default.target\n"
     )

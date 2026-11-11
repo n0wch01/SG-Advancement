@@ -2,7 +2,7 @@
 
 Each file in tests/rule_cases/ lists cases: a short event stream plus the rule ids that must
 (``expect``) and must not (``expect_not``) hit. Events are written as payload dicts; envelope
-fields are filled in by agent_sentinel.shorthand. Optional per-event keys: ``at`` (seconds from
+fields are filled in by sg_advance.shorthand. Optional per-event keys: ``at`` (seconds from
 start), ``session``, ``user``, ``device``, ``sensor``. Optional per-case keys: ``agent``, ``sensor``.
 
 When you find a false positive / negative, add it here first, watch it fail, then tune the rule.
@@ -16,8 +16,8 @@ from typing import Any
 import pytest
 import yaml
 
-from agent_sentinel.detect import Engine, RuleSet
-from agent_sentinel.shorthand import build_event
+from sg_advance.detect import Engine, RuleSet
+from sg_advance.shorthand import build_event
 
 ROOT = Path(__file__).resolve().parents[1]
 RULES = RuleSet.load(ROOT / "rules")

@@ -1,4 +1,4 @@
-# agent-sentinel
+# SG-Advance
 
 **AI 에이전트를 위한 중앙 정책·위협 관제 플랫폼 (EDR/MDM for AI Agents)**
 
@@ -20,7 +20,7 @@
         │ policy pull          │ AgentEvent / Finding  │ remote response
 ┌───────▼──────────────────────┴───────────────────────▼─────────┐
 │ Endpoint (container / VM / PC)                                 │
-│  Sentinel sensor = policy cache + local detection + enforcement│
+│  SG-Advance sensor = policy cache + local detection + enforcement│
 │   ├ OpenClaw gateway adapter     ├ Claude Code hooks adapter   │
 │   ├ Gemini CLI hooks adapter     ├ Codex CLI adapter           │
 │   ├ LangGraph callback adapter   └ MCP proxy / egress proxy    │
@@ -39,25 +39,25 @@ uv sync                                   # Python 3.12 환경 구성
 uv run pytest                             # 테스트
 uvx ruff check .          # 린트
 uv run python scripts/export_schema.py    # schemas/*.json 재생성 (스키마 변경 시)
-uv run sentinel-detect examples/events/*.jsonl   # 예시 이벤트를 룰에 통과시켜 탐지 결과 보기
+uv run sga-detect examples/events/*.jsonl   # 예시 이벤트를 룰에 통과시켜 탐지 결과 보기
 uv run python demo/demo_runner.py S2             # 시나리오 데모
-uv run sentinel-server                           # Control Plane API (http://127.0.0.1:8000/docs)
+uv run sga-server                           # Control Plane API (http://127.0.0.1:8000/docs)
 docker compose up -d --build                     # 같은 서버를 컨테이너로 (.env.example 참고)
-uv run sentinel-sensor enroll --server http://127.0.0.1:8000   # 센서 등록 (docs/sensor.md)
-uv run sentinel-sensor replay examples/events/claude_code.jsonl
-uv run sentinel-sensor run --openclaw          # 로컬 데몬: OpenClaw 게이트웨이 관제 (OPENCLAW_GATEWAY_TOKEN)
+uv run sga-sensor enroll --server http://127.0.0.1:8000   # 센서 등록 (docs/sensor.md)
+uv run sga-sensor replay examples/events/claude_code.jsonl
+uv run sga-sensor run --openclaw          # 로컬 데몬: OpenClaw 게이트웨이 관제 (OPENCLAW_GATEWAY_TOKEN)
 ```
 
 ## 저장소 구조
 
 | 경로 | 내용 |
 |---|---|
-| `src/agent_sentinel/schema/` | 와이어 스키마 v1 (`AgentEvent`, `Finding`) |
-| `src/agent_sentinel/detect/` | 로컬 탐지 엔진 (스트리밍), `sentinel-detect` CLI |
-| `src/agent_sentinel/redact.py` | 전송 전 비밀값 마스킹 |
-| `src/agent_sentinel/policy.py` | 센서에 내려주는 정책 묶음과 Ed25519 서명 (서버 의존성 없음) |
-| `src/agent_sentinel/sensor/` | 엔드포인트 센서: 등록, 서명 정책 캐시, 전송 대기열, 로컬 데몬, 어댑터(OpenClaw, replay) — [docs/sensor.md](docs/sensor.md) |
-| `src/agent_sentinel/server/` | Control Plane API (FastAPI + SQLAlchemy) — [docs/control-plane.md](docs/control-plane.md) |
+| `src/sg_advance/schema/` | 와이어 스키마 v1 (`AgentEvent`, `Finding`) |
+| `src/sg_advance/detect/` | 로컬 탐지 엔진 (스트리밍), `sga-detect` CLI |
+| `src/sg_advance/redact.py` | 전송 전 비밀값 마스킹 |
+| `src/sg_advance/policy.py` | 센서에 내려주는 정책 묶음과 Ed25519 서명 (서버 의존성 없음) |
+| `src/sg_advance/sensor/` | 엔드포인트 센서: 등록, 서명 정책 캐시, 전송 대기열, 로컬 데몬, 어댑터(OpenClaw, replay) — [docs/sensor.md](docs/sensor.md) |
+| `src/sg_advance/server/` | Control Plane API (FastAPI + SQLAlchemy) — [docs/control-plane.md](docs/control-plane.md) |
 | `compose.yaml`, `deploy/` | 데모 토폴로지와 이미지 |
 | `rules/` | 선언형 탐지 룰 (카테고리별 YAML) — [docs/detection.md](docs/detection.md) |
 | `tests/rule_cases/` | 룰별 오탐/미탐 회귀 케이스 |

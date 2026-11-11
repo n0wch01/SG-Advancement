@@ -1,27 +1,27 @@
 # Control Plane API
 
-중앙 서버([src/agent_sentinel/server/](../src/agent_sentinel/server/))가 하는 일은 세 가지다.
+중앙 서버([src/sg_advance/server/](../src/sg_advance/server/))가 하는 일은 세 가지다.
 장비를 등록하고, 센서가 보낸 이벤트와 finding을 저장하고, 정책을 내려준다.
 API 문서 전체는 서버를 띄운 뒤 `http://127.0.0.1:8000/docs`(Swagger)에서 볼 수 있다.
 
 ## 실행
 
 ```bash
-uv run sentinel-server                      # 로컬. 관리자 토큰을 안 주면 실행할 때마다 새로 만들어 출력한다
-SENTINEL_ADMIN_TOKEN=... uv run sentinel-server
+uv run sga-server                      # 로컬. 관리자 토큰을 안 주면 실행할 때마다 새로 만들어 출력한다
+SGA_ADMIN_TOKEN=... uv run sga-server
 
-cp .env.example .env                        # Docker. .env에 SENTINEL_ADMIN_TOKEN을 적는다
+cp .env.example .env                        # Docker. .env에 SGA_ADMIN_TOKEN을 적는다
 docker compose up -d --build
 ```
 
 | 환경 변수 | 기본값 | 설명 |
 |---|---|---|
-| `SENTINEL_ADMIN_TOKEN` | (없음) | 관리자 API 토큰. M7에서 콘솔 로그인으로 바뀐다 |
-| `SENTINEL_DB_URL` | `sqlite:///data/sentinel.db` | SQLAlchemy URL. Postgres로 갈 때 이 값만 바꾼다 |
-| `SENTINEL_RULES_DIR` | `rules` | 정책 v0으로 내려줄 룰 디렉터리 |
-| `SENTINEL_SIGNING_KEY` | `data/policy_signing_key.pem` | 정책 서명용 Ed25519 개인키. 없으면 처음 시작할 때 만든다 (0600) |
-| `SENTINEL_MAX_BATCH` | `500` | 한 번에 받는 이벤트/finding 최대 개수 |
-| `SENTINEL_PORT` | `8000` | compose에서 호스트에 여는 포트 (8000이 이미 쓰이고 있을 때) |
+| `SGA_ADMIN_TOKEN` | (없음) | 관리자 API 토큰. M7에서 콘솔 로그인으로 바뀐다 |
+| `SGA_DB_URL` | `sqlite:///data/sga.db` | SQLAlchemy URL. Postgres로 갈 때 이 값만 바꾼다 |
+| `SGA_RULES_DIR` | `rules` | 정책 v0으로 내려줄 룰 디렉터리 |
+| `SGA_SIGNING_KEY` | `data/policy_signing_key.pem` | 정책 서명용 Ed25519 개인키. 없으면 처음 시작할 때 만든다 (0600) |
+| `SGA_MAX_BATCH` | `500` | 한 번에 받는 이벤트/finding 최대 개수 |
+| `SGA_PORT` | `8000` | compose에서 호스트에 여는 포트 (8000이 이미 쓰이고 있을 때) |
 
 ## 인증
 
@@ -66,7 +66,7 @@ docker compose up -d --build
 
 ## 정책 v0
 
-[src/agent_sentinel/policy.py](../src/agent_sentinel/policy.py)의 `PolicyBundle`이다.
+[src/sg_advance/policy.py](../src/sg_advance/policy.py)의 `PolicyBundle`이다.
 
 - `rules/*.yaml`의 룰 전체를 JSON으로 바꾸고, 그 정규화된 JSON의 sha256을 `version`으로 쓴다.
   룰 내용이 바뀔 때만 버전이 바뀐다. 파일 순서나 주석, 들여쓰기는 버전에 영향이 없다.
@@ -78,7 +78,7 @@ docker compose up -d --build
 
 ## 저장
 
-[src/agent_sentinel/server/db.py](../src/agent_sentinel/server/db.py), SQLAlchemy 2.0.
+[src/sg_advance/server/db.py](../src/sg_advance/server/db.py), SQLAlchemy 2.0.
 
 - 이벤트와 finding은 **원문 JSON 전체**(`doc`)와, 콘솔이 필터로 쓰는 몇 개 컬럼(시각, 장비, 사용자, 세션, 종류, 심각도)을 함께 저장한다.
   스키마에 필드가 추가돼도 테이블을 바꿀 필요가 없다.

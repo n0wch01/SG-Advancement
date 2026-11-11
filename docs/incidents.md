@@ -101,8 +101,8 @@ AI 에이전트에서 실제로 일어난 사건을 [위협 모델](threat-model
 
 | 반영 | 근거가 된 사건 | 위치 |
 |---|---|---|
-| finding이 생기면 같은 세션의 직전 10분 이벤트를 긴급으로 승격 | GitHub MCP, Supabase, EchoLeak: 시작점은 에이전트가 **읽은 것**인데, 그 자체는 룰에 안 걸리는 경우가 많다 | [spool.py](../src/agent_sentinel/sensor/spool.py) |
-| 사용자 프롬프트를 높음 등급으로 | GTG-1002(사용자가 공격자), Replit(지시 위반 확인) | [priority.py](../src/agent_sentinel/sensor/priority.py) |
+| finding이 생기면 같은 세션의 직전 10분 이벤트를 긴급으로 승격 | GitHub MCP, Supabase, EchoLeak: 시작점은 에이전트가 **읽은 것**인데, 그 자체는 룰에 안 걸리는 경우가 많다 | [spool.py](../src/sg_advance/sensor/spool.py) |
+| 사용자 프롬프트를 높음 등급으로 | GTG-1002(사용자가 공격자), Replit(지시 위반 확인) | [priority.py](../src/sg_advance/sensor/priority.py) |
 | 위협 T14~T17 추가 | 위 빈틈들 | [threat-model.md](threat-model.md) |
 | 룰 4개 초안 (`destructive-sql`, `destructive-cloud-command`, `agent-safety-bypass`, `agent-unattended-safety-bypass`) | Replit, Amazon Q, Nx | [rules/tool_misuse.yaml](../rules/tool_misuse.yaml) |
 

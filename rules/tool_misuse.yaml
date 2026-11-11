@@ -92,13 +92,13 @@ rules:
     category: policy_violation
     title: 게이트웨이 플러그인을 거치지 않은 툴 실행
     message: 실행 전 판정 플러그인이 동작 중인데, 플러그인 판정 기록이 없는 툴 호출이 실행됐습니다.
-    recommended_action: OpenClaw 플러그인이 꺼졌거나 우회됐는지 확인하세요(`openclaw plugins inspect agent-sentinel`). 해당 세션의 실행 내역을 검토하세요.
+    recommended_action: OpenClaw 플러그인이 꺼졌거나 우회됐는지 확인하세요(`openclaw plugins inspect sg-advance`). 해당 세션의 실행 내역을 검토하세요.
     response: alert
     tags: [owasp-llm:LLM06]
-    when: {payload.kind: tool.call, labels.sentinel_plugin: missing}
+    when: {payload.kind: tool.call, labels.sga_plugin: missing}
     match:
       type: regex
-      fields: [labels.sentinel_plugin]
+      fields: [labels.sga_plugin]
       pattern: '^missing$'
 
   # M5c. 플러그인이 정기 신호(60초마다)를 보내다 끊겼다. 센서 데몬이 150초 넘게 신호를 못 받으면 낸다.

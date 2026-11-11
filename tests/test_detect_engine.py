@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_sentinel.detect import Engine, Rule, RuleLoadError, RuleSet
-from agent_sentinel.detect.fields import resolve
-from agent_sentinel.schema import AgentEvent, ResponseAction
+from sg_advance.detect import Engine, Rule, RuleLoadError, RuleSet
+from sg_advance.detect.fields import resolve
+from sg_advance.schema import AgentEvent, ResponseAction
 
 T0 = datetime(2026, 11, 10, tzinfo=UTC)
 

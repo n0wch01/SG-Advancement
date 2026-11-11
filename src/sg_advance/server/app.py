@@ -402,7 +402,7 @@ def reload_policy(request: Request) -> PolicyInfo:
 
 def create_app(settings: Settings) -> FastAPI:
     if not settings.admin_token:
-        raise ValueError("admin_token is required (set SENTINEL_ADMIN_TOKEN)")
+        raise ValueError("admin_token is required (set SGA_ADMIN_TOKEN)")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -410,7 +410,7 @@ def create_app(settings: Settings) -> FastAPI:
         yield
         app.state.db.engine.dispose()
 
-    app = FastAPI(title="agent-sentinel control plane", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="sg-advance control plane", version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.state.db = Database(settings.db_url)
     app.state.signing_key = load_or_create_signing_key(settings.signing_key_path)

@@ -18,13 +18,13 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from agent_sentinel.policy import PolicyBundle, PolicyVerificationError
-from agent_sentinel.schema import AgentEvent, ResponseAction
-from agent_sentinel.sensor import NoPolicy, Sensor, SensorError, SensorHome, SyncStatus, enroll
-from agent_sentinel.sensor.adapters import ReplayAdapter
-from agent_sentinel.sensor.client import HttpResponse
-from agent_sentinel.sensor.spool import Spool
-from agent_sentinel.server import Settings, create_app
+from sg_advance.policy import PolicyBundle, PolicyVerificationError
+from sg_advance.schema import AgentEvent, ResponseAction
+from sg_advance.sensor import NoPolicy, Sensor, SensorError, SensorHome, SyncStatus, enroll
+from sg_advance.sensor.adapters import ReplayAdapter
+from sg_advance.sensor.client import HttpResponse
+from sg_advance.sensor.spool import Spool
+from sg_advance.server import Settings, create_app
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples" / "events"
@@ -116,7 +116,7 @@ def test_wrong_pinned_key_aborts_before_spending_the_token(
 ) -> None:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from agent_sentinel.policy import public_key_b64
+    from sg_advance.policy import public_key_b64
 
     other = public_key_b64(Ed25519PrivateKey.generate().public_key())
     token = enrollment_token(server)
@@ -169,7 +169,7 @@ def test_tampered_cache_is_never_used(server: TestClient, net: Net, home: Sensor
     target = next(r for r in doc["rules"] if r["id"] == "sensitive-file-access")
     target["enabled"] = False
     # A careful attacker also fixes up the content hash; only the signature still stops them.
-    from agent_sentinel.policy import _digest
+    from sg_advance.policy import _digest
 
     doc["version"] = _digest(doc["rules"])
     home.policy_path.write_text(json.dumps(doc), "utf-8")
@@ -192,7 +192,7 @@ def test_forged_bundle_from_network_is_rejected(server: TestClient, net: Net, ho
         if url.endswith("/v1/policy") and r.status == 200:
             doc = json.loads(r.body)
             doc["rules"] = doc["rules"][:1]
-            from agent_sentinel.policy import _digest
+            from sg_advance.policy import _digest
 
             doc["version"] = _digest(doc["rules"])
             return HttpResponse(200, r.headers, json.dumps(doc).encode())
@@ -345,7 +345,7 @@ def test_unknown_device_token_keeps_items(server: TestClient, net: Net, home: Se
 
 def test_spool_cap_drops_oldest_events_first(tmp_path: Path) -> None:
     events = list(ReplayAdapter([EXAMPLES / "claude_code.jsonl"]).events())
-    from agent_sentinel.detect import Engine, RuleSet
+    from sg_advance.detect import Engine, RuleSet
 
     findings = [f for v in Engine(RuleSet.load(ROOT / "rules")).replay(events) for f in v.findings]
     spool = Spool(tmp_path / "spool.db", max_items=3)

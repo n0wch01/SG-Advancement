@@ -1,9 +1,9 @@
-// Decision logic for the Agent Sentinel OpenClaw plugin. No OpenClaw imports here, so it can be
+// Decision logic for the SG-Advance OpenClaw plugin. No OpenClaw imports here, so it can be
 // unit-tested with plain `node --test` (Node strips the type annotations).
 //
 // Order of authority for one tool call (docs/sensor.md, "판정할 수 없을 때는 단계적으로"):
 //   1. the local sensor daemon over its unix socket (full, stateful rules)        -> source "daemon"
-//   2. `sentinel-sensor evaluate` (signed policy cache, stateless rules)          -> source "degraded"
+//   2. `sga-sensor evaluate` (signed policy cache, stateless rules)          -> source "degraded"
 //   3. risk tiers: read-only tools pass, everything else asks the user            -> source "fallback"
 // decide() never throws: an exception inside a before_tool_call handler would make OpenClaw block
 // the call (its failure policy), which is stricter than the policy we chose.
@@ -57,10 +57,10 @@ export const DEFAULT_READ_ONLY = ["read", "memory_search", "memory_get", "sessio
 
 export function settingsFrom(config: Record<string, unknown> | undefined, env = process.env): PluginSettings {
   const c = config ?? {};
-  const home = (c.sensorHome as string) || env.SENTINEL_HOME || `${env.HOME ?? ""}/.agent-sentinel`;
+  const home = (c.sensorHome as string) || env.SGA_HOME || `${env.HOME ?? ""}/.sg-advance`;
   return {
-    socketPath: (c.socketPath as string) || `${home}/sentinel.sock`,
-    sensorCli: (c.sensorCli as string) || "sentinel-sensor",
+    socketPath: (c.socketPath as string) || `${home}/sga.sock`,
+    sensorCli: (c.sensorCli as string) || "sga-sensor",
     sensorHome: home,
     readOnlyTools: Array.isArray(c.readOnlyTools) ? (c.readOnlyTools as string[]) : DEFAULT_READ_ONLY,
     daemonTimeoutMs: Number(c.daemonTimeoutMs ?? 3000),
@@ -99,12 +99,12 @@ export function toHookResult(
 ): HookResult {
   const why = v.reason || (v.rules ?? []).join(", ") || "policy";
   if (v.decision === "block") {
-    return { block: true, blockReason: v.reason || `Agent Sentinel blocked this call (${why})` };
+    return { block: true, blockReason: v.reason || `SG-Advance blocked this call (${why})` };
   }
   if (v.decision === "approve") {
     return {
       requireApproval: {
-        title: v.title || "Agent Sentinel",
+        title: v.title || "SG-Advance",
         description: `${why}${source === "daemon" ? "" : ` [${source}]`}`,
         severity: v.action === "require_approval" ? "warning" : "critical",
         timeoutMs: s.approvalTimeoutMs,
@@ -120,7 +120,7 @@ export function fallbackResult(toolName: string, s: PluginSettings, reason: stri
   if (s.readOnlyTools.includes(toolName)) return undefined;
   return {
     requireApproval: {
-      title: "Agent Sentinel unavailable",
+      title: "SG-Advance unavailable",
       description: `Security sensor could not judge this ${toolName} call (${reason}). Approve only if you expected it.`,
       severity: "warning",
       timeoutMs: s.approvalTimeoutMs,
@@ -151,14 +151,14 @@ export async function decide(
   try {
     const v = await deps.askCli(req);
     if (v.ok) {
-      deps.log?.("warn", `sentinel daemon unreachable (${firstError}); judged from cached policy`);
+      deps.log?.("warn", `SG-Advance daemon unreachable (${firstError}); judged from cached policy`);
       return { result: toHookResult(v, s, "degraded"), source: "degraded" };
     }
     firstError = `${firstError}; cli: ${v.error ?? "error"}`;
   } catch (e) {
     firstError = `${firstError}; cli: ${String((e as Error)?.message ?? e)}`;
   }
-  deps.log?.("warn", `sentinel unavailable (${firstError}); risk-tier fallback for ${tool}`);
+  deps.log?.("warn", `SG-Advance unavailable (${firstError}); risk-tier fallback for ${tool}`);
   return { result: fallbackResult(tool, s, "sensor unavailable"), source: "fallback" };
 }
 
