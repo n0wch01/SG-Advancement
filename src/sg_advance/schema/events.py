@@ -29,6 +29,7 @@ class EventKind(StrEnum):
     SENSOR_HEALTH = "sensor.health"
     CONFIG_SNAPSHOT = "config.snapshot"
     INTEGRITY_REPORT = "integrity.report"
+    APPROVAL_RESOLVED = "approval.resolved"
 
 
 class ToolProviderKind(StrEnum):
@@ -234,6 +235,31 @@ class IntegrityReport(StrictModel):
     plugins: tuple[ComponentIntegrity, ...] = ()
 
 
+class ApprovalResolution(StrictModel):
+    """A person's answer to a pre-execution approval prompt (``require_approval``).
+
+    Links back to the ``tool.call`` event and findings that asked for it, so security can audit
+    what users approved after the fact. ``approver`` is who pressed the button when the agent
+    reports it; OpenClaw plugin approvals do not, so it is usually ``None`` (see the requester labels).
+    """
+
+    kind: Literal[EventKind.APPROVAL_RESOLVED] = EventKind.APPROVAL_RESOLVED
+    call_id: str
+    tool: str
+    decision: Literal["allow-once", "allow-always", "deny", "timeout", "cancelled"]
+    approved: bool = Field(description="decision is allow-once or allow-always")
+    rule_ids: tuple[str, ...] = Field(default=(), description="Rules that asked for approval")
+    max_severity: str | None = Field(default=None, description="Highest severity among those rules")
+    request_event_id: str | None = Field(default=None, description="The tool.call event that was held")
+    finding_ids: tuple[str, ...] = ()
+    requested_at: AwareDatetime | None = None
+    wait_ms: int | None = Field(default=None, ge=0, description="Time the prompt was open")
+    judged_by: Literal["daemon", "degraded", "fallback"] = Field(
+        default="daemon", description="Which path asked: daemon, cached-policy CLI, or risk-tier fallback"
+    )
+    approver: str | None = None
+
+
 Payload = Annotated[
     SessionStart
     | SessionEnd
@@ -246,7 +272,8 @@ Payload = Annotated[
     | InventorySnapshot
     | SensorHealth
     | ConfigSnapshot
-    | IntegrityReport,
+    | IntegrityReport
+    | ApprovalResolution,
     Field(discriminator="kind"),
 ]
 

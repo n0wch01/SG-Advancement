@@ -1,0 +1,37 @@
+# 승인 감사 (C): 사용자가 실행 전 승인 창에 한 응답(approval.resolved).
+# 결정(2026-11-12): 모든 응답은 이벤트로 남기고, finding은 high/critical 룰에 걸린 행동을 "승인"한 경우와
+# 승인 피로(한 사용자가 10분에 5번 승인)만. 거절·시간 초과·취소는 기록만. 대응은 모두 알림(보안팀 사후 감사).
+version: 1
+rules:
+  # 오탐 주의: 정당한 업무상 승인도 걸린다. 이 finding은 "막아야 했다"가 아니라 "보안팀이 볼 목록"이다.
+  - id: user-approved-high-risk
+    severity: medium
+    category: policy_violation
+    title: 사용자가 고위험 행동을 승인
+    message: 높은 위험으로 판정돼 승인을 요청한 툴 호출을 사용자가 승인했습니다.
+    recommended_action: 원래 호출(요청 이벤트)과 걸린 룰을 확인하세요. `sga-server audit approvals`로 같은 사용자의 다른 승인도 함께 보세요.
+    response: alert
+    dedup: none
+    tags: [owasp-llm:LLM06]
+    when: {payload.kind: approval.resolved, payload.approved: "true"}
+    match:
+      type: regex
+      fields: [payload.max_severity]
+      pattern: '^(high|critical)$'
+
+  # MFA 피로 공격처럼, 반복되는 승인 창에 내용을 읽지 않고 누르는 패턴. 세션이 달라도 사용자 기준으로 센다.
+  # 오탐 주의: 정말 바쁜 작업 중 연속 승인. 미탐: 10분에 4번씩 꾸준히 승인하는 경우.
+  - id: approval-fatigue
+    severity: medium
+    category: policy_violation
+    title: 짧은 시간에 반복된 승인
+    message: 한 사용자가 10분 안에 5번 이상 실행 전 승인을 눌렀습니다. 경고를 읽지 않고 승인하고 있을 수 있습니다.
+    recommended_action: 해당 사용자의 최근 승인 목록을 확인하고, 에이전트가 같은 위험 행동을 반복 시도하는지 보세요.
+    response: alert
+    tags: [owasp-llm:LLM06]
+    when: {payload.kind: approval.resolved, payload.approved: "true"}
+    match:
+      type: rate
+      window_seconds: 600
+      threshold: 5
+      group_by: [principal.user_id]

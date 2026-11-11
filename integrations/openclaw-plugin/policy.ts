@@ -16,6 +16,7 @@ export type Verdict = {
   decision?: "allow" | "block" | "approve";
   action?: string;
   rules?: string[];
+  severity?: string;
   title?: string;
   reason?: string;
   error?: string;
@@ -116,7 +117,12 @@ export function toHookResult(
   return undefined;
 }
 
-export function fallbackResult(toolName: string, s: PluginSettings, reason: string): HookResult {
+export function fallbackResult(
+  toolName: string,
+  s: PluginSettings,
+  reason: string,
+  onResolution?: (d: string) => void,
+): HookResult {
   if (s.readOnlyTools.includes(toolName)) return undefined;
   return {
     requireApproval: {
@@ -125,6 +131,7 @@ export function fallbackResult(toolName: string, s: PluginSettings, reason: stri
       severity: "warning",
       timeoutMs: s.approvalTimeoutMs,
       allowedDecisions: ["allow-once", "deny"],
+      onResolution,
     },
   };
 }
@@ -137,13 +144,32 @@ export async function decide(
 ): Promise<{ result: HookResult; source: "daemon" | "degraded" | "fallback" }> {
   const req = buildRequest(event, ctx);
   const tool = String(event?.toolName ?? "unknown");
-  const onResolution = (decision: string) => {
-    deps.askDaemon({ op: "resolution", toolCallId: req.toolCallId, toolName: tool, decision }).catch(() => {});
+  // The person's answer to an approval prompt is the audit trail: record it on every path. The
+  // message carries its own context (rules, severity, request time) so it stands alone when the
+  // daemon restarted in between or is down (then the CLI records it from the policy cache).
+  const resolver = (source: "daemon" | "degraded" | "fallback", v?: Verdict) => {
+    const requestedAt = Date.now();
+    return (decision: string) => {
+      const msg = {
+        ...req,
+        op: "resolution",
+        decision,
+        source,
+        rules: v?.rules ?? [],
+        severity: v?.severity,
+        requestedAt,
+      };
+      deps
+        .askDaemon(msg)
+        .then((r) => (r.ok ? r : deps.askCli(msg)))
+        .catch(() => deps.askCli(msg))
+        .catch((e: Error) => deps.log?.("warn", `could not record approval ${decision} for ${tool}: ${e?.message}`));
+    };
   };
   let firstError = "";
   try {
     const v = await deps.askDaemon(req);
-    if (v.ok) return { result: toHookResult(v, s, "daemon", onResolution), source: "daemon" };
+    if (v.ok) return { result: toHookResult(v, s, "daemon", resolver("daemon", v)), source: "daemon" };
     firstError = v.error || "daemon error";
   } catch (e) {
     firstError = String((e as Error)?.message ?? e);
@@ -152,14 +178,17 @@ export async function decide(
     const v = await deps.askCli(req);
     if (v.ok) {
       deps.log?.("warn", `SG-Advance daemon unreachable (${firstError}); judged from cached policy`);
-      return { result: toHookResult(v, s, "degraded"), source: "degraded" };
+      return { result: toHookResult(v, s, "degraded", resolver("degraded", v)), source: "degraded" };
     }
     firstError = `${firstError}; cli: ${v.error ?? "error"}`;
   } catch (e) {
     firstError = `${firstError}; cli: ${String((e as Error)?.message ?? e)}`;
   }
   deps.log?.("warn", `SG-Advance unavailable (${firstError}); risk-tier fallback for ${tool}`);
-  return { result: fallbackResult(tool, s, "sensor unavailable"), source: "fallback" };
+  return {
+    result: fallbackResult(tool, s, "sensor unavailable", resolver("fallback")),
+    source: "fallback",
+  };
 }
 
 // ── transports ─────────────────────────────────────────────────────────────

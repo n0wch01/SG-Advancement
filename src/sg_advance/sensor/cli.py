@@ -214,6 +214,16 @@ def _cmd_evaluate(home: SensorHome, args: argparse.Namespace) -> int:
         print(json.dumps({"ok": False, "error": "no valid cached policy"}))
         return 3
     ctx = AdapterContext(sensor, user_id=args.user, hostname=socket.gethostname())
+    if req.get("op") == "resolution":  # the person's answer, recorded even while the daemon is down
+        from .plugin_api import record_resolution
+
+        try:
+            record_resolution(ctx, req)
+        except ValueError as e:
+            print(json.dumps({"ok": False, "error": str(e)}))
+            return 3
+        print(json.dumps({"ok": True}))
+        return 0
     print(json.dumps(judge(ctx, req, labels={"sga_verdict": "degraded"})))
     return 0
 

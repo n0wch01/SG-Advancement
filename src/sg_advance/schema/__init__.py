@@ -11,6 +11,7 @@ from .common import (
 )
 from .events import (
     AgentEvent,
+    ApprovalResolution,
     AssistantMessage,
     ComponentIntegrity,
     ConfigSnapshot,
@@ -36,6 +37,7 @@ from .events import (
 from .findings import Enforcement, Finding, ResponseAction, Severity, ThreatCategory
 
 __all__ = [
+    "ApprovalResolution",
     "SCHEMA_VERSION",
     "AgentEvent",
     "AgentRef",

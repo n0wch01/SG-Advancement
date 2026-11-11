@@ -153,6 +153,71 @@ def test_evaluate_cli_without_cache_says_so(tmp_path, monkeypatch, capsys) -> No
     assert json.loads(capsys.readouterr().out)["ok"] is False
 
 
+# ── approval answers (audit trail) ──────────────────────────────────────────
+
+
+def resolution(call: str, decision: str, **extra: Any) -> dict[str, Any]:
+    return req(call) | {"op": "resolution", "decision": decision, "source": "daemon"} | extra
+
+
+async def test_approval_answer_links_to_the_held_call(api, enrolled: Sensor) -> None:
+    server, path = api
+    [verdict] = await ask(path, req("c1", command="psql -c 'DELETE FROM users;'"))
+    assert verdict["decision"] == "approve" and verdict["severity"] == "high"
+    call = next(e for e in spooled(enrolled, "event") if e["payload"].get("call_id") == "c1")
+    held = [f for f in spooled(enrolled, "finding") if call["event_id"] in f["evidence_event_ids"]]
+    assert await ask(path, resolution("c1", "allow-once")) == [{"ok": True}]
+
+    ev = next(e for e in spooled(enrolled, "event") if e["payload"]["kind"] == "approval.resolved")
+    p = ev["payload"]
+    assert p["decision"] == "allow-once" and p["approved"] is True
+    assert p["request_event_id"] == call["event_id"]
+    assert set(p["finding_ids"]) == {f["finding_id"] for f in held}
+    assert p["rule_ids"] == ["destructive-sql"] and p["max_severity"] == "high"
+    assert p["wait_ms"] >= 0 and p["judged_by"] == "daemon"
+    assert ev["labels"]["requester_senderid"] == "alice-id"  # who started the run
+    f = next(f for f in spooled(enrolled, "finding") if f["rule_id"] == "user-approved-high-risk")
+    assert f["severity"] == "medium" and ev["event_id"] in f["evidence_event_ids"]
+
+
+async def test_denied_or_timed_out_answers_are_recorded_without_findings(api, enrolled: Sensor) -> None:
+    server, path = api
+    await ask(path, req("c1", command="psql -c 'DELETE FROM users;'"))
+    await ask(path, req("c2", command="psql -c 'DELETE FROM users;'"))
+    await ask(path, resolution("c1", "deny"), resolution("c2", "timeout"))
+    got = {
+        e["payload"]["call_id"]: e["payload"]["decision"]
+        for e in spooled(enrolled, "event")
+        if e["payload"]["kind"] == "approval.resolved"
+    }
+    assert got == {"c1": "deny", "c2": "timeout"}
+    assert not [f for f in spooled(enrolled, "finding") if f["rule_id"] == "user-approved-high-risk"]
+
+
+async def test_answer_after_a_daemon_restart_uses_the_plugins_context(api, enrolled: Sensor) -> None:
+    server, path = api  # nothing pending: the daemon never saw this prompt
+    msg = resolution("c7", "allow-once", rules=["destructive-sql"], severity="critical", requestedAt=0)
+    assert await ask(path, msg) == [{"ok": True}]
+    p = next(e for e in spooled(enrolled, "event") if e["payload"]["kind"] == "approval.resolved")["payload"]
+    assert p["request_event_id"] is None and p["rule_ids"] == ["destructive-sql"]
+    assert p["max_severity"] == "critical" and p["requested_at"].startswith("1970-01-01")
+
+
+async def test_unknown_decision_is_refused(api) -> None:
+    _, path = api
+    [out] = await ask(path, resolution("c1", "maybe"))
+    assert out["ok"] is False and "unknown decision" in out["error"]
+
+
+def test_evaluate_cli_records_answers_while_the_daemon_is_down(enrolled: Sensor, monkeypatch, capsys) -> None:
+    msg = resolution("c8", "allow-once", source="fallback", rules=[])
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(msg)))
+    assert sensor_main(["--home", str(enrolled.home.root), "evaluate", "--user", "alice"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": True}
+    p = next(e for e in spooled(enrolled, "event") if e["payload"]["kind"] == "approval.resolved")["payload"]
+    assert p["judged_by"] == "fallback" and p["call_id"] == "c8"
+
+
 def _node_ok() -> bool:
     node = shutil.which("node")
     if not node:

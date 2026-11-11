@@ -5,6 +5,7 @@
     sga-server manifest add openclaw@2026.11.3 [--approve] [--by NAME]
     sga-server manifest approve|revoke openclaw@2026.11.3 [--by NAME]
     sga-server manifest pin sg-advance --dir integrations/openclaw-plugin --version 0.1.0
+    sga-server audit approvals [--user U] [--all] [--limit N]   # what users approved (C)
 
 The manifest commands call the admin API (``--server``, default ``$SGA_SERVER`` or
 http://127.0.0.1:8000) with ``$SGA_ADMIN_TOKEN``; the token is never printed.
@@ -98,10 +99,44 @@ def manifest_main(argv: list[str]) -> int:
     return 0
 
 
+def audit_main(argv: list[str]) -> int:
+    import os
+    import urllib.parse
+
+    ap = argparse.ArgumentParser(prog="sga-server audit", description="approval audit")
+    ap.add_argument("--server", default=os.environ.get("SGA_SERVER", "http://127.0.0.1:8000"))
+    sub = ap.add_subparsers(dest="what", required=True)
+    p = sub.add_parser("approvals", help="answers to pre-execution approval prompts, newest first")
+    p.add_argument("--user")
+    p.add_argument("--all", action="store_true", help="include denials, timeouts and cancellations")
+    p.add_argument("--limit", type=int, default=50)
+    args = ap.parse_args(argv)
+    query = {"limit": args.limit} | ({"user_id": args.user} if args.user else {})
+    if not args.all:
+        query["approved"] = "true"
+    rows = _api(args.server, "GET", "/v1/admin/approvals?" + urllib.parse.urlencode(query))
+    for r in rows:  # type: ignore[union-attr]
+        flags = ",".join(f["rule_id"] for f in r["flagged"])
+        args_text = ""
+        if r.get("held_call"):
+            args_text = str(r["held_call"]["arguments"])[:80]
+        wait = f"{r['wait_ms'] / 1000:.0f}s" if r.get("wait_ms") is not None else "?"
+        print(
+            f"{r['ts'][:19]}  {r['user_id']:<12} {r['decision']:<11} {r['tool']:<10} "
+            f"sev={r['max_severity'] or '-':<8} wait={wait:<5} via={r['judged_by']:<8} "
+            f"rules={','.join(r['rule_ids']) or '-'}  {('FLAG ' + flags) if flags else ''}"
+        )
+        if args_text:
+            print(f"    {args_text}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["manifest"]:
         return manifest_main(argv[1:])
+    if argv[:1] == ["audit"]:
+        return audit_main(argv[1:])
     ap = argparse.ArgumentParser(prog="sga-server", description="sg-advance control plane")
     ap.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 inside containers")
     ap.add_argument("--port", type=int, default=8000)

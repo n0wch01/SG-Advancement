@@ -126,3 +126,76 @@ test("heartbeat works on hosts without managed lifecycle", async () => {
   const cleanup = startHeartbeat(async () => ({ ok: true }), undefined, { plugin: "sg-advance" });
   await cleanup(); // feature-detected: nothing to register, still stoppable
 });
+
+// ── approval answers (audit trail) ──────────────────────────────────────────
+
+const tick = () => new Promise((r) => setTimeout(r, 10));
+
+function recorder(okDaemon: boolean) {
+  const daemon: any[] = [];
+  const cli: any[] = [];
+  return {
+    daemon,
+    cli,
+    deps: {
+      askDaemon: async (req: any) => {
+        if (req.op === "resolution") {
+          daemon.push(req);
+          if (!okDaemon) throw new Error("ECONNREFUSED");
+          return { ok: true } as Verdict;
+        }
+        return { ok: true, decision: "approve", rules: ["destructive-sql"], severity: "high" } as Verdict;
+      },
+      askCli: async (req: any) => {
+        cli.push(req);
+        return { ok: true } as Verdict;
+      },
+    },
+  };
+}
+
+test("approval answer goes to the daemon with its own context", async () => {
+  const r = recorder(true);
+  const { result } = await decide(event, ctx, s, r.deps);
+  (result as any).requireApproval.onResolution("allow-once");
+  await tick();
+  assert.equal(r.daemon.length, 1);
+  const m = r.daemon[0];
+  assert.equal(m.op, "resolution");
+  assert.equal(m.decision, "allow-once");
+  assert.equal(m.source, "daemon");
+  assert.equal(m.toolCallId, "c1");
+  assert.deepEqual(m.rules, ["destructive-sql"]);
+  assert.equal(m.severity, "high");
+  assert.equal(typeof m.requestedAt, "number");
+  assert.equal(r.cli.length, 0);
+});
+
+test("approval answer falls back to the CLI when the daemon is gone", async () => {
+  const r = recorder(false);
+  const { result } = await decide(event, ctx, s, r.deps);
+  (result as any).requireApproval.onResolution("deny");
+  await tick();
+  assert.equal(r.cli.length, 1);
+  assert.equal(r.cli[0].decision, "deny");
+});
+
+test("risk-tier fallback approvals are recorded too", async () => {
+  const cli: any[] = [];
+  const { result, source } = await decide(event, ctx, s, {
+    askDaemon: down,
+    askCli: async (req: any) => {
+      if (req.op === "resolution") {
+        cli.push(req);
+        return { ok: true } as Verdict;
+      }
+      throw new Error("no cache");
+    },
+  });
+  assert.equal(source, "fallback");
+  (result as any).requireApproval.onResolution("allow-once");
+  await tick();
+  assert.equal(cli.length, 1);
+  assert.equal(cli[0].source, "fallback");
+  assert.deepEqual(cli[0].rules, []);
+});

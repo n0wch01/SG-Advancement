@@ -23,7 +23,7 @@ from .. import __version__
 from ..policy import PolicyBundle, key_id, load_or_create_signing_key, public_key_b64
 from ..redact import redact_event, redact_text
 from ..schema import AgentEvent, Finding, Severity
-from . import manifests
+from . import audit, manifests
 from .auth import (
     DEVICE_PREFIX,
     ENROLL_PREFIX,
@@ -467,4 +467,5 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.include_router(sensor)
     app.include_router(admin)
     app.include_router(manifests.router)
+    app.include_router(audit.router)
     return app

@@ -1,0 +1,51 @@
+# Approval audit (C): approval.resolved events from the OpenClaw plugin.
+# Decisions (2026-11-12): finding only when a user APPROVED something a high/critical rule held;
+# approval fatigue = 5 approvals by one user within 10 minutes; timeout/cancel/deny are recorded only.
+cases:
+  - name: high 룰에 걸린 행동을 사용자가 승인
+    agent: openclaw
+    sensor: openclaw_plugin
+    events:
+      - {kind: approval.resolved, call_id: c1, tool: exec, decision: allow-once, approved: true, rule_ids: [destructive-sql], max_severity: high}
+    expect: [user-approved-high-risk]
+
+  - name: critical 룰 승인 (캐시 정책 경로에서도)
+    agent: openclaw
+    sensor: openclaw_plugin
+    events:
+      - {kind: approval.resolved, call_id: c1, tool: exec, decision: allow-once, approved: true, max_severity: critical, judged_by: degraded}
+    expect: [user-approved-high-risk]
+
+  - name: 거절, 시간 초과, 취소, medium 룰 승인은 finding 없음
+    agent: openclaw
+    sensor: openclaw_plugin
+    events:
+      - {kind: approval.resolved, call_id: c1, tool: exec, decision: deny, approved: false, max_severity: critical}
+      - {kind: approval.resolved, call_id: c2, tool: exec, decision: timeout, approved: false, max_severity: high}
+      - {kind: approval.resolved, call_id: c3, tool: exec, decision: cancelled, approved: false, max_severity: high}
+      - {kind: approval.resolved, call_id: c4, tool: exec, decision: allow-once, approved: true, max_severity: medium}
+      - {kind: approval.resolved, call_id: c5, tool: exec, decision: allow-once, approved: true, judged_by: fallback}
+    expect_not: [user-approved-high-risk, approval-fatigue]
+
+  - name: 한 사용자가 10분 안에 5번 승인 (승인 피로), 세션이 달라도
+    agent: openclaw
+    sensor: openclaw_plugin
+    events:
+      - {at: 0, session: s1, kind: approval.resolved, call_id: c1, tool: exec, decision: allow-once, approved: true}
+      - {at: 60, session: s2, kind: approval.resolved, call_id: c2, tool: exec, decision: allow-once, approved: true}
+      - {at: 120, session: s1, kind: approval.resolved, call_id: c3, tool: exec, decision: allow-once, approved: true}
+      - {at: 300, session: s3, kind: approval.resolved, call_id: c4, tool: exec, decision: allow-once, approved: true}
+      - {at: 540, session: s1, kind: approval.resolved, call_id: c5, tool: exec, decision: allow-once, approved: true}
+    expect: [approval-fatigue]
+
+  - name: 승인 사이가 넉넉하거나 거절이 섞이면 피로 아님
+    agent: openclaw
+    sensor: openclaw_plugin
+    events:
+      - {at: 0, kind: approval.resolved, call_id: c1, tool: exec, decision: allow-once, approved: true}
+      - {at: 200, kind: approval.resolved, call_id: c2, tool: exec, decision: allow-once, approved: true}
+      - {at: 400, kind: approval.resolved, call_id: c3, tool: exec, decision: deny, approved: false}
+      - {at: 500, kind: approval.resolved, call_id: c4, tool: exec, decision: allow-once, approved: true}
+      - {at: 700, kind: approval.resolved, call_id: c5, tool: exec, decision: allow-once, approved: true}
+      - {at: 900, kind: approval.resolved, call_id: c6, tool: exec, decision: allow-once, approved: true}
+    expect_not: [approval-fatigue]

@@ -83,6 +83,143 @@
       "title": "AgentType",
       "type": "string"
     },
+    "ApprovalResolution": {
+      "additionalProperties": false,
+      "description": "A person's answer to a pre-execution approval prompt (``require_approval``).\n\nLinks back to the ``tool.call`` event and findings that asked for it, so security can audit\nwhat users approved after the fact. ``approver`` is who pressed the button when the agent\nreports it; OpenClaw plugin approvals do not, so it is usually ``None`` (see the requester labels).",
+      "properties": {
+        "kind": {
+          "const": "approval.resolved",
+          "default": "approval.resolved",
+          "title": "Kind",
+          "type": "string"
+        },
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "allow-once",
+            "allow-always",
+            "deny",
+            "timeout",
+            "cancelled"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "approved": {
+          "description": "decision is allow-once or allow-always",
+          "title": "Approved",
+          "type": "boolean"
+        },
+        "rule_ids": {
+          "default": [],
+          "description": "Rules that asked for approval",
+          "items": {
+            "type": "string"
+          },
+          "title": "Rule Ids",
+          "type": "array"
+        },
+        "max_severity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Highest severity among those rules",
+          "title": "Max Severity"
+        },
+        "request_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The tool.call event that was held",
+          "title": "Request Event Id"
+        },
+        "finding_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Finding Ids",
+          "type": "array"
+        },
+        "requested_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested At"
+        },
+        "wait_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Time the prompt was open",
+          "title": "Wait Ms"
+        },
+        "judged_by": {
+          "default": "daemon",
+          "description": "Which path asked: daemon, cached-policy CLI, or risk-tier fallback",
+          "enum": [
+            "daemon",
+            "degraded",
+            "fallback"
+          ],
+          "title": "Judged By",
+          "type": "string"
+        },
+        "approver": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approver"
+        }
+      },
+      "required": [
+        "call_id",
+        "tool",
+        "decision",
+        "approved"
+      ],
+      "title": "ApprovalResolution",
+      "type": "object"
+    },
     "AssistantMessage": {
       "additionalProperties": false,
       "properties": {
@@ -1281,6 +1418,7 @@
     "payload": {
       "discriminator": {
         "mapping": {
+          "approval.resolved": "#/$defs/ApprovalResolution",
           "config.snapshot": "#/$defs/ConfigSnapshot",
           "integrity.report": "#/$defs/IntegrityReport",
           "inventory.snapshot": "#/$defs/InventorySnapshot",
@@ -1332,6 +1470,9 @@
         },
         {
           "$ref": "#/$defs/IntegrityReport"
+        },
+        {
+          "$ref": "#/$defs/ApprovalResolution"
         }
       ],
       "title": "Payload"

@@ -6,6 +6,7 @@ import json
 import time
 from collections import OrderedDict
 from pathlib import Path
+from typing import Any
 
 
 class PluginRegistry:
@@ -32,6 +33,8 @@ class PluginRegistry:
         self.lost_after = lost_after
         self.state_path = state_path
         self.tool_plugins: dict[str, str] = {}  # tool name -> plugin id, filled by the WS adapter
+        # call id -> what asked for approval (event/finding ids, rules), until the user answers
+        self._pending: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self.expected = False
         self.last_contact: float | None = None  # wall clock (epoch seconds)
         self.lost_reported = False
@@ -123,3 +126,14 @@ class PluginRegistry:
 
     def seen(self, call_id: str) -> bool:
         return call_id in self._seen
+
+    # ── approvals waiting for a person ───────────────────────────────────────
+
+    def remember_approval(self, call_id: str, context: dict[str, Any], keep: int = 5_000) -> None:
+        self._pending[call_id] = context
+        self._pending.move_to_end(call_id)
+        while len(self._pending) > keep:  # prompts that never resolved (gateway restart, …)
+            self._pending.popitem(last=False)
+
+    def take_approval(self, call_id: str) -> dict[str, Any] | None:
+        return self._pending.pop(call_id, None)

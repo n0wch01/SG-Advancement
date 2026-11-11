@@ -56,6 +56,21 @@ def plugin_event(
         provider = {"kind": "plugin", "plugin_id": tool_plugins[tool]}
     else:
         provider = {"kind": "builtin"} if tool_plugins else {"kind": "unknown"}
+    return _plugin_envelope(
+        req,
+        user_id=user_id,
+        hostname=hostname,
+        payload={
+            "kind": "tool.call",
+            "call_id": str(req.get("toolCallId") or f"plugin:{time.time_ns()}"),
+            "tool": tool,
+            "provider": provider,
+            "arguments": arguments,
+        },
+    )
+
+
+def _plugin_labels(req: dict[str, Any]) -> dict[str, str]:
     labels = {"sga_source": "openclaw_plugin"}
     requester = req.get("requester") if isinstance(req.get("requester"), dict) else {}
     for key in ("channel", "senderId"):  # who asked for this run (M5b attributes users from it)
@@ -63,6 +78,12 @@ def plugin_event(
             labels[f"requester_{key.lower()}"] = requester[key]
     if isinstance(req.get("toolKind"), str):
         labels["openclaw.tool_kind"] = req["toolKind"]
+    return labels
+
+
+def _plugin_envelope(
+    req: dict[str, Any], *, user_id: str, hostname: str | None, payload: dict[str, Any]
+) -> AgentEvent:
     return AgentEvent.model_validate(
         {
             "ts": datetime.now(UTC),
@@ -74,16 +95,18 @@ def plugin_event(
                 "run_id": req.get("runId") if isinstance(req.get("runId"), str) else None,
             },
             "source": {"sensor": "openclaw_plugin"},
-            "payload": {
-                "kind": "tool.call",
-                "call_id": str(req.get("toolCallId") or f"plugin:{time.time_ns()}"),
-                "tool": tool,
-                "provider": provider,
-                "arguments": arguments,
-            },
-            "labels": labels,
+            "payload": payload,
+            "labels": _plugin_labels(req),
         }
     )
+
+
+_SEVERITY_RANK = ["info", "low", "medium", "high", "critical"]
+
+
+def max_severity(verdict: Verdict) -> str | None:
+    sev = [str(h.rule.severity) for h in verdict.hits]
+    return max(sev, key=_SEVERITY_RANK.index) if sev else None
 
 
 def plugin_response(verdict: Verdict) -> tuple[dict[str, Any], Enforcement | None]:
@@ -94,6 +117,8 @@ def plugin_response(verdict: Verdict) -> tuple[dict[str, Any], Enforcement | Non
     reason = "; ".join(dict.fromkeys(titles)) or "policy"
     sensor = SensorType.OPENCLAW_PLUGIN
     base = {"ok": True, "action": action.value, "rules": rules}
+    if severity := max_severity(verdict):
+        base["severity"] = severity
     if action in _BLOCKING:
         detail = "pre-exec: openclaw plugin blocked the tool call"
         return base | {"decision": "block", "reason": f"SG-Advance: {reason}"}, Enforcement(
@@ -119,8 +144,70 @@ def judge(
     result = ctx.evaluate(event)
     response, enforcement = plugin_response(result.verdict)
     ctx.record(result, enforcement)
-    ctx.plugins.mark(event.payload.call_id)  # type: ignore[union-attr]
+    call_id = event.payload.call_id  # type: ignore[union-attr]
+    ctx.plugins.mark(call_id)
+    if response.get("decision") == "approve":  # keep what asked, to link the person's answer
+        ctx.plugins.remember_approval(
+            call_id,
+            {
+                "event_id": result.event.event_id,
+                "finding_ids": [f.finding_id for f in result.verdict.findings],
+                "rule_ids": result.verdict.rule_ids,
+                "max_severity": response.get("severity"),
+                "requested_at": result.event.ts,
+            },
+        )
     return response
+
+
+DECISIONS = ("allow-once", "allow-always", "deny", "timeout", "cancelled")
+
+
+def resolution_event(
+    ctx: AdapterContext, req: dict[str, Any], pending: dict[str, Any] | None = None
+) -> AgentEvent:
+    """``approval.resolved`` from the plugin's ``onResolution``. ``pending`` (daemon memory) links
+    it to the held tool.call and its findings; without it (daemon restarted, or the cached-policy
+    CLI asked) the plugin's own copy of rules, severity and request time is used."""
+    decision = req.get("decision")
+    if decision not in DECISIONS:
+        raise ValueError(f"unknown decision {decision!r}")
+    pending = pending or {}
+    requested_at = pending.get("requested_at")
+    if requested_at is None and isinstance(req.get("requestedAt"), int | float):
+        requested_at = datetime.fromtimestamp(req["requestedAt"] / 1000, UTC)
+    now = datetime.now(UTC)
+    wait_ms = int((now - requested_at).total_seconds() * 1000) if requested_at else None
+    judged_by = req.get("source") if req.get("source") in ("daemon", "degraded", "fallback") else "daemon"
+    rules = pending.get("rule_ids") or [r for r in (req.get("rules") or []) if isinstance(r, str)]
+    return _plugin_envelope(
+        req,
+        user_id=ctx.user_id,
+        hostname=ctx.hostname,
+        payload={
+            "kind": "approval.resolved",
+            "call_id": str(req.get("toolCallId") or "unknown"),
+            "tool": str(req.get("toolName") or "unknown"),
+            "decision": decision,
+            "approved": decision in ("allow-once", "allow-always"),
+            "rule_ids": rules,
+            "max_severity": pending.get("max_severity") or req.get("severity"),
+            "request_event_id": pending.get("event_id"),
+            "finding_ids": pending.get("finding_ids") or [],
+            "requested_at": requested_at,
+            "wait_ms": max(wait_ms, 0) if wait_ms is not None else None,
+            "judged_by": judged_by,
+        },
+    )
+
+
+def record_resolution(ctx: AdapterContext, req: dict[str, Any]) -> AgentEvent:
+    pending = ctx.plugins.take_approval(str(req.get("toolCallId") or ""))
+    event = resolution_event(ctx, req, pending)
+    ctx.record(ctx.evaluate(event))
+    p = event.payload
+    log.info("approval %s for %s (%s)", p.decision, p.tool, ", ".join(p.rule_ids) or "no rules")  # type: ignore[union-attr]
+    return event
 
 
 def record_health(ctx: AdapterContext, status: str, detail: str, last_seen: float | None = None) -> None:
@@ -210,9 +297,10 @@ class LocalApiServer:
             except Exception as e:  # the plugin falls back on its own; tell it why
                 log.exception("plugin request failed")
                 return {"ok": False, "error": str(e)}
-        if op == "resolution":  # user's answer to a requireApproval (audit in M7)
-            log.info(
-                "approval %s for %s: %s", req.get("decision"), req.get("toolName"), req.get("toolCallId")
-            )
+        if op == "resolution":  # a person's answer to a requireApproval prompt (audit trail)
+            try:
+                record_resolution(self.ctx, req)
+            except ValueError as e:
+                return {"ok": False, "error": str(e)}
             return {"ok": True}
         return {"ok": False, "error": f"unknown op {op!r}"}
