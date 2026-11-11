@@ -200,3 +200,35 @@ def test_repeat_counts_full_run_but_keeps_bounded_evidence() -> None:
     assert "7 consecutive" in vs[-1].hits[0].explanation
     assert len(vs[-1].hits[0].evidence_event_ids) == 3
     assert not eng.process(bash("different")).hits
+
+
+def test_allowlist_allow_trusted_uses_live_sensor_sets() -> None:
+    """Bundled OpenClaw plugins pass once the sensor verified them; look-alikes still hit."""
+    from sg_advance.detect import Engine, RuleSet
+    from sg_advance.detect.rules import Rule
+    from sg_advance.shorthand import build_event
+
+    rule = Rule.model_validate(
+        {
+            "id": "unapproved-plugin-installed",
+            "severity": "high",
+            "category": "supply_chain",
+            "title": "t",
+            "when": {"payload.kind": "inventory.snapshot"},
+            "match": {
+                "type": "allowlist",
+                "field": "payload.plugins[].plugin_id",
+                "allow_trusted": "openclaw_plugins",
+            },
+        }
+    )
+    trusted: dict[str, set[str]] = {}
+    engine = Engine(RuleSet([rule]), trusted)
+    inv = {
+        "kind": "inventory.snapshot",
+        "plugins": [{"plugin_id": "memory-core"}, {"plugin_id": "ai-image-toolkit"}],
+    }
+    assert "memory-core" in engine.process(build_event(inv, index=0)).hits[0].key
+    trusted["openclaw_plugins"] = {"memory-core"}  # updated in place after an integrity scan
+    hit = engine.process(build_event(inv, index=1)).hits[0]
+    assert hit.key == "ai-image-toolkit"

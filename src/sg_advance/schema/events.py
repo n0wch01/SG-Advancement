@@ -28,6 +28,7 @@ class EventKind(StrEnum):
     INVENTORY_SNAPSHOT = "inventory.snapshot"
     SENSOR_HEALTH = "sensor.health"
     CONFIG_SNAPSHOT = "config.snapshot"
+    INTEGRITY_REPORT = "integrity.report"
 
 
 class ToolProviderKind(StrEnum):
@@ -200,6 +201,39 @@ class ConfigSnapshot(StrictModel):
     runtimes: tuple[RuntimePin, ...] = ()
 
 
+class ComponentIntegrity(StrictModel):
+    """One installed unit of agent code compared with what its publisher signed."""
+
+    component: str = Field(description='"core" or "plugin:<id>"')
+    package: str | None = Field(
+        default=None, description='npm package expected to contain it, e.g. "openclaw"'
+    )
+    version: str | None = None
+    origin: str | None = Field(
+        default=None, description="openclaw: core | bundled | global | config | workspace"
+    )
+    path: str | None = Field(default=None, description="Installed directory that was hashed")
+    digest: str = Field(description="integrity.tree_digest of the installed files")
+    integrity: Literal["verified", "mismatch", "pending", "unknown"] = Field(
+        description="verified: matches a signed package; mismatch: differs from it (tampered); "
+        "pending: no verified digests for this version yet; unknown: no package or pin vouches for it"
+    )
+    trust: Literal["approved", "trusted", "cooling", "revoked", "rejected", "unverified"] = Field(
+        default="unverified", description="Status of the package version it belongs to (policy manifests)"
+    )
+    enabled: bool = True
+
+
+class IntegrityReport(StrictModel):
+    """Installed agent code vs. known-good digests from the policy. Sent when anything changes."""
+
+    kind: Literal[EventKind.INTEGRITY_REPORT] = EventKind.INTEGRITY_REPORT
+    product: str = Field(description="e.g. openclaw")
+    version: str | None = None
+    core: ComponentIntegrity | None = None
+    plugins: tuple[ComponentIntegrity, ...] = ()
+
+
 Payload = Annotated[
     SessionStart
     | SessionEnd
@@ -211,7 +245,8 @@ Payload = Annotated[
     | NetEgress
     | InventorySnapshot
     | SensorHealth
-    | ConfigSnapshot,
+    | ConfigSnapshot
+    | IntegrityReport,
     Field(discriminator="kind"),
 ]
 

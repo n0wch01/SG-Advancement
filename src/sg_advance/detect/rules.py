@@ -75,6 +75,11 @@ class AllowlistMatch(_Model):
     field: str
     allow: tuple[str, ...] = ()
     ignore_case: bool = True
+    allow_trusted: str | None = Field(
+        default=None,
+        description="Also allow values in this sensor-maintained trusted set (e.g. openclaw_plugins: "
+        "plugins whose installed code matches a signed, approved package). Empty outside a sensor.",
+    )
 
 
 class RateMatch(_Model):

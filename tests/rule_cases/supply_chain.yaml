@@ -33,3 +33,42 @@ cases:
             description: Read a file from the workspace. Supports .txt and .md files.
       - {kind: tool.call, tool: read_file, provider: {kind: mcp, mcp_server: filesystem}, arguments: {path: README.md}}
     expect_not: [unapproved-mcp-server-url, mcp-tool-description-poisoning, unapproved-mcp-tool-call]
+
+  # ── 설치된 코드 무결성 (M5d): 서명된 npm 배포본과 비교한 integrity.report ──
+  - name: 기본 플러그인 파일이 배포본과 다름 (변조)
+    agent: openclaw
+    sensor: openclaw_integrity
+    events:
+      - kind: integrity.report
+        product: openclaw
+        version: 2026.11.3
+        core: {component: core, package: openclaw, version: 2026.11.3, digest: c1, integrity: verified, trust: approved}
+        plugins:
+          - {component: "plugin:ollama", package: openclaw, origin: bundled, digest: x, integrity: mismatch, trust: approved}
+          - {component: "plugin:memory-core", package: openclaw, origin: bundled, digest: m, integrity: verified, trust: approved}
+    expect: [openclaw-plugin-tampered]
+    expect_not: [openclaw-core-tampered, openclaw-version-unapproved]
+
+  - name: OpenClaw 본체 파일이 배포본과 다름
+    agent: openclaw
+    sensor: openclaw_integrity
+    events:
+      - {kind: integrity.report, product: openclaw, core: {component: core, digest: z, integrity: mismatch, trust: trusted}}
+    expect: [openclaw-core-tampered]
+
+  - name: 출시 3일 미만 버전, 검증 대기 버전, 서명 검증 실패 버전
+    agent: openclaw
+    sensor: openclaw_integrity
+    events:
+      - {kind: integrity.report, product: openclaw, core: {component: core, digest: a, integrity: verified, trust: cooling}}
+      - {kind: integrity.report, product: openclaw, core: {component: core, digest: b, integrity: pending}}
+      - {kind: integrity.report, product: openclaw, core: {component: core, digest: c, integrity: pending, trust: rejected}}
+    expect: [openclaw-version-unapproved]
+
+  - name: 승인됐거나 대기 기간이 지난 서명 버전은 정상
+    agent: openclaw
+    sensor: openclaw_integrity
+    events:
+      - {kind: integrity.report, product: openclaw, core: {component: core, digest: a, integrity: verified, trust: approved}}
+      - {kind: integrity.report, product: openclaw, core: {component: core, digest: b, integrity: verified, trust: trusted}}
+    expect_not: [openclaw-version-unapproved, openclaw-core-tampered, openclaw-plugin-tampered]

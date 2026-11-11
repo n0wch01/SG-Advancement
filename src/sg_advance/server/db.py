@@ -105,6 +105,29 @@ class FindingRow(Base):
     doc: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class PackageManifestRow(Base):
+    """Known-good digests of one published package version (M5d), or why it failed verification.
+
+    ``approved`` / ``revoked`` are security decisions; otherwise trust follows the release cooldown
+    (integrity.effective_status). ``error`` set means verification failed: shipped as "rejected"."""
+
+    __tablename__ = "package_manifests"
+
+    spec: Mapped[str] = mapped_column(String(300), primary_key=True)  # "<package>@<version>"
+    package: Mapped[str] = mapped_column(String(214), index=True)
+    version: Mapped[str] = mapped_column(String(80))
+    integrity: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    source_repo: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    components: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    approved: Mapped[bool] = mapped_column(default=False)
+    revoked: Mapped[bool] = mapped_column(default=False)
+    decided_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    verified_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
 def make_engine(url: str) -> Engine:
     if url.startswith("sqlite"):
         path = url.split("///", 1)[-1]

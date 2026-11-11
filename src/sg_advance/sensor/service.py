@@ -16,6 +16,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 LABEL = "com.sg-advance.sensor"
@@ -48,8 +49,18 @@ def launchd_plist(home: Path, run_args: list[str], exe: str | None = None) -> by
         "StandardOutPath": str(logs / "sensor.log"),
         "StandardErrorPath": str(logs / "sensor.log"),
         "WorkingDirectory": str(home),
+        # launchd starts jobs with a bare PATH; the integrity scan runs `openclaw` (a node script).
+        # PATH is not secret; tokens still come from <home>/openclaw-token.
+        "EnvironmentVariables": {"PATH": service_path()},
     }
     return plistlib.dumps(doc)
+
+
+def service_path(env_path: str | None = None) -> str:
+    """The installer's PATH plus the usual system dirs, so `openclaw` and `node` resolve."""
+    raw = (env_path if env_path is not None else os.environ.get("PATH", "")).split(":")
+    system = ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+    return ":".join(dict.fromkeys(p for p in [*raw, *system] if p))  # keep order, drop repeats
 
 
 def systemd_unit(home: Path, run_args: list[str], exe: str | None = None) -> str:
@@ -81,6 +92,9 @@ def install(home: Path, run_args: list[str], dry_run: bool = False) -> str:
     _launchctl("bootout", f"{domain}/{LABEL}")  # replace an older definition, ignore "not loaded"
     path.write_bytes(data)
     res = _launchctl("bootstrap", domain, str(path))
+    if res.returncode != 0:  # bootout finishes asynchronously; "5: Input/output error" until it does
+        time.sleep(2)
+        res = _launchctl("bootstrap", domain, str(path))
     if res.returncode != 0:
         raise RuntimeError(f"launchctl bootstrap failed: {res.stderr.strip() or res.stdout.strip()}")
     return f"installed {path} and started {LABEL}"

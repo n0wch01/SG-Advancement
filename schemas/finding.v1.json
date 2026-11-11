@@ -235,6 +235,7 @@
         "openclaw_gateway",
         "openclaw_plugin",
         "openclaw_config",
+        "openclaw_integrity",
         "claude_code_hook",
         "gemini_cli_hook",
         "codex_cli_hook",

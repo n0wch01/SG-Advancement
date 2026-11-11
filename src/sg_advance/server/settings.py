@@ -18,6 +18,10 @@ class Settings:
     admin_token: str | None = None
     signing_key_path: Path = Path(DEFAULT_SIGNING_KEY)
     max_batch: int = 500
+    # M5d package verification: npm registry signature + Sigstore provenance → known-good digests.
+    release_cooldown_days: float = 3.0  # verified releases are trusted only after this long
+    auto_verify: bool = True  # verify versions sensors report, without waiting for an admin
+    npm_registry: str = "https://registry.npmjs.org"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -27,4 +31,7 @@ class Settings:
             admin_token=os.environ.get("SGA_ADMIN_TOKEN") or None,
             signing_key_path=Path(os.environ.get("SGA_SIGNING_KEY", DEFAULT_SIGNING_KEY)),
             max_batch=int(os.environ.get("SGA_MAX_BATCH", "500")),
+            release_cooldown_days=float(os.environ.get("SGA_RELEASE_COOLDOWN_DAYS", "3")),
+            auto_verify=os.environ.get("SGA_AUTO_VERIFY", "1") not in ("0", "false", "no"),
+            npm_registry=os.environ.get("SGA_NPM_REGISTRY", "https://registry.npmjs.org"),
         )

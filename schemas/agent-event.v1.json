@@ -108,6 +108,110 @@
       "title": "AssistantMessage",
       "type": "object"
     },
+    "ComponentIntegrity": {
+      "additionalProperties": false,
+      "description": "One installed unit of agent code compared with what its publisher signed.",
+      "properties": {
+        "component": {
+          "description": "\"core\" or \"plugin:<id>\"",
+          "title": "Component",
+          "type": "string"
+        },
+        "package": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "npm package expected to contain it, e.g. \"openclaw\"",
+          "title": "Package"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "openclaw: core | bundled | global | config | workspace",
+          "title": "Origin"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Installed directory that was hashed",
+          "title": "Path"
+        },
+        "digest": {
+          "description": "integrity.tree_digest of the installed files",
+          "title": "Digest",
+          "type": "string"
+        },
+        "integrity": {
+          "description": "verified: matches a signed package; mismatch: differs from it (tampered); pending: no verified digests for this version yet; unknown: no package or pin vouches for it",
+          "enum": [
+            "verified",
+            "mismatch",
+            "pending",
+            "unknown"
+          ],
+          "title": "Integrity",
+          "type": "string"
+        },
+        "trust": {
+          "default": "unverified",
+          "description": "Status of the package version it belongs to (policy manifests)",
+          "enum": [
+            "approved",
+            "trusted",
+            "cooling",
+            "revoked",
+            "rejected",
+            "unverified"
+          ],
+          "title": "Trust",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "component",
+        "digest",
+        "integrity"
+      ],
+      "title": "ComponentIntegrity",
+      "type": "object"
+    },
     "ConfigSnapshot": {
       "additionalProperties": false,
       "description": "Security-relevant settings of an agent installation, read from its own config.\n\nOnly allowlisted fields are copied: the config file also holds tokens and account details,\nwhich never leave the endpoint. Emitted at sensor start and whenever these fields change.",
@@ -337,6 +441,59 @@
         "scope"
       ],
       "title": "ExecPolicy",
+      "type": "object"
+    },
+    "IntegrityReport": {
+      "additionalProperties": false,
+      "description": "Installed agent code vs. known-good digests from the policy. Sent when anything changes.",
+      "properties": {
+        "kind": {
+          "const": "integrity.report",
+          "default": "integrity.report",
+          "title": "Kind",
+          "type": "string"
+        },
+        "product": {
+          "description": "e.g. openclaw",
+          "title": "Product",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "core": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ComponentIntegrity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "plugins": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ComponentIntegrity"
+          },
+          "title": "Plugins",
+          "type": "array"
+        }
+      },
+      "required": [
+        "product"
+      ],
+      "title": "IntegrityReport",
       "type": "object"
     },
     "InventorySnapshot": {
@@ -678,6 +835,7 @@
         "openclaw_gateway",
         "openclaw_plugin",
         "openclaw_config",
+        "openclaw_integrity",
         "claude_code_hook",
         "gemini_cli_hook",
         "codex_cli_hook",
@@ -1124,6 +1282,7 @@
       "discriminator": {
         "mapping": {
           "config.snapshot": "#/$defs/ConfigSnapshot",
+          "integrity.report": "#/$defs/IntegrityReport",
           "inventory.snapshot": "#/$defs/InventorySnapshot",
           "llm.call": "#/$defs/LlmCall",
           "message.assistant": "#/$defs/AssistantMessage",
@@ -1170,6 +1329,9 @@
         },
         {
           "$ref": "#/$defs/ConfigSnapshot"
+        },
+        {
+          "$ref": "#/$defs/IntegrityReport"
         }
       ],
       "title": "Payload"

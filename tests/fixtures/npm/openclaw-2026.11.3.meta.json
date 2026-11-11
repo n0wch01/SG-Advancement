@@ -1,0 +1,35 @@
+{
+ "name": "openclaw",
+ "time": {
+  "2026.11.3": "2026-11-10T17:59:44.785Z"
+ },
+ "versions": {
+  "2026.11.3": {
+   "name": "openclaw",
+   "version": "2026.11.3",
+   "dist": {
+    "shasum": "d7db24ae086448184e328ff69a39cbea3e43d4b6",
+    "tarball": "https://registry.npmjs.org/openclaw/-/openclaw-2026.11.3.tgz",
+    "fileCount": 15207,
+    "integrity": "sha512-FBq/q0TCaoA2b7qfdV0q81fHhI6RBB1zAQfJQREc1u2TlK5khVgCUsAlXskLWthyVqRz5PWEj+oOmfYgK58dHg==",
+    "signatures": [
+     {
+      "sig": "MEQCIDqr9BcxppzP68CI/CeMHAO3lYEaGds2lNtZMkmWR8byAiBc7Uhfi7+fNF5dlRo5tgO3WXLM/W1W72s0Wn9PhKFMRg==",
+      "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+     },
+     {
+      "sig": "MEYCIQCCHo4XLsn1zi3DCXmFS0Kj6Hnxh/zqe0cIVMUYuAtM5AIhAKHA29ES53VhXXGk6qQaLrgZuuiqZuUbDNWL4BVVR2Fs",
+      "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+     }
+    ],
+    "attestations": {
+     "url": "https://registry.npmjs.org/-/npm/v1/attestations/openclaw@2026.11.3",
+     "provenance": {
+      "predicateType": "https://slsa.dev/provenance/v1"
+     }
+    },
+    "unpackedSize": 275525970
+   }
+  }
+ }
+}

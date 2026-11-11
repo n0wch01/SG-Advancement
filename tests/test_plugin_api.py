@@ -345,5 +345,7 @@ def test_service_definition_keeps_secrets_out(tmp_path) -> None:
         "ws://127.0.0.1:18789",
     ]
     assert doc["KeepAlive"] is True and doc["RunAtLoad"] is True
-    assert "EnvironmentVariables" not in doc  # gateway token comes from <home>/openclaw-token
+    # Only PATH (launchd's default can't find `openclaw`/`node`); the token comes from a 0600 file.
+    assert set(doc["EnvironmentVariables"]) == {"PATH"}
+    assert "/opt/homebrew/bin" in doc["EnvironmentVariables"]["PATH"].split(":")
     assert "Restart=always" in systemd_unit(tmp_path, ["--openclaw"], exe="/v/bin/sga-sensor")

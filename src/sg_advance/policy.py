@@ -34,8 +34,10 @@ class PolicyVerificationError(ValueError):
     pass
 
 
-def _digest(rules: list[dict[str, Any]]) -> str:
-    canonical = json.dumps(rules, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+def _digest(rules: list[dict[str, Any]], manifests: list[dict[str, Any]] | None = None) -> str:
+    """Rules only (as before) when there are no manifests, so older bundles keep their version."""
+    doc: Any = {"manifests": manifests, "rules": rules} if manifests else rules
+    canonical = json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -84,19 +86,23 @@ class PolicyBundle(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     bundle_format: Literal["1"] = "1"
-    version: str = Field(description="sha256 of the canonical rule list; changes iff rules change")
+    version: str = Field(description="sha256 of the canonical rules (+ manifests); signed")
     rules: tuple[dict[str, Any], ...] = Field(description="Rule documents (rules/*.yaml entries as JSON)")
+    manifests: tuple[dict[str, Any], ...] = Field(
+        default=(), description="Known-good package digests (integrity.Manifest), covered by version"
+    )
     key_id: str | None = Field(default=None, description="Fingerprint of the signing key")
     signature: str | None = Field(default=None, description="base64 Ed25519 signature over version")
 
     @classmethod
-    def from_ruleset(cls, ruleset: RuleSet) -> PolicyBundle:
+    def from_ruleset(cls, ruleset: RuleSet, manifests: list[dict[str, Any]] | None = None) -> PolicyBundle:
         docs = [r.model_dump(mode="json") for r in ruleset.rules]
-        return cls(version=_digest(docs), rules=tuple(docs))
+        mans = list(manifests or [])
+        return cls(version=_digest(docs, mans), rules=tuple(docs), manifests=tuple(mans))
 
     @classmethod
-    def load(cls, rules_dir: Path) -> PolicyBundle:
-        return cls.from_ruleset(RuleSet.load(rules_dir))
+    def load(cls, rules_dir: Path, manifests: list[dict[str, Any]] | None = None) -> PolicyBundle:
+        return cls.from_ruleset(RuleSet.load(rules_dir), manifests)
 
     def signed(self, key: Ed25519PrivateKey) -> PolicyBundle:
         sig = key.sign(_SIGNING_CONTEXT + self.version.encode("ascii"))
@@ -106,7 +112,7 @@ class PolicyBundle(BaseModel):
 
     def _check_digest(self) -> list[dict[str, Any]]:
         docs = [dict(r) for r in self.rules]
-        if _digest(docs) != self.version:
+        if _digest(docs, [dict(m) for m in self.manifests]) != self.version:
             raise PolicyVerificationError("policy bundle hash mismatch")
         return docs
 

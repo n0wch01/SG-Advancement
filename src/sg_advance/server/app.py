@@ -6,7 +6,9 @@ Admin routes live under ``/v1/admin`` and authenticate with the admin token.
 
 from __future__ import annotations
 
+import queue
 import secrets
+import threading
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -21,6 +23,7 @@ from .. import __version__
 from ..policy import PolicyBundle, key_id, load_or_create_signing_key, public_key_b64
 from ..redact import redact_event, redact_text
 from ..schema import AgentEvent, Finding, Severity
+from . import manifests
 from .auth import (
     DEVICE_PREFIX,
     ENROLL_PREFIX,
@@ -132,7 +135,11 @@ def _existing_ids(db: Session, column: Any, ids: list[str]) -> set[str]:
 
 
 def _policy(request: Request) -> PolicyBundle:
-    return request.app.state.policy
+    app = request.app
+    due = app.state.policy_refresh_at
+    if due is not None and utcnow() >= due:  # a release cooldown ended: cooling → trusted
+        app.state.refresh_policy()
+    return app.state.policy
 
 
 def _public_key(request: Request) -> str:
@@ -152,7 +159,28 @@ def _policy_info(request: Request) -> PolicyInfo:
 
 
 def _load_signed_policy(app: FastAPI) -> PolicyBundle:
-    return PolicyBundle.load(app.state.settings.rules_dir).signed(app.state.signing_key)
+    """Rules from disk + package manifests from the DB, signed. Records when it next goes stale."""
+    cooldown = timedelta(days=app.state.settings.release_cooldown_days)
+    for db in app.state.db.session():
+        docs, next_change = manifests.manifest_docs(db, cooldown)
+    app.state.policy_refresh_at = next_change
+    return PolicyBundle.load(app.state.settings.rules_dir, docs).signed(app.state.signing_key)
+
+
+def _default_package_verifier(settings: Settings) -> Any:
+    """npm + Sigstore, created on first use so startup never needs the network."""
+    state: dict[str, Any] = {}
+
+    def verify(spec: str) -> Any:
+        from .supply import HttpFetcher, sigstore_verifier, verify_npm_package
+
+        if "provenance" not in state:
+            state["provenance"] = sigstore_verifier()
+        return verify_npm_package(
+            spec, fetcher=HttpFetcher(), provenance=state["provenance"], registry=settings.npm_registry
+        )
+
+    return verify
 
 
 Limit = Annotated[int, Query(ge=1, le=1000)]
@@ -250,6 +278,9 @@ def ingest_events(body: EventBatch, request: Request, device: CurrentDevice, db:
         accepted += 1
     device.last_seen = now
     db.commit()
+    # A version no manifest covers yet: verify it in the background (M5d). The next policy sync
+    # brings the digests to every sensor running it.
+    manifests.schedule_verification(request.app, db, manifests.wanted_specs(body.events))
     return IngestResult(accepted=accepted, duplicates=len(body.events) - accepted)
 
 
@@ -400,7 +431,8 @@ def reload_policy(request: Request) -> PolicyInfo:
 # ── app factory ─────────────────────────────────────────────────────────────
 
 
-def create_app(settings: Settings) -> FastAPI:
+def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
+    """``verify_package(spec) -> supply.VerifiedPackage``: injected by tests; default npm + Sigstore."""
     if not settings.admin_token:
         raise ValueError("admin_token is required (set SGA_ADMIN_TOKEN)")
 
@@ -414,6 +446,13 @@ def create_app(settings: Settings) -> FastAPI:
     app.state.settings = settings
     app.state.db = Database(settings.db_url)
     app.state.signing_key = load_or_create_signing_key(settings.signing_key_path)
+    app.state.verify_package = verify_package or _default_package_verifier(settings)
+    app.state.verifying = set()
+    app.state.verify_lock = threading.Lock()
+    app.state.verify_queue = queue.Queue()
+    app.state.verify_worker = None
+    app.state.db.create_all()  # manifests live in the DB and are part of the policy
+    app.state.refresh_policy = lambda: setattr(app.state, "policy", _load_signed_policy(app))
     # Fail fast on a broken rules/ directory instead of serving an empty policy.
     app.state.policy = _load_signed_policy(app)
 
@@ -427,4 +466,5 @@ def create_app(settings: Settings) -> FastAPI:
 
     app.include_router(sensor)
     app.include_router(admin)
+    app.include_router(manifests.router)
     return app

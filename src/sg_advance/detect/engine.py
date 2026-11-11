@@ -34,6 +34,8 @@ from .rules import (
     SequenceStep,
 )
 
+# Live sets the sensor maintains for allowlist ``allow_trusted`` (name -> values).
+TrustedSets = dict[str, set[str]]
 EXCERPT_CONTEXT = 40
 _ACTION_RANK = {a: i for i, a in enumerate(ResponseAction)}
 
@@ -117,12 +119,17 @@ class _RegexMatcher:
 
 
 class _AllowlistMatcher:
-    def __init__(self, spec: AllowlistMatch) -> None:
+    def __init__(self, spec: AllowlistMatch, trusted: TrustedSets | None = None) -> None:
         self.spec = spec
         self.allow = [a.lower() for a in spec.allow] if spec.ignore_case else list(spec.allow)
+        self.trusted = trusted if trusted is not None else {}
 
     def _allowed(self, value: str) -> bool:
         v = value.lower() if self.spec.ignore_case else value
+        if self.spec.allow_trusted and v in {
+            t.lower() if self.spec.ignore_case else t for t in self.trusted.get(self.spec.allow_trusted, ())
+        }:
+            return True
         return any(fnmatchcase(v, pat) for pat in self.allow)
 
     def check(self, event: AgentEvent, doc: dict[str, Any]) -> _RawHit | None:
@@ -239,9 +246,20 @@ _MATCHERS = {
 
 
 class Engine:
-    def __init__(self, ruleset: RuleSet) -> None:
+    def __init__(self, ruleset: RuleSet, trusted: TrustedSets | None = None) -> None:
+        """``trusted``: live sets the sensor maintains (allowlist ``allow_trusted``). Shared by
+        reference, so updates apply without rebuilding the engine."""
         self.ruleset = ruleset
-        self._compiled = [(r, _MATCHERS[r.match.type](r.match)) for r in ruleset.enabled]
+        self.trusted = trusted if trusted is not None else {}
+        self._compiled = [
+            (
+                r,
+                _AllowlistMatcher(r.match, self.trusted)
+                if r.match.type == "allowlist"
+                else _MATCHERS[r.match.type](r.match),
+            )
+            for r in ruleset.enabled
+        ]
         self._reported: set[tuple[str, str, str, str]] = set()
 
     def process(self, event: AgentEvent) -> Verdict:

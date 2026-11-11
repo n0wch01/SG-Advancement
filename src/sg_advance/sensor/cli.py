@@ -132,9 +132,7 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
         try:
             import websockets  # noqa: F401  # optional dependency
         except ImportError:
-            print(
-                "--openclaw needs the websockets package: install sg-advance[openclaw]", file=sys.stderr
-            )
+            print("--openclaw needs the websockets package: install sg-advance[openclaw]", file=sys.stderr)
             return 2
         from .adapters.openclaw import OpenClawAdapter
 
@@ -151,6 +149,12 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
             from .adapters.openclaw_config import OpenClawConfigAdapter
 
             adapters.append(OpenClawConfigAdapter(args.openclaw_config))
+        if not args.no_openclaw_integrity:  # installed code vs. signed packages (M5d)
+            from .adapters.openclaw_integrity import OpenClawIntegrityAdapter
+
+            adapters.append(
+                OpenClawIntegrityAdapter(interval=args.integrity_interval, quarantine=not args.observe_only)
+            )
     if args.replay:
         adapters.append(ReplayAdapter(args.replay, delay=args.replay_delay))
     if not adapters and args.no_local_api:
@@ -284,6 +288,8 @@ def main(argv: list[str] | None = None) -> int:
         help="OpenClaw config to watch for baseline changes (default: ~/.openclaw/openclaw.json)",
     )
     p.add_argument("--no-openclaw-config", action="store_true", help="don't watch the OpenClaw config")
+    p.add_argument("--no-openclaw-integrity", action="store_true", help="don't hash installed OpenClaw code")
+    p.add_argument("--integrity-interval", type=float, default=300.0, help="seconds between integrity scans")
     p.set_defaults(fn=_cmd_run)
 
     p = sub.add_parser("service", help="run the daemon as a background service (macOS launchd)")

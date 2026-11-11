@@ -33,6 +33,7 @@ class SensorType(StrEnum):
     OPENCLAW_GATEWAY = "openclaw_gateway"  # gateway WebSocket subscription
     OPENCLAW_PLUGIN = "openclaw_plugin"  # in-gateway plugin, before_tool_call (pre-execution)
     OPENCLAW_CONFIG = "openclaw_config"  # the gateway's own config file (baseline watch)
+    OPENCLAW_INTEGRITY = "openclaw_integrity"  # installed OpenClaw code vs. signed packages
     CLAUDE_CODE_HOOK = "claude_code_hook"  # PreToolUse / PostToolUse ... hooks
     GEMINI_CLI_HOOK = "gemini_cli_hook"
     CODEX_CLI_HOOK = "codex_cli_hook"

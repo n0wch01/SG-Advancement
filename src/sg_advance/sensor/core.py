@@ -10,11 +10,13 @@ control plane happens later through the spool and never blocks the agent.
 
 from __future__ import annotations
 
+import json
 import logging
 import platform
 import socket
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from .. import __version__
 from ..detect import Engine, Verdict
@@ -108,11 +110,35 @@ class Sensor:
         self.spool = Spool(home.spool_path)
         self.policy: PolicyBundle | None = None
         self.engine: Engine | None = None
+        # Values adapters have verified (e.g. openclaw_plugins: plugin ids whose code matches a
+        # signed, approved package). Rules opt in with ``allow_trusted``. Persisted so a restart
+        # doesn't flag known-good plugins before the first integrity scan finishes.
+        self.trusted: dict[str, set[str]] = self._load_trusted()
+
+    # ── trusted sets ─────────────────────────────────────────────────────────
+
+    @property
+    def _trusted_path(self) -> Path:
+        return self.home.root / "trusted.json"
+
+    def _load_trusted(self) -> dict[str, set[str]]:
+        try:
+            doc = json.loads(self._trusted_path.read_text("utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return {k: set(v) for k, v in doc.items() if isinstance(v, list)}
+
+    def set_trusted(self, name: str, values: set[str]) -> None:
+        """Replace one trusted set in place (engines hold a reference) and persist it."""
+        if self.trusted.get(name) == values:
+            return
+        self.trusted[name] = set(values)
+        write_private(self._trusted_path, json.dumps({k: sorted(v) for k, v in self.trusted.items()}))
 
     # ── policy ───────────────────────────────────────────────────────────────
 
     def _install(self, bundle: PolicyBundle) -> None:
-        self.engine = Engine(bundle.to_ruleset(self._key))  # verifies hash + signature
+        self.engine = Engine(bundle.to_ruleset(self._key), self.trusted)  # verifies hash + signature
         self.policy = bundle
 
     def load_cached_policy(self) -> bool:
