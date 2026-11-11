@@ -18,3 +18,7 @@ data/
 
 # Local-only notes (not published)
 CLAUDE.md
+
+# understand-anything plugin (local knowledge graph)
+.understand-anything/
+.ua/
