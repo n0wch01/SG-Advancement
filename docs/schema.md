@@ -30,6 +30,7 @@ AgentEvent
 | `net.egress` | 외부 네트워크 요청 | method, url, host, bytes_out, destination |
 | `inventory.snapshot` | 사용 가능한 툴·플러그인·MCP 서버 목록 | tools, plugins, mcp_servers |
 | `sensor.health` | 통제 장치 자체의 상태 (툴 호출이 아님) | component(`openclaw_plugin` 등), status(`up \| lost \| recovered`), detail, last_seen |
+| `approval.resolved` | 실행 전 승인 창에 사람이 한 응답 | call_id, tool, decision(`allow-once\|allow-always\|deny\|timeout\|cancelled`), approved, rule_ids, max_severity, request_event_id, finding_ids, requested_at, wait_ms, judged_by, approver |
 | `integrity.report` | 설치된 에이전트 코드 vs 서명된 배포본 (바뀔 때마다) | product, version, core, plugins[{component, package, version, origin, path, digest, integrity, trust}] |
 | `config.snapshot` | 에이전트 설치의 보안 설정 (허용된 필드만, 바뀔 때마다) | product, path, changed, guard_plugin, plugins, exec_policies[{scope, security, ask, mode, host, elevated}], runtimes[{scope, model, runtime}] |
 
@@ -53,6 +54,7 @@ AgentEvent
 | OpenClaw `agent` lifecycle start / end | `session.start` / `session.end` |
 | OpenClaw 플러그인 `before_tool_call` (센서 `openclaw_plugin`) | `tool.call` (실행 전, 판정과 함께) |
 | OpenClaw 플러그인 인사(60초) 끊김·`bye`·재개 | `sensor.health` lost / recovered |
+| OpenClaw 플러그인 `requireApproval.onResolution` | `approval.resolved` |
 | OpenClaw 설정 파일 `~/.openclaw/openclaw.json` (센서 `openclaw_config`) | `config.snapshot` |
 | `openclaw plugins list --json` + 설치 폴더 해시 (센서 `openclaw_integrity`) | `integrity.report` |
 | Claude Code `SessionStart` / `SessionEnd` hook | `session.start` / `session.end` |

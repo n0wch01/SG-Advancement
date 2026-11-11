@@ -240,6 +240,25 @@ OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──
 플러그인이 최근 5분 안에 연결된 상태인데 등록되지 않은 호출을 보면 `labels.sga_plugin = missing`을 붙인다.
 룰 `openclaw-plugin-bypass`(alert)가 이를 finding으로 만든다. 플러그인이 꺼졌거나 우회된 실행 경로를 보안팀이 알 수 있다.
 
+### 승인 감사 (C)
+
+룰이 `require_approval`이면 플러그인이 OpenClaw 승인 창을 띄운다. 사용자의 응답(`onResolution`)은 **세 경로 모두**
+(데몬 판정, 캐시 정책 판정, 위험도 기본값) `approval.resolved` 이벤트로 남는다. 데몬이 없을 때 승인된 행동이야말로
+감사가 필요한 것이라, 데몬에 못 보내면 `sga-sensor evaluate`(CLI)가 대기열에 바로 넣는다.
+
+- 데몬은 승인 창을 띄운 호출의 맥락(원래 `tool.call` 이벤트 id, 그 finding id, 걸린 룰, 최고 심각도, 요청 시각)을 기억해 응답에 붙인다.
+  데몬이 그 사이 재시작했으면 플러그인이 보낸 사본(룰, 심각도, 요청 시각)을 쓴다.
+- OpenClaw는 **누가 승인 버튼을 눌렀는지** 플러그인에 알려 주지 않는다(`approver`는 비어 있음). 실행을 시작한 요청자
+  (`requester_channel`, `requester_senderid` 라벨)는 남는다. 웹채팅에서는 보통 같은 사람이지만 Slack 등으로 승인을 넘기면 다를 수 있다.
+
+| 응답 | 룰 (모두 `alert`, 보안팀 사후 감사) |
+|---|---|
+| high/critical 룰에 걸린 행동을 승인 | `user-approved-high-risk` (medium) |
+| 한 사용자가 10분 안에 5번 승인 (세션 무관) | `approval-fatigue` (medium) |
+| 거절, 시간 초과, 취소, medium 이하 승인 | 기록만 |
+
+보안팀 조회: `GET /v1/admin/approvals`, `sga-server audit approvals` ([control-plane.md](control-plane.md)).
+
 ### 플러그인 신호 감시
 
 플러그인은 60초마다 데몬에 인사(`hello`)를 보낸다. 데몬은 한 번이라도 인사를 받으면 그 뒤로 **이 장비에는 플러그인이 있어야 한다**고 기억한다

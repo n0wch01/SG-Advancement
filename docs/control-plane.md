@@ -128,3 +128,21 @@ sga-server manifest pin sg-advance --dir integrations/openclaw-plugin --version 
 - 서버는 npm 레지스트리와 Sigstore(신뢰 루트 갱신)에 나가는 연결이 필요하다.
 - 출시 대기 기간을 두는 이유: 악성 npm 릴리스는 보통 며칠 안에 발견돼 내려간다. 배포자의 CI가 뚫려 서명까지 된 악성 버전이 나와도
   대기 기간 안에 철회(`revoke`)할 수 있다.
+
+## 승인 감사 (C)
+
+결정(2026-11-11): 위험한 행동은 사용자가 승인하고, 보안팀은 사후 감사하다가 이상하면 조치한다. 감사 화면(M7 콘솔)이 쓸 API를 먼저 둔다.
+
+`GET /v1/admin/approvals?approved=true&user_id=&device_id=&decision=&since=` (최신순): 각 응답(`approval.resolved`)에
+
+- `held_call`: 승인 창에 걸렸던 원래 호출(툴, 마스킹된 인자)
+- `asked_by`: 승인을 요구한 finding (예: `destructive-sql`)
+- `flagged`: 그 응답이 일으킨 감사 finding (`user-approved-high-risk`, `approval-fatigue`)
+- `requester`, `judged_by`(데몬/캐시/기본값), `wait_ms`
+
+를 묶어 보여 준다.
+
+```bash
+sga-server audit approvals              # 승인한 것만
+sga-server audit approvals --all --user alice
+```
