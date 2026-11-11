@@ -8,6 +8,8 @@
   Claude Code·MCP·LangGraph·Gemini·Codex는 그 위에 확장한다. 공통 스키마와 센서 구조는 그대로라 나중에 붙이기 쉽다.
 - **공식 사용 경로는 회사가 운영하는 팀 공용 게이트웨이**다. 에이전트는 서버의 격리된 작업 공간에서만 실행되고, 통제 장치·자격 증명·외부 통신이
   한곳에 모인다. 직원 노트북의 개인 설치는 막는 대상이 아니라 **탐지·관리 대상**이다(설치 여부, 회사 기준선 준수 여부).
+- **WS 어댑터는 관측·탐지, 차단은 플러그인** (2026-11-11, 결정 B): v4 게이트웨이는 다른 사람의 실행 중단과 승인 요청 열람을 `operator.admin`에게만 허락한다.
+  센서에 admin을 주지 않고, 실행 전 차단은 게이트웨이 안에서 도는 M5c 플러그인이 맡는다.
 - **OpenClaw 하네스는 두 겹**이다. 게이트웨이 플러그인(`before_tool_call`)이 모든 툴을 실행 전에 판정하고, WebSocket 어댑터가 독립적으로
   모든 실행을 관측한다. 플러그인이 꺼져도 어댑터에는 보이므로, 판정 기록 없는 실행을 우회로 탐지한다.
 
@@ -48,10 +50,10 @@
 | M2 | 로컬 탐지 엔진 | SG `detect.py` 룰 타입 이전(regex/rate/loop/sequence/inventory diff), redaction, S1~S3 룰 통과 | ✅ |
 | M3 | Control Plane API | FastAPI + SQLAlchemy(SQLite): 장비 등록(토큰), 이벤트·finding 수집, 정책 v0(`rules/` 묶음 + 해시) 조회, compose 뼈대, 위협 모델 초안(`docs/threat-model.md`) | ✅ |
 | M4 | Sensor core | 어댑터 인터페이스, 정책 pull·캐시(중앙이 끊기면 마지막 정책 사용), 정책 서명(Ed25519) 검증, 전송 큐·재시도, 등록 CLI. 예시 이벤트 replay로 센서 → 중앙 엔드투엔드 | ✅ |
-| M5 | 로컬 데몬 + OpenClaw 어댑터 | `sentinel-sensor run`(어댑터 실행, 주기적 정책 동기화·전송), SG ingest/respond 이전, 사후 abort 집행, 셸 명령은 exec 승인으로 사전 거절, SG 대비 변경점 문서(`docs/from-sg.md`). **게이트웨이 프로토콜 v4 대응**: 센서 자체 장치 신원 + 페어링 + `deviceToken`, `tool-events` 기능 선언 | ⏳ |
+| M5 | 로컬 데몬 + OpenClaw 어댑터 | `sentinel-sensor run`(어댑터 실행, 주기적 정책 동기화·전송), SG ingest/respond 이전, 사후 abort 집행, 셸 명령은 exec 승인으로 사전 거절, SG 대비 변경점 문서(`docs/from-sg.md`). **게이트웨이 프로토콜 v4 대응**: 센서 자체 장치 신원 + 페어링 + `deviceToken`, `tool-events` 기능 선언. v4 실환경에서 관측·탐지 확인, 실행 전 차단은 M5c로 넘김(결정 B) | ✅ |
 | M5b | OpenClaw 팀·다중 사용자 | **팀 공용 게이트웨이를 주 데모 환경으로**. 에이전트별 인벤토리(`tools.catalog` agentId), 세션 소유자를 사용자로 귀속(다중 사용자 모드), 하위 에이전트 위임 체인 추적(부모↔자식 세션), 에이전트 간 인젝션 전파 탐지(T18), `openclaw agents team create`로 팀 데모 | |
 | M5c | OpenClaw 플러그인 사전 차단 | TypeScript 플러그인의 `before_tool_call` → 로컬 소켓 → 데몬 판정. 모든 툴에 block·`requireApproval`(사용자 승인)·결과 기록. 데몬 없으면 단계적 처리 + 라벨. 어댑터가 본 실행 중 플러그인 판정이 없는 것을 우회 finding으로 | |
-| M5d | 실행 격리·외부 통신·기준선 | OpenClaw 샌드박스·권한 모드·exec 정책이 회사 기준선대로인지 점검, 네트워크 프록시를 egress 프록시(허용 도메인)로 연결, 플러그인·스킬 허용 목록과 버전 변경 시 재승인, 직원 PC의 비관리 OpenClaw 설치 탐지 | |
+| M5d | 실행 격리·외부 통신·기준선 | OpenClaw 샌드박스·권한 모드·exec 정책이 회사 기준선대로인지 점검, 네트워크 프록시를 egress 프록시(허용 도메인)로 연결, 플러그인·스킬 허용 목록과 버전 변경 시 재승인, 직원 PC의 비관리 OpenClaw 설치 탐지, **모든 모델의 런타임 고정과 Codex에 묶인 세션 점검**(T19) | |
 | M7 | Console v1 | 장비/사용자 인벤토리, 위협 타임라인, finding 상세(룰 근거, 마스킹된 증거), 사용자 승인 감사 목록 | |
 | M9 | 정책 관리 | 공통 정책 + 팀별 정책 계층(룰 on/off, 응답 단계·허용 목록 덮어쓰기), 정책 버전, 콘솔 편집기, 센서 pull 반영, 변경 감사 로그 | |
 | M11 | 원격 대응 + 상관 분석 | 원격 abort/quarantine, 콘솔 승인 큐(에이전트 화면에서 승인을 못 받는 경우), 다중 사용자 캠페인 탐지 | |

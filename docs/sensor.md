@@ -178,7 +178,15 @@ Codex 구독 모델 + OpenClaw 런타임으로 확인했다(실행 한 번에 �
 | Code Mode | ⚠️ 새 구조: 바깥 `exec`(JavaScript) 안에서 안쪽 `exec`(실제 셸 명령, `parentToolCallId`)가 돈다. 둘 다 `tool.call`로 내고 라벨로 잇는다. 명령은 JS에서 조립될 수 있으므로 안쪽 호출이 기준이다 |
 | 대화 기록 메시지 | ⚠️ 같은 사용자 메시지가 **같은 ID로 두 번** 왔다 → 메시지 ID로 중복 제거 |
 | 실행 중 `sessions.abort` | ❌ `unauthorized`. v4는 그 실행을 시작한 장치·연결이거나 `operator.admin`일 때만 중단을 허락한다 |
-| 셸 실행 전 거절 | ⏳ CLI(`openclaw agent`)에서 시킨 실행은 대화형 승인을 요청할 수 없어 OpenClaw가 명령 자체를 막았다. Control UI나 채팅 채널에서 확인해야 한다 |
+| 셸 실행 전 거절 (CLI) | CLI(`openclaw agent`)에서 시킨 실행은 대화형 승인을 요청할 수 없어 OpenClaw가 명령 자체를 막았다 |
+| 셸 실행 전 거절 (Control UI, OpenClaw 런타임) | ❌ 승인 창은 떴지만 **센서에는 승인 요청이 오지 않았다**. v4는 승인 요청을 `operator.admin`, 요청한 본인, 지정된 승인 검토자 장치에게만 보여준다(`isApprovalRecordVisibleToClient`) |
+| 같은 명령, Codex 런타임 | ⚠️ 승인이 **Codex 자체 경로**("Codex app-server command approval")로 처리됐다. 센서는 툴 호출(`bash`, `rm -rf …`)을 **실행 전에** 받아 block으로 판정했지만 막을 수단이 없었다 |
+| 런타임 선택 | ⚠️ 런타임 고정은 **모델별**이다. 화면에서 고정하지 않은 모델을 고르면 Codex 런타임으로 바뀐다. 이미 Codex 스레드에 묶인 세션은 설정을 바꿔도 Codex로 남는다 |
+
+**결론 (결정 B, 2026-11-11)**: v4에서 WebSocket 어댑터는 **관측과 탐지**를 맡는다. 실행 중단(`sessions.abort`)과 승인 거절은 `operator.admin` 없이는 할 수 없고,
+admin을 센서에 주는 것은 너무 넓은 권한이다. **실행 전 차단은 M5c 게이트웨이 플러그인(`before_tool_call`)이 맡는다.**
+플러그인은 게이트웨이 안에서 돌므로 이 권한 문제가 없고, 문서상 Codex 네이티브 툴도 차단할 수 있다.
+`--gate-exec`는 v3 게이트웨이와 admin을 받은 배치에서만 효과가 있다.
 
 v4 녹화 프레임은 [openclaw-2026.11.3-tool-run.jsonl](../tests/fixtures/openclaw-2026.11.3-tool-run.jsonl)에 회귀 테스트로 고정했다.
 
