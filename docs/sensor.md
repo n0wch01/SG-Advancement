@@ -115,7 +115,7 @@ sentinel-sensor run --replay examples/events/*.jsonl    # 데모용: 파일을 �
 | 처음 정책 받기 | 받을 때까지 재시도 | 중앙이 아직 안 떴을 수 있다(컨테이너 기동 순서). 그동안 판정은 하지 않는다 |
 
 네트워크 호출은 작업 스레드에서 돌아서, 중앙이 느려도 이벤트 처리가 밀리지 않는다.
-hook처럼 호출마다 새로 뜨는 어댑터가 데몬에 판정을 묻는 로컬 소켓은 M6에서 붙인다.
+OpenClaw 플러그인(M5c)과 Claude Code hook(M6)처럼 툴 실행 직전에 판정을 물어야 하는 쪽을 위한 로컬 소켓은 M5c에서 붙인다.
 
 ## OpenClaw 어댑터
 
@@ -147,8 +147,25 @@ SG 코드에서 무엇을 가져오고 고쳤는지는 [from-sg.md](from-sg.md#o
   승인된 명령이 실제로 실행되면 `session.tool`로 한 번 더 들어오므로, 같은 명령이 두 번 판정된다(finding은 중복 제거되지만 빈도 룰은 두 번 센다).
 - 그 밖의 툴에서 `require_approval`은 아직 집행하지 못한다(alert로 기록).
 - 권한: 관측만 하면 `operator.read`, 중단까지 하면 `operator.write`, 셸 승인에 답하려면 `operator.approvals`.
-  장치 신원 파일이 있으면 connect에 서명해 권한을 유지한다. 처음 권한을 늘릴 때는 `openclaw devices list` → `openclaw devices approve`가 한 번 필요할 수 있다.
 - 연결이 끊기면 1초부터 최대 60초까지 늘려 가며 다시 붙는다.
+
+### 게이트웨이에 붙는 방법 (프로토콜 v3·v4)
+
+센서는 **자기 장치 신원**(Ed25519 키, `SENTINEL_HOME/openclaw-device.json`, 0600)을 처음 실행할 때 만들고, 다른 외부 클라이언트처럼 페어링한다.
+OpenClaw CLI의 키를 빌려 쓰지 않는다. 그래서 센서는 필요한 권한만 갖고, `openclaw devices list`에 따로 보이며, 따로 폐기할 수 있다.
+
+```bash
+openclaw configure --section gateway          # 1. 게이트웨이 공용 토큰 설정 (기본값은 실행마다 바뀌는 임시 토큰이라 외부 클라이언트가 못 붙음)
+export OPENCLAW_GATEWAY_TOKEN=...             # 2. 처음 한 번, 공용 토큰으로 접속
+sentinel-sensor run --openclaw                #    → "pairing required — openclaw devices approve <requestId>" 로그
+openclaw devices approve <requestId>          # 3. 게이트웨이 호스트에서 승인 → 센서가 deviceToken을 받아 저장
+sentinel-sensor run --openclaw                # 4. 이후에는 공용 토큰 없이 deviceToken으로 접속
+```
+
+- 접속할 때 프로토콜 3~4를 지원한다고 알린다. 2026.4.15(v3)와 2026.11.3(v4) 게이트웨이 모두에 붙는다.
+- v4는 **`tool-events` 기능을 선언한 연결에만 툴 이벤트를 보낸다.** 선언하지 않으면 오류 없이 툴 이벤트만 빠진다. 센서는 `tool-events`, `exec-approvals`를 선언한다.
+- 장치 증명의 서명 시각은 `connect.challenge`의 `ts`를 쓴다. 장치 ID는 공개키의 sha256이다(게이트웨이가 검사한다).
+- `deviceToken`으로 접속할 때는 그 토큰이 발급된 권한만 요청한다. 권한을 늘리면 새 페어링 승인이 필요하다.
 
 ### 실제 게이트웨이 확인 (2026-11-10, OpenClaw 2026.4.15)
 
@@ -184,4 +201,4 @@ ctx.record(result, enforcement)       # 마스킹된 이벤트와 finding을 집
 ```
 
 판정과 기록을 나눈 이유는, 집행이 비동기(OpenClaw의 `sessions.abort`)일 때 **실제로 무슨 일이 일어났는지**를 finding에 남기기 위해서다.
-관측만 하는 어댑터(`ReplayAdapter`)는 `enforcement` 없이 기록한다. Claude Code hook(M6)과 MCP 프록시(M8)는 툴 실행 전에 집행한다.
+관측만 하는 어댑터(`ReplayAdapter`)는 `enforcement` 없이 기록한다. OpenClaw 플러그인(M5c), Claude Code hook(M6), MCP 프록시(M8)는 툴 실행 전에 집행한다.

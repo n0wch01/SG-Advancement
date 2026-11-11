@@ -7,8 +7,9 @@ and hands each one to the daemon through ``AdapterContext``:
     enforcement = ...                   # adapter acts on result.verdict.action, if it can
     ctx.record(result, enforcement)     # queue redacted event + findings with the outcome
 
-Observation-only adapters pass ``None`` as enforcement. Blocking adapters (Claude Code hooks M6,
-MCP proxy M8) act before the tool runs; OpenClaw can only abort after a tool started.
+Observation-only adapters pass ``None`` as enforcement. Blocking adapters (OpenClaw plugin M5c,
+Claude Code hooks M6, MCP proxy M8) act before the tool runs; the OpenClaw WebSocket adapter can only
+abort after a tool started (or deny a pending shell approval).
 """
 
 from __future__ import annotations

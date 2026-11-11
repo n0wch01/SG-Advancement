@@ -8,7 +8,8 @@ rate, repeat) see every event from every adapter on this machine:
 - flushes the spool every ``flush_interval`` seconds, and once more on shutdown.
 
 Network calls run in worker threads so a slow control plane never stalls event handling.
-M6 adds a local socket here so short-lived hook processes can ask the daemon for verdicts.
+M5c adds a local socket here so the OpenClaw plugin (and later Claude Code hooks, M6) can ask the
+daemon for verdicts before a tool runs.
 """
 
 from __future__ import annotations

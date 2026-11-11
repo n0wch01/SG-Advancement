@@ -42,7 +42,7 @@ from typing import Any
 from ...redact import redact_value
 from ...schema import AgentEvent, Enforcement, ResponseAction, SensorType
 from .base import AdapterContext
-from .openclaw_gateway import DEFAULT_URL, DeviceIdentity, GatewayConnection, GatewayError
+from .openclaw_gateway import DEFAULT_URL, DeviceIdentity, GatewayConnection, GatewayError, PairingRequired
 
 log = logging.getLogger(__name__)
 
@@ -392,14 +392,16 @@ class OpenClawAdapter:
         enforce: bool = True,
         gate_exec: bool = False,
         capture: Path | None = None,
-        identity_path: str | None = None,
+        identity_path: Path | None = None,
         inventory_interval: float = 300.0,
         max_backoff: float = 60.0,
     ) -> None:
         self.url = url
         self.token = token if token is not None else os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
         self.enforce = enforce
+        # Default: SENTINEL_HOME/openclaw-device.json, resolved in run() from the sensor's home.
         self.identity_path = identity_path
+        self._pairing_hint_shown: str | None = None
         self.inventory_interval = inventory_interval
         self.max_backoff = max_backoff
         self.gate_exec = gate_exec and enforce
@@ -420,6 +422,10 @@ class OpenClawAdapter:
                 await self._session(ctx, mapper)
             except asyncio.CancelledError:
                 raise
+            except PairingRequired as e:
+                if e.request_id != self._pairing_hint_shown:  # say it once per request, not every retry
+                    log.warning("openclaw gateway %s: %s", self.url, e)
+                    self._pairing_hint_shown = e.request_id
             except (OSError, GatewayError, ConnectionError, TimeoutError) as e:
                 log.warning("openclaw gateway %s: %s", self.url, e)
             except Exception:  # a bug or an unexpected frame shape: log loudly, keep watching
@@ -432,9 +438,12 @@ class OpenClawAdapter:
             delay = min(delay * 2, self.max_backoff)
 
     async def _session(self, ctx: AdapterContext, mapper: OpenClawMapper) -> None:
-        path = DeviceIdentity.find(self.identity_path)
-        identity = DeviceIdentity.load(path) if path else None
+        path = self.identity_path or ctx.sensor.home.root / "openclaw-device.json"
+        identity = DeviceIdentity.load_or_create(path)
         conn = await GatewayConnection.open(self.url, self.token, scopes=self.scopes, identity=identity)
+        if conn.issued_device_token and conn.issued_device_token[0] != identity.device_token:
+            identity.with_token(*conn.issued_device_token).save(path)  # later connects use it
+            log.info("stored OpenClaw device token for %s…", identity.device_id[:12])
 
         async def on_event(frame: dict[str, Any]) -> None:
             if self.capture is not None:

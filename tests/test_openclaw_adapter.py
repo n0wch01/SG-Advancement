@@ -241,8 +241,16 @@ def test_device_identity_block_is_verifiable(tmp_path) -> None:
 
 
 class FakeGateway:
-    def __init__(self, token: str = "gw-token") -> None:
+    """Speaks the gateway subset the adapter uses. With ``require_pairing`` it behaves like a v4
+    gateway for third-party clients: verifies the device proof, answers PAIRING_REQUIRED until the
+    device is approved, then issues a device token in hello-ok."""
+
+    def __init__(self, token: str = "gw-token", require_pairing: bool = False) -> None:
         self.token = token
+        self.require_pairing = require_pairing
+        self.approved: set[str] = set()
+        self.issued: dict[str, str] = {}  # device token -> device id
+        self.connects: list[dict[str, Any]] = []
         self.clients: set[ServerConnection] = set()
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.scopes_seen: list[list[str]] = []
@@ -250,30 +258,19 @@ class FakeGateway:
         self.history: dict[str, list[dict[str, Any]]] = {}  # sessionKey -> transcript (chat.history)
 
     async def handler(self, ws: ServerConnection) -> None:
-        await ws.send(
-            json.dumps(
-                {"type": "event", "event": "connect.challenge", "payload": {"nonce": secrets.token_hex(8)}}
-            )
-        )
+        challenge = {"nonce": secrets.token_hex(8), "ts": 1_794_000_000_123}
+        await ws.send(json.dumps({"type": "event", "event": "connect.challenge", "payload": challenge}))
         try:
             async for raw in ws:
                 req = json.loads(raw)
                 method, params, rid = req["method"], req.get("params") or {}, req["id"]
                 self.calls.append((method, params))
                 if method == "connect":
-                    ok = params["auth"]["token"] == self.token
+                    self.connects.append(params)
                     self.scopes_seen.append(params["scopes"])
-                    await ws.send(
-                        json.dumps(
-                            {
-                                "type": "res",
-                                "id": rid,
-                                "ok": ok,
-                                "payload": {"type": "hello-ok"} if ok else None,
-                                "error": None if ok else {"message": "bad token"},
-                            }
-                        )
-                    )
+                    ok, error, hello = self._admit(params, challenge)
+                    res = {"type": "res", "id": rid, "ok": ok, "payload": hello, "error": error}
+                    await ws.send(json.dumps(res))
                     if ok:
                         self.clients.add(ws)
                 elif method == "sessions.subscribe":
@@ -298,6 +295,32 @@ class FakeGateway:
                     )
         finally:
             self.clients.discard(ws)
+
+    def _admit(self, params: dict[str, Any], challenge: dict[str, Any]) -> tuple[bool, Any, Any]:
+        auth = params.get("auth") or {}
+        dev = params.get("device")
+        token_ok = auth.get("token") == self.token
+        device_token_ok = dev is not None and self.issued.get(auth.get("deviceToken", "")) == dev["id"]
+        if not (token_ok or device_token_ok):
+            return False, {"message": "unauthorized"}, None
+        if not self.require_pairing:
+            return True, None, {"type": "hello-ok"}
+        if dev is None or not _device_proof_ok(params, challenge):
+            return False, {"message": "invalid device proof"}, None
+        if dev["id"] not in self.approved:
+            details = {
+                "code": "PAIRING_REQUIRED",
+                "requestId": f"req-{dev['id'][:6]}",
+                "recommendedNextStep": "wait",
+            }
+            return False, {"code": "NOT_PAIRED", "message": "pairing required", "details": details}, None
+        dt = f"dt-{dev['id'][:8]}"
+        self.issued[dt] = dev["id"]
+        return (
+            True,
+            None,
+            {"type": "hello-ok", "auth": {"deviceToken": dt, "role": "operator", "scopes": params["scopes"]}},
+        )
 
     async def push(self, *frames: dict[str, Any]) -> None:
         for f in frames:
@@ -342,7 +365,7 @@ def queued_findings(sensor: Sensor) -> list[dict[str, Any]]:
 
 async def test_s1_plugin_tool_call_aborts_the_run(gateway, enrolled: Sensor, cp: TestClient) -> None:
     gw, url = gateway
-    adapter = OpenClawAdapter(url, token="gw-token", identity_path="/nonexistent")
+    adapter = OpenClawAdapter(url, token="gw-token")
     task = await run_adapter(adapter, enrolled)
     try:
         assert gw.scopes_seen[-1] == ["operator.read", "operator.write"]
@@ -387,7 +410,7 @@ async def test_s2_injection_then_exfil_via_chat_history(gateway, enrolled: Senso
             "content": [{"type": "text", "text": injected}],
         },
     ]
-    task = await run_adapter(OpenClawAdapter(url, token="gw-token", identity_path="/nonexistent"), enrolled)
+    task = await run_adapter(OpenClawAdapter(url, token="gw-token"), enrolled)
     try:
         await gw.push(
             lifecycle("start", "r2"),
@@ -410,7 +433,7 @@ async def test_s2_injection_then_exfil_via_chat_history(gateway, enrolled: Senso
 
 async def test_observe_only_never_aborts(gateway, enrolled: Sensor) -> None:
     gw, url = gateway
-    adapter = OpenClawAdapter(url, token="gw-token", enforce=False, identity_path="/nonexistent")
+    adapter = OpenClawAdapter(url, token="gw-token", enforce=False)
     task = await run_adapter(adapter, enrolled)
     try:
         assert gw.scopes_seen[-1] == ["operator.read"]
@@ -432,7 +455,7 @@ async def test_observe_only_never_aborts(gateway, enrolled: Sensor) -> None:
 
 async def test_one_abort_per_run(gateway, enrolled: Sensor) -> None:
     gw, url = gateway
-    task = await run_adapter(OpenClawAdapter(url, token="gw-token", identity_path="/nonexistent"), enrolled)
+    task = await run_adapter(OpenClawAdapter(url, token="gw-token"), enrolled)
     try:
         await gw.push(
             tool("start", "ai_image_gen", "c1", args={"a": 1}),
@@ -449,7 +472,7 @@ async def test_reconnects_and_resnapshots(enrolled: Sensor) -> None:
     gw = FakeGateway()
     async with serve(gw.handler, "127.0.0.1", 0) as server:
         url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-        adapter = OpenClawAdapter(url, token="gw-token", identity_path="/nonexistent", max_backoff=0.1)
+        adapter = OpenClawAdapter(url, token="gw-token", max_backoff=0.1)
         task = await run_adapter(adapter, enrolled)
         try:
             for ws in list(gw.clients):
@@ -462,7 +485,7 @@ async def test_reconnects_and_resnapshots(enrolled: Sensor) -> None:
 
 async def test_bad_token_keeps_retrying_without_crashing(gateway, enrolled: Sensor) -> None:
     gw, url = gateway
-    adapter = OpenClawAdapter(url, token="wrong", identity_path="/nonexistent", max_backoff=0.05)
+    adapter = OpenClawAdapter(url, token="wrong", max_backoff=0.05)
     task = asyncio.create_task(adapter.run(AdapterContext(enrolled, user_id="alice")))
     try:
         await until(lambda: sum(1 for m, _ in gw.calls if m == "connect") >= 2)
@@ -496,7 +519,7 @@ def approval(approval_id: str, command: str) -> dict[str, Any]:
 
 async def gated(gateway, sensor: Sensor, **kw: Any) -> tuple[FakeGateway, asyncio.Task]:
     gw, url = gateway
-    adapter = OpenClawAdapter(url, token="gw-token", identity_path="/nonexistent", **kw)
+    adapter = OpenClawAdapter(url, token="gw-token", **kw)
     return gw, await run_adapter(adapter, sensor)
 
 
@@ -623,3 +646,90 @@ def test_real_tool_run_yields_call_and_result_with_output() -> None:
     assert result.payload.call_id == call.payload.call_id and result.payload.ok
     assert ".env" in result.payload.output_preview and "junk" in result.payload.output_preview
     assert not m.pending_results
+
+
+# ── protocol v4: own device identity, pairing, device token ─────────────────
+
+
+def _device_proof_ok(params: dict[str, Any], challenge: dict[str, Any]) -> bool:
+    """What a v4 gateway checks: id = sha256(raw public key), signedAt = challenge ts, signature."""
+    import base64
+    import hashlib
+
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    dev, auth = params["device"], params.get("auth") or {}
+    raw = base64.urlsafe_b64decode(dev["publicKey"] + "==")
+    if hashlib.sha256(raw).hexdigest() != dev["id"] or dev["signedAt"] != challenge["ts"]:
+        return False
+    token = auth.get("token") or auth.get("deviceToken") or ""
+    payload = "|".join(
+        [
+            "v3",
+            dev["id"],
+            params["client"]["id"],
+            params["client"]["mode"],
+            params["role"],
+            ",".join(params["scopes"]),
+            str(dev["signedAt"]),
+            token,
+            dev["nonce"],
+            params["client"]["platform"].lower(),
+            "",
+        ]
+    )
+    try:
+        Ed25519PublicKey.from_public_bytes(raw).verify(
+            base64.urlsafe_b64decode(dev["signature"] + "=="), payload.encode()
+        )
+    except InvalidSignature:
+        return False
+    return True
+
+
+async def test_v4_handshake_advertises_tool_events_and_protocol_range(gateway, enrolled: Sensor) -> None:
+    gw, url = gateway
+    task = await run_adapter(OpenClawAdapter(url, token="gw-token"), enrolled)
+    try:
+        p = gw.connects[-1]
+        assert (p["minProtocol"], p["maxProtocol"]) == (3, 4)
+        assert "tool-events" in p["caps"]  # without it a v4 gateway sends no tool events, silently
+        assert p["device"]["signedAt"] == 1_794_000_000_123  # challenge ts, not local time
+    finally:
+        task.cancel()
+
+
+async def test_pairing_then_device_token(enrolled: Sensor, caplog) -> None:
+    import logging
+
+    gw = FakeGateway(require_pairing=True)
+    caplog.set_level(logging.WARNING)
+    async with serve(gw.handler, "127.0.0.1", 0) as server:
+        url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        adapter = OpenClawAdapter(url, token="gw-token", max_backoff=0.05)
+        task = asyncio.create_task(adapter.run(AdapterContext(enrolled, user_id="alice")))
+        try:
+            await until(lambda: len(gw.connects) >= 3)  # keeps retrying while unapproved
+            assert not adapter.connected.is_set()
+            hints = [r.message for r in caplog.records if "openclaw devices approve req-" in r.message]
+            assert len(hints) == 1  # told once, not on every retry
+
+            ident_file = enrolled.home.root / "openclaw-device.json"
+            ident = DeviceIdentity.load(ident_file)
+            assert ident is not None and oct(ident_file.stat().st_mode & 0o777) == "0o600"
+            gw.approved.add(ident.device_id)  # operator: openclaw devices approve <id>
+            await asyncio.wait_for(adapter.connected.wait(), 5)
+            stored = DeviceIdentity.load(ident_file)
+            assert stored is not None and stored.device_token == f"dt-{ident.device_id[:8]}"
+        finally:
+            task.cancel()
+
+        # Next start: no shared token at all — the stored device token is enough.
+        adapter2 = OpenClawAdapter(url, token="", max_backoff=0.05)
+        task2 = await run_adapter(adapter2, enrolled)
+        try:
+            last = gw.connects[-1]
+            assert "token" not in last["auth"] and last["auth"]["deviceToken"].startswith("dt-")
+        finally:
+            task2.cancel()
