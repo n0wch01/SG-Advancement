@@ -324,6 +324,7 @@ def test_poison_item_is_isolated_and_parked(server: TestClient, net: Net, home: 
     bad["payload"] = {"kind": "tool.call"}  # server will 422 this
     with sqlite3.connect(home.spool_path) as db:
         db.execute(
+            # created=0: older than the 7-day hold, so a 422 parks it for good
             "INSERT INTO outbox (kind, item_id, doc, created) VALUES ('event', 'bad-1', ?, 0)",
             (json.dumps(bad),),
         )
@@ -331,6 +332,35 @@ def test_poison_item_is_isolated_and_parked(server: TestClient, net: Net, home: 
     assert r.ok and r.dead == 1 and r.remaining == 0
     assert len(admin_get(server, "/v1/admin/events")) == len(events)
     assert sensor.spool.dead_letters()[0][1] == "bad-1"
+
+
+def test_422_is_held_and_retried_after_a_server_upgrade(tmp_path: Path) -> None:
+    """Sensor upgraded first: the old server rejects a new event kind with 422. Live 2026-11-11
+    (config.snapshot) this dropped the event; now it waits and goes through after the upgrade."""
+    from sg_advance.sensor.spool import Spool
+
+    class Server:
+        upgraded = False
+        posts = 0
+
+        def post(self, path: str, body: dict) -> dict:
+            self.posts += 1
+            if not self.upgraded:
+                return {"status": 422, "body": "Input should be 'openclaw_gateway', ..."}
+            return {"status": 200, "body": {"accepted": len(body["events"]), "duplicates": 0}}
+
+    spool = Spool(tmp_path / "spool.db")
+    spool.add(list(ReplayAdapter([EXAMPLES / "claude_code.jsonl"]).events())[:1])
+    server = Server()
+    r = spool.flush(server)
+    assert r.held == 1 and r.dead == 0 and r.remaining == 1
+    assert spool.flush(server).held == 0 and server.posts == 1  # backing off: not resent at once
+
+    server.upgraded = True
+    with sqlite3.connect(spool.path) as db:  # let the backoff elapse
+        db.execute("UPDATE outbox SET retry_after = 0")
+    r = spool.flush(server)
+    assert r.sent == 1 and r.remaining == 0 and spool.dead_letters() == []
 
 
 def test_unknown_device_token_keeps_items(server: TestClient, net: Net, home: SensorHome) -> None:

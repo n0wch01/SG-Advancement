@@ -60,7 +60,13 @@ _ADDED_COLUMNS = {
     "priority": "INTEGER NOT NULL DEFAULT 1",
     "session": "TEXT",
     "ts": "REAL",
+    "retry_after": "REAL",
 }
+# A 422 means the server rejected what this sensor's own models accepted: almost always a server
+# older than the sensor (a new event kind or field). Hold such rows and retry with backoff instead
+# of dropping them, so upgrading the sensor first loses nothing. Give up after HOLD_SECONDS.
+HOLD_SECONDS = 7 * 24 * 3600
+HOLD_BACKOFF_MAX = 3600.0
 
 
 def _session_key(item: AgentEvent | Finding) -> str:
@@ -72,6 +78,7 @@ class FlushResult:
     sent: int = 0
     duplicates: int = 0
     dead: int = 0
+    held: int = 0  # rejected with 422, kept for a later retry
     remaining: int = 0
     error: str | None = None  # why flushing stopped early (offline, auth failure)
 
@@ -221,8 +228,8 @@ class Spool:
             with self._db() as db:
                 rows = db.execute(
                     "SELECT id, doc FROM outbox WHERE dead = 0 AND priority = ? AND kind = ? "
-                    "ORDER BY id LIMIT ?",
-                    (prio, kind, size),
+                    "AND (retry_after IS NULL OR retry_after <= ?) ORDER BY id LIMIT ?",
+                    (prio, kind, time.time(), size),
                 ).fetchall()
             if not rows:
                 return
@@ -247,10 +254,14 @@ class Spool:
             elif status == 413 and size > 1:
                 size = max(1, size // 2)
             else:
-                # 400/403/413/422: retrying the same bytes will never succeed. Park the rows
-                # (a batch that contains one bad item is split down to find it).
+                # 400/403/413/422: the same bytes will not succeed now. Split a batch down to the bad
+                # item, then park it: 422 is held for a retry (version skew), the rest is dead.
                 if len(rows) > 1:
                     size = max(1, len(rows) // 2)
+                    continue
+                if status == 422 and self._hold(ids[0], f"HTTP 422: {resp['body']}"):
+                    result.held += 1
+                    size = self.batch_size
                     continue
                 self._mark_dead(ids, f"HTTP {status}: {resp['body']}")
                 result.dead += len(ids)
@@ -265,6 +276,22 @@ class Spool:
                 "UPDATE outbox SET attempts = attempts + 1, last_error = ? WHERE id = ?",
                 [(err, i) for i in ids],
             )
+
+    def _hold(self, row_id: int, err: str) -> bool:
+        """Back off a 422-rejected row. False once it has been held for HOLD_SECONDS (then it dies)."""
+        with self._db() as db:
+            created, attempts = db.execute(
+                "SELECT created, attempts FROM outbox WHERE id = ?", (row_id,)
+            ).fetchone()
+            now = time.time()
+            if now - created > HOLD_SECONDS:
+                return False
+            delay = min(HOLD_BACKOFF_MAX, 60.0 * 2**attempts)
+            db.execute(
+                "UPDATE outbox SET attempts = attempts + 1, last_error = ?, retry_after = ? WHERE id = ?",
+                (f"held (server may be older than this sensor): {err}", now + delay, row_id),
+            )
+        return True
 
     def _mark_dead(self, ids: list[int], err: str) -> None:
         with self._db() as db:
