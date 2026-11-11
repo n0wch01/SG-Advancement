@@ -341,6 +341,40 @@ sga-sensor service status | uninstall
 - `utilityModel`, `decisionModel`은 아직 보지 않는다(미탐 가능).
 - 설정 파일을 거치지 않는 변경(실행 중 RPC로만 바꾼 값)은 보지 못한다.
 
+## 설치된 코드 무결성 (M5d)
+
+`sga-sensor run --openclaw`은 5분마다, 그리고 정책의 매니페스트가 바뀔 때마다 OpenClaw가 실제로 로드한 코드를 검사한다
+(`--integrity-interval`, `--no-openclaw-integrity`).
+
+1. `openclaw plugins list --json`으로 로드된 플러그인의 위치·출처(`bundled`/`global`/`config`)·버전을 받는다.
+   **출처 표시는 참고만 한다.** OpenClaw가 스스로 말하는 값이라 본체가 변조되면 거짓일 수 있다.
+2. 플러그인 폴더와 OpenClaw 본체를 해시한다(`integrity.dir_digest`, `node_modules` 제외). 본체 + 플러그인 45개에 약 3초.
+3. 정책의 매니페스트(서버가 npm 서명·출처로 검증한 배포본의 해시, [control-plane.md](control-plane.md))와 비교해
+   `integrity.report`를 보낸다(결과가 바뀔 때만).
+
+| 결과 | 뜻 | 룰 |
+|---|---|---|
+| `verified` + `approved`/`trusted` | 서명된 배포본과 같은 파일 | 없음. 이름 기반 룰의 허용 목록에도 자동으로 들어간다(`allow_trusted: openclaw_plugins`) |
+| `mismatch` | 배포본과 다르거나, 배포본에 없는 플러그인이 기본 플러그인 폴더에 있음 | `openclaw-plugin-tampered` (critical, **격리**: `openclaw plugins disable`) / 본체면 `openclaw-core-tampered` (critical, 알림) |
+| `pending` | 이 버전의 매니페스트가 아직 없음 (서버가 자동 검증 중) | `openclaw-version-unapproved` (medium) |
+| `verified` + `cooling` | 서명은 확인, 출시 3일 미만 | `openclaw-version-unapproved` (medium) |
+| `unknown` | npm 출처가 아니고 고정(pin)도 없음 | 이름 기반 `unapproved-plugin-installed` (기존 S1 룰) |
+
+- 격리는 **변조가 증명된 경우만**(결정 2026-11-11). SG-Advance 플러그인 자신은 끄지 않는다(통제만 사라지므로).
+- 마지막 검증 결과(신뢰된 플러그인 id)는 `<home>/trusted.json`에 저장한다. 재시작 직후 첫 검사 전에 들어온 인벤토리가 오탐을 내지 않게 하려는 것이다.
+- LaunchAgent는 설치할 때의 `PATH`를 가진다(launchd 기본 PATH로는 `openclaw`·`node`를 못 찾는다). 비밀값은 여전히 넣지 않는다.
+
+실환경 (2026-11-11, OpenClaw 2026.11.3):
+
+| 시각 (UTC) | 일어난 일 |
+|---|---|
+| 13:23:07 | 첫 검사: 본체·플러그인 44개 `pending` → `openclaw-version-unapproved` |
+| 직후 | 서버가 `openclaw@2026.11.3`(구성요소 71개), `@openclaw/codex@2026.11.3`을 npm 서명 + Sigstore 출처로 자동 검증, 둘 다 `cooling` (11-13 이후 `trusted`) |
+| 13:24:29 | 센서가 새 정책으로 재검사: 본체 + 플러그인 44개 **서명된 배포본과 일치**, 남은 것은 아직 고정하지 않은 `sg-advance`(`unknown`) |
+
+한계: 확인한 순간의 파일만 보장한다(설치 폴더가 사용자 권한으로 쓰기 가능). `node_modules`(npm이 따로 설치한 의존성)는 보지 않는다.
+설정에 따라 실행 중 메모리에만 있는 변경은 보지 못한다.
+
 ### 설치
 
 ```bash

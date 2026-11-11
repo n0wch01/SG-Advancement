@@ -22,6 +22,9 @@ docker compose up -d --build
 | `SGA_SIGNING_KEY` | `data/policy_signing_key.pem` | 정책 서명용 Ed25519 개인키. 없으면 처음 시작할 때 만든다 (0600) |
 | `SGA_MAX_BATCH` | `500` | 한 번에 받는 이벤트/finding 최대 개수 |
 | `SGA_PORT` | `8000` | compose에서 호스트에 여는 포트 (8000이 이미 쓰이고 있을 때) |
+| `SGA_RELEASE_COOLDOWN_DAYS` | `3` | 서명·출처가 검증된 릴리스를 자동 신뢰하기까지의 대기 기간 |
+| `SGA_AUTO_VERIFY` | `1` | 센서가 보고한 버전을 서버가 npm에서 받아 자동 검증 (`0`이면 관리자 명령만) |
+| `SGA_NPM_REGISTRY` | `https://registry.npmjs.org` | 패키지 메타데이터·서명·출처를 받을 레지스트리 |
 
 ## 인증
 
@@ -93,3 +96,35 @@ docker compose up -d --build
   단, 센서가 **보내기 전에 ID를 정해 둬야** 한다. ID 없이 보내면 서버가 받을 때마다 새 ID를 만들기 때문에 중복을 알아볼 수 없다.
 - **서버도 한 번 더 마스킹한다.** 센서가 이미 마스킹하지만, 마스킹은 여러 번 해도 결과가 같아서 비용이 거의 없다(심층 방어).
 - `received_ts`는 서버가 기록한다. 센서 시계가 틀려도 언제 도착했는지는 남는다.
+
+## 패키지 매니페스트 (M5d)
+
+서버는 에이전트 패키지의 **정본 해시**(매니페스트)를 만들어 서명된 정책에 넣는다. 센서는 설치된 파일의 해시를 이것과 비교한다
+([sensor.md](sensor.md) "설치된 코드 무결성").
+
+검증 순서 (`server/supply.py`), 하나라도 실패하면 `rejected`:
+1. **npm 레지스트리 서명**: npm이 `이름@버전:integrity`에 ECDSA P-256으로 서명한 값을 `/-/npm/v1/keys`의 공개키로 확인
+2. **출처(SLSA, Sigstore)**: 인증서가 GitHub Actions에서 신뢰하는 저장소(`openclaw/openclaw`)로 발급됐는지, 투명성 로그, 대상 해시가 패키지와 같은지
+3. **패키지 파일**: 내려받아 sha512가 `integrity`와 같은지
+
+| 상태 | 뜻 | 정해지는 방법 |
+|---|---|---|
+| `cooling` | 검증됨, 출시 3일 미만 | 자동 (변조 검사는 이미 동작) |
+| `trusted` | 검증됨, 출시 3일 경과 | 자동 (정책 요청 때 기간이 지났으면 다시 서명) |
+| `approved` | 보안팀 승인 | `manifest approve` (긴급 패치처럼 기다릴 수 없을 때) |
+| `revoked` | 보안팀 철회 | `manifest revoke` (악성으로 드러난 버전) |
+| `rejected` | 검증 실패 | 자동 |
+
+```bash
+export SGA_ADMIN_TOKEN=...   # 출력하지 않는다
+sga-server manifest list
+sga-server manifest add openclaw@2026.11.3 [--approve] [--by 이름]   # 지금 검증
+sga-server manifest approve|revoke openclaw@2026.11.3 --by 이름
+sga-server manifest pin sg-advance --dir integrations/openclaw-plugin --version 0.1.0   # npm에 없는 사내 플러그인
+```
+
+- 센서가 처음 보는 버전을 보고하면 서버가 **백그라운드에서 자동 검증**한다(작업자 하나가 순서대로, 패키지 하나에 수십~수백 MB).
+  신뢰하는 배포자가 없는 이름(`openclaw-tools` 같은 유사 이름 포함)은 내려받지 않는다.
+- 서버는 npm 레지스트리와 Sigstore(신뢰 루트 갱신)에 나가는 연결이 필요하다.
+- 출시 대기 기간을 두는 이유: 악성 npm 릴리스는 보통 며칠 안에 발견돼 내려간다. 배포자의 CI가 뚫려 서명까지 된 악성 버전이 나와도
+  대기 기간 안에 철회(`revoke`)할 수 있다.
