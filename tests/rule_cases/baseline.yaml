@@ -1,0 +1,99 @@
+# OpenClaw baseline watch (M5d): config.snapshot events from the sensor's config watcher.
+# Decisions (2026-11-11): alert only; exec is a violation only at dangerous values;
+# allowed runtimes are openclaw and codex (both verified to pass the plugin's before_tool_call).
+cases:
+  # ── 실행 전 판정 플러그인 ──
+  - name: 플러그인을 끈 설정 (재시작 전에 잡는다)
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, guard_plugin: disabled, guard_detail: "plugins.entries.sg-advance.enabled=false"}
+    expect: [openclaw-guard-plugin-disabled]
+
+  - name: 플러그인 항목이 설정에서 사라짐
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, guard_plugin: missing}
+    expect: [openclaw-guard-plugin-disabled]
+
+  - name: 플러그인이 켜진 정상 설정
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, guard_plugin: enabled}
+    expect_not: [openclaw-guard-plugin-disabled]
+
+  # ── exec 정책: 위험한 값만 위반 ──
+  - name: 전역 exec security=full
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, exec_policies: [{scope: global, security: full}]}
+    expect: [openclaw-exec-policy-unsafe]
+
+  - name: 특정 에이전트만 ask=off
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, exec_policies: [{scope: global}, {scope: "agent:ops", ask: "off"}]}
+    expect: [openclaw-exec-policy-unsafe]
+
+  - name: exec mode=full
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, exec_policies: [{scope: global, mode: full}]}
+    expect: [openclaw-exec-policy-unsafe]
+
+  - name: 기본값이거나 더 엄격한 exec 설정은 정상
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, exec_policies: [{scope: global}]}
+      - {kind: config.snapshot, product: openclaw, exec_policies: [{scope: global, security: allowlist, ask: on-miss}]}
+      - {kind: config.snapshot, product: openclaw, exec_policies: [{scope: global, security: deny, ask: always, mode: auto}]}
+    expect_not: [openclaw-exec-policy-unsafe, openclaw-elevated-exec-enabled]
+
+  - name: 권한 상승 경로 켜짐
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, exec_policies: [{scope: global, elevated: true}]}
+    expect: [openclaw-elevated-exec-enabled]
+
+  - name: 권한 상승 명시적으로 꺼짐
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, exec_policies: [{scope: global, elevated: false}]}
+    expect_not: [openclaw-elevated-exec-enabled]
+
+  # ── 런타임: openclaw, codex만 허용 ──
+  - name: auto 런타임
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, runtimes: [{scope: defaults, model: openai/gpt-6-luna, runtime: auto}]}
+    expect: [openclaw-runtime-unapproved]
+
+  - name: CLI 백엔드 런타임 (툴이 게이트웨이 hook 밖에서 돈다)
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, runtimes: [{scope: "agent:main", model: anthropic/claude-opus, runtime: claude-cli}]}
+    expect: [openclaw-runtime-unapproved]
+
+  - name: 고정되지 않은 모델 (OpenClaw가 런타임을 고른다)
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, runtimes: [{scope: defaults, model: openai/gpt-6-astra, runtime: default}]}
+    expect: [openclaw-runtime-unapproved]
+
+  - name: openclaw와 codex 런타임은 정상
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, runtimes: [{scope: defaults, model: openai/gpt-6-astra, runtime: openclaw}, {scope: "agent:main", model: openai/gpt-6.1-sol, runtime: codex}]}
+    expect_not: [openclaw-runtime-unapproved]

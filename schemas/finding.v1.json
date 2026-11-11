@@ -234,6 +234,7 @@
       "enum": [
         "openclaw_gateway",
         "openclaw_plugin",
+        "openclaw_config",
         "claude_code_hook",
         "gemini_cli_hook",
         "codex_cli_hook",

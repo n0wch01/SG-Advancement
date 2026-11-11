@@ -27,6 +27,7 @@ class EventKind(StrEnum):
     NET_EGRESS = "net.egress"
     INVENTORY_SNAPSHOT = "inventory.snapshot"
     SENSOR_HEALTH = "sensor.health"
+    CONFIG_SNAPSHOT = "config.snapshot"
 
 
 class ToolProviderKind(StrEnum):
@@ -160,6 +161,45 @@ class SensorHealth(StrictModel):
     last_seen: AwareDatetime | None = Field(default=None, description="Last sign of life before this report")
 
 
+class ExecPolicy(StrictModel):
+    """Shell-execution policy at one scope. ``None`` means "not set here" (the agent's default)."""
+
+    scope: str = Field(description='"global" or "agent:<id>"')
+    security: str | None = Field(default=None, description="openclaw: deny | allowlist | full")
+    ask: str | None = Field(default=None, description="openclaw: off | on-miss | always")
+    mode: str | None = Field(default=None, description="openclaw: deny | allowlist | ask | auto | full")
+    host: str | None = None
+    elevated: bool | None = Field(default=None, description="Privileged command path enabled")
+
+
+class RuntimePin(StrictModel):
+    """Which runtime executes a model's turns. Tools that run inside a foreign runtime (e.g. a CLI
+    backend) may never pass the gateway's pre-execution hooks."""
+
+    scope: str = Field(description='"defaults" or "agent:<id>"')
+    model: str
+    runtime: str = Field(description='Pinned runtime id, or "default" when nothing pins it')
+
+
+class ConfigSnapshot(StrictModel):
+    """Security-relevant settings of an agent installation, read from its own config.
+
+    Only allowlisted fields are copied: the config file also holds tokens and account details,
+    which never leave the endpoint. Emitted at sensor start and whenever these fields change."""
+
+    kind: Literal[EventKind.CONFIG_SNAPSHOT] = EventKind.CONFIG_SNAPSHOT
+    product: str = Field(description="e.g. openclaw")
+    path: str | None = Field(default=None, description="Config file the values came from")
+    changed: tuple[str, ...] = Field(default=(), description="Fields that differ from the previous snapshot")
+    guard_plugin: Literal["enabled", "disabled", "missing"] | None = Field(
+        default=None, description="The SG-Advance enforcement plugin as the config leaves it"
+    )
+    guard_detail: str | None = None
+    plugins: tuple[PluginDescriptor, ...] = ()
+    exec_policies: tuple[ExecPolicy, ...] = ()
+    runtimes: tuple[RuntimePin, ...] = ()
+
+
 Payload = Annotated[
     SessionStart
     | SessionEnd
@@ -170,7 +210,8 @@ Payload = Annotated[
     | LlmCall
     | NetEgress
     | InventorySnapshot
-    | SensorHealth,
+    | SensorHealth
+    | ConfigSnapshot,
     Field(discriminator="kind"),
 ]
 

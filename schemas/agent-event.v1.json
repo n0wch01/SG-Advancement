@@ -108,6 +108,104 @@
       "title": "AssistantMessage",
       "type": "object"
     },
+    "ConfigSnapshot": {
+      "additionalProperties": false,
+      "description": "Security-relevant settings of an agent installation, read from its own config.\n\nOnly allowlisted fields are copied: the config file also holds tokens and account details,\nwhich never leave the endpoint. Emitted at sensor start and whenever these fields change.",
+      "properties": {
+        "kind": {
+          "const": "config.snapshot",
+          "default": "config.snapshot",
+          "title": "Kind",
+          "type": "string"
+        },
+        "product": {
+          "description": "e.g. openclaw",
+          "title": "Product",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Config file the values came from",
+          "title": "Path"
+        },
+        "changed": {
+          "default": [],
+          "description": "Fields that differ from the previous snapshot",
+          "items": {
+            "type": "string"
+          },
+          "title": "Changed",
+          "type": "array"
+        },
+        "guard_plugin": {
+          "anyOf": [
+            {
+              "enum": [
+                "enabled",
+                "disabled",
+                "missing"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The SG-Advance enforcement plugin as the config leaves it",
+          "title": "Guard Plugin"
+        },
+        "guard_detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Guard Detail"
+        },
+        "plugins": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDescriptor"
+          },
+          "title": "Plugins",
+          "type": "array"
+        },
+        "exec_policies": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExecPolicy"
+          },
+          "title": "Exec Policies",
+          "type": "array"
+        },
+        "runtimes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RuntimePin"
+          },
+          "title": "Runtimes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "product"
+      ],
+      "title": "ConfigSnapshot",
+      "type": "object"
+    },
     "Endpoint": {
       "additionalProperties": false,
       "description": "The machine (container / VM / PC) the agent runs on.",
@@ -159,6 +257,86 @@
         "device_id"
       ],
       "title": "Endpoint",
+      "type": "object"
+    },
+    "ExecPolicy": {
+      "additionalProperties": false,
+      "description": "Shell-execution policy at one scope. ``None`` means \"not set here\" (the agent's default).",
+      "properties": {
+        "scope": {
+          "description": "\"global\" or \"agent:<id>\"",
+          "title": "Scope",
+          "type": "string"
+        },
+        "security": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "openclaw: deny | allowlist | full",
+          "title": "Security"
+        },
+        "ask": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "openclaw: off | on-miss | always",
+          "title": "Ask"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "openclaw: deny | allowlist | ask | auto | full",
+          "title": "Mode"
+        },
+        "host": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Host"
+        },
+        "elevated": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Privileged command path enabled",
+          "title": "Elevated"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "title": "ExecPolicy",
       "type": "object"
     },
     "InventorySnapshot": {
@@ -409,6 +587,33 @@
       "title": "Principal",
       "type": "object"
     },
+    "RuntimePin": {
+      "additionalProperties": false,
+      "description": "Which runtime executes a model's turns. Tools that run inside a foreign runtime (e.g. a CLI\nbackend) may never pass the gateway's pre-execution hooks.",
+      "properties": {
+        "scope": {
+          "description": "\"defaults\" or \"agent:<id>\"",
+          "title": "Scope",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "runtime": {
+          "description": "Pinned runtime id, or \"default\" when nothing pins it",
+          "title": "Runtime",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "model",
+        "runtime"
+      ],
+      "title": "RuntimePin",
+      "type": "object"
+    },
     "SensorHealth": {
       "additionalProperties": false,
       "description": "State of an enforcement or observation component, reported by the sensor itself.\nA component that goes quiet (e.g. a gateway plugin that stopped sending heartbeats) is a\ncontrol gap: tool calls may now run without a pre-execution check.",
@@ -472,6 +677,7 @@
       "enum": [
         "openclaw_gateway",
         "openclaw_plugin",
+        "openclaw_config",
         "claude_code_hook",
         "gemini_cli_hook",
         "codex_cli_hook",
@@ -917,6 +1123,7 @@
     "payload": {
       "discriminator": {
         "mapping": {
+          "config.snapshot": "#/$defs/ConfigSnapshot",
           "inventory.snapshot": "#/$defs/InventorySnapshot",
           "llm.call": "#/$defs/LlmCall",
           "message.assistant": "#/$defs/AssistantMessage",
@@ -960,6 +1167,9 @@
         },
         {
           "$ref": "#/$defs/SensorHealth"
+        },
+        {
+          "$ref": "#/$defs/ConfigSnapshot"
         }
       ],
       "title": "Payload"

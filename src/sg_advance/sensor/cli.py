@@ -5,7 +5,7 @@
     sga-sensor status
     sga-sensor sync                       # pull policy + flush spool
     sga-sensor replay examples/events/claude_code.jsonl
-    sga-sensor run --openclaw                  # daemon: watch the local OpenClaw gateway
+    sga-sensor run --openclaw                  # daemon: watch the local OpenClaw gateway + its config
 
 The OpenClaw gateway token comes from OPENCLAW_GATEWAY_TOKEN (never from argv).
 The enrollment token can also come from SGA_ENROLL_TOKEN (keeps it out of shell history
@@ -147,6 +147,10 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
                 capture=args.capture,
             )
         )
+        if not args.no_openclaw_config:  # baseline watch (M5d): same gateway, its config file
+            from .adapters.openclaw_config import OpenClawConfigAdapter
+
+            adapters.append(OpenClawConfigAdapter(args.openclaw_config))
     if args.replay:
         adapters.append(ReplayAdapter(args.replay, delay=args.replay_delay))
     if not adapters and args.no_local_api:
@@ -273,6 +277,13 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="gateway token file, mode 0600 (default: <home>/openclaw-token)",
     )
+    p.add_argument(
+        "--openclaw-config",
+        type=Path,
+        default=Path("~/.openclaw/openclaw.json"),
+        help="OpenClaw config to watch for baseline changes (default: ~/.openclaw/openclaw.json)",
+    )
+    p.add_argument("--no-openclaw-config", action="store_true", help="don't watch the OpenClaw config")
     p.set_defaults(fn=_cmd_run)
 
     p = sub.add_parser("service", help="run the daemon as a background service (macOS launchd)")

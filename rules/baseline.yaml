@@ -1,0 +1,73 @@
+# 기준선: 에이전트 설치의 보안 설정이 회사 기준에서 벗어났는지 (M5d)
+# 입력은 센서의 설정 감시가 보내는 config.snapshot 이벤트다(허용된 필드만, 토큰·계정 정보 제외).
+# 결정(2026-11-11): 대응은 알림만. exec는 위험한 값만 위반. 런타임은 openclaw·codex만 허용.
+# config.snapshot은 설정이 바뀔 때만 오므로 dedup: none(고쳤다가 다시 바꿔도 또 알린다).
+version: 1
+rules:
+  # 오탐 주의: 의도적인 점검·업그레이드로 잠시 끈 경우에도 걸린다.
+  - id: openclaw-guard-plugin-disabled
+    severity: high
+    category: policy_violation
+    title: 실행 전 판정 플러그인 비활성화 설정
+    message: OpenClaw 설정에서 SG-Advance 플러그인이 꺼지거나 빠졌습니다. 게이트웨이가 다시 시작되면 툴 호출이 실행 전 판정 없이 돕니다.
+    recommended_action: 의도한 변경인지 확인하고, 아니면 `openclaw plugins enable sg-advance`로 되돌린 뒤 변경한 사용자를 확인하세요.
+    response: alert
+    dedup: none
+    tags: [owasp-llm:LLM06]
+    when: {payload.kind: config.snapshot}
+    match:
+      type: regex
+      fields: [payload.guard_plugin]
+      pattern: '^(disabled|missing)$'
+
+  # security·mode의 full, ask의 off만 본다(값 이름이 겹치지 않아 한 정규식으로 충분하다).
+  # 기본값(설정 없음)과 더 엄격한 값(deny, always)은 통과한다.
+  - id: openclaw-exec-policy-unsafe
+    severity: high
+    category: policy_violation
+    title: 셸 실행 정책 완화
+    message: OpenClaw exec 정책이 승인 없이 모든 셸 명령을 허용하는 값으로 바뀌었습니다.
+    recommended_action: tools.exec(또는 에이전트별 tools.exec) 설정을 기본값(security=allowlist, ask=on-miss)으로 되돌리세요.
+    response: alert
+    dedup: none
+    tags: [owasp-llm:LLM06]
+    when: {payload.kind: config.snapshot}
+    match:
+      type: regex
+      fields:
+        - payload.exec_policies[].security
+        - payload.exec_policies[].mode
+        - payload.exec_policies[].ask
+      pattern: '^(full|off)$'
+
+  - id: openclaw-elevated-exec-enabled
+    severity: medium
+    category: privilege_escalation
+    title: 권한 상승 실행 경로 활성화
+    message: OpenClaw의 권한 상승(elevated) 툴 실행 경로가 켜졌습니다.
+    recommended_action: 필요한 발신자만 tools.elevated.allowFrom에 두었는지 확인하고, 필요 없으면 끄세요.
+    response: alert
+    dedup: none
+    tags: [owasp-llm:LLM06]
+    when: {payload.kind: config.snapshot}
+    match:
+      type: allowlist
+      field: payload.exec_policies[].elevated
+      allow: ['false']
+
+  # default = 아무것도 고정하지 않아 OpenClaw가 런타임을 고른다(공식 OpenAI 엔드포인트는 Codex).
+  # 오탐 주의: OpenClaw 기본 설치는 모델을 고정하지 않으므로 처음에는 여기에 걸린다(M5d 기준선이 "모든 모델 고정").
+  - id: openclaw-runtime-unapproved
+    severity: medium
+    category: policy_violation
+    title: 검증되지 않은 모델 런타임
+    message: 실행 전 판정이 확인되지 않은 런타임으로 모델이 돌 수 있습니다. CLI 백엔드 등은 툴 호출이 게이트웨이 플러그인을 거치지 않을 수 있습니다.
+    recommended_action: 해당 모델의 agentRuntime.id를 openclaw 또는 codex로 고정하세요.
+    response: alert
+    dedup: none
+    tags: [owasp-llm:LLM06]
+    when: {payload.kind: config.snapshot}
+    match:
+      type: allowlist
+      field: payload.runtimes[].runtime
+      allow: [openclaw, codex]
