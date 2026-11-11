@@ -372,6 +372,18 @@ sga-sensor service status | uninstall
 | 직후 | 서버가 `openclaw@2026.11.3`(구성요소 71개), `@openclaw/codex@2026.11.3`을 npm 서명 + Sigstore 출처로 자동 검증, 둘 다 `cooling` (11-13 이후 `trusted`) |
 | 13:24:29 | 센서가 새 정책으로 재검사: 본체 + 플러그인 44개 **서명된 배포본과 일치**, 남은 것은 아직 고정하지 않은 `sg-advance`(`unknown`) |
 
+보안팀 승인(`manifest approve` 2건 + `manifest pin sg-advance`) 뒤 14:52:21 재검사: 45개 모두 `verified` + `approved`,
+신뢰 목록 45개 → 이후 센서 재시작에서 이름 기반 `unapproved-plugin-installed` 오탐이 더 나오지 않았다.
+
+변조 시험 (같은 날, `talk-voice` 폴더에 파일 하나를 끼워 넣음):
+
+| 시각 (UTC) | 일어난 일 | 결과 |
+|---|---|---|
+| 14:53:16 | `dist/extensions/talk-voice/sga-tamper-test.js` 추가, 센서 재시작(시작할 때 검사) | |
+| 14:53:35 | 검사: `plugin:talk-voice` 해시가 배포본과 다름 | ✅ `openclaw-plugin-tampered` (critical) |
+| 14:53:44 | 격리 | ✅ `openclaw plugins disable talk-voice` 실행, `enforced: true`. 설정 감시도 플러그인 변경을 기록 |
+| 이후 | 파일 삭제 → 해시가 배포본과 다시 일치, `plugins enable talk-voice`로 복구 | |
+
 한계: 확인한 순간의 파일만 보장한다(설치 폴더가 사용자 권한으로 쓰기 가능). `node_modules`(npm이 따로 설치한 의존성)는 보지 않는다.
 설정에 따라 실행 중 메모리에만 있는 변경은 보지 못한다.
 
