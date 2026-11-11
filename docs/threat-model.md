@@ -56,6 +56,8 @@
 | T15 | 다른 프로세스가 안전장치를 끄고 에이전트 실행 | ② | `agent-safety-bypass`, `agent-unattended-safety-bypass` 룰 (스키마 필드 추가) | 룰 초안, 수집은 M6 |
 | T16 | 정상 툴(PR 생성, 티켓 작성)을 통한 데이터 유출 | ② | 툴 인자의 출처·목적지 판단 (비공개 → 공개) | M8 |
 | T17 | 셸 밖 파괴적 행동 (SQL `DROP`, 클라우드 API 삭제) | ② | `destructive-sql`, `destructive-cloud-command` 룰 (require_approval) | 룰 초안 |
+| T18 | 에이전트 간 위임을 통한 인젝션 전파 (하위 에이전트가 읽은 문서 → 총괄 → 다른 에이전트의 행동) | ①② | 위임 체인을 따라 세션을 묶어 시퀀스 판정 | M5b |
+| T19 | 네이티브 런타임(Codex 등)이 OpenClaw 승인을 거치지 않음 (Codex 기본값 `yolo`, `approvalPolicy: never`) | ② | 런타임 가시성 확인, 필요하면 해당 CLI를 직접 관측 | X1 |
 
 ## 범위 밖
 
