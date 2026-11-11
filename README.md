@@ -17,8 +17,8 @@
 ┌──────────────────────── Control Plane ────────────────────────┐
 │  Policy Server        Telemetry Collector      Threat Console │
 └───────┬──────────────────────▲───────────────────────┬────────┘
-        │ policy pull          │ AgentEvent / Finding   │ remote response
-┌───────▼──────────────────────┴───────────────────────▼────────┐
+        │ policy pull          │ AgentEvent / Finding  │ remote response
+┌───────▼──────────────────────┴───────────────────────▼─────────┐
 │ Endpoint (container / VM / PC)                                 │
 │  Sentinel sensor = policy cache + local detection + enforcement│
 │   ├ OpenClaw gateway adapter     ├ Claude Code hooks adapter   │
