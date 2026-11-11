@@ -50,7 +50,7 @@ class Daemon:
         sync_interval: float = 60.0,
         flush_interval: float = 5.0,
         local_api: LocalApiServer | None = None,
-        health_interval: float = 30.0,
+        health_interval: float = 10.0,  # cheap; bounds how late a lost plugin is reported
     ) -> None:
         self.sensor = sensor
         self.adapters = list(adapters)
@@ -85,13 +85,17 @@ class Daemon:
     def check_plugin_health(self, now: float | None = None) -> str | None:
         """Emit a sensor.health event when the gateway plugin's heartbeats stop."""
         plugins = self.ctx.plugins
+        said_bye = plugins.bye_at is not None
         if plugins.check(now) != "lost":
             return None
         last = plugins.last_contact
         quiet = (now or time.time()) - last if last is not None else None
-        detail = (
-            f"no heartbeat for {quiet:.0f}s" if quiet is not None else "no heartbeat since the sensor started"
-        )
+        if said_bye:
+            detail = f"plugin was unloaded by the gateway and did not return within {plugins.bye_grace:.0f}s"
+        elif quiet is not None:
+            detail = f"no heartbeat for {quiet:.0f}s"
+        else:
+            detail = "no heartbeat since the sensor started"
         log.warning("openclaw plugin heartbeat lost (%s)", detail)
         record_health(self.ctx, "lost", detail, last)
         return "lost"

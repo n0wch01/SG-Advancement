@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { buildRequest, cliAsk, decide, settingsFrom, socketAsk, type Verdict } from "./policy.ts";
+import { buildRequest, cliAsk, decide, settingsFrom, socketAsk, startHeartbeat, type Verdict } from "./policy.ts";
 
 const s = settingsFrom({ sensorHome: "/tmp/x" }, {});
 const event = { toolName: "exec", toolCallId: "c1", runId: "r1", params: { command: "rm -rf ~/x" } };
@@ -102,4 +102,27 @@ test("real CLI round trip and missing CLI", async () => {
   const v = await cliAsk(fake, dir, 3000)({});
   assert.equal(v.reason, "cli");
   await assert.rejects(cliAsk(join(dir, "nope"), dir, 1000)({}));
+});
+
+test("heartbeat stops and says bye when the gateway disposes the plugin", async () => {
+  const sent: string[] = [];
+  let dispose: (() => unknown) | undefined;
+  const ask = async (req: Record<string, unknown>) => {
+    sent.push(req.op as string);
+    return { ok: true };
+  };
+  startHeartbeat(ask, { onDispose: (c) => (dispose = c) }, { plugin: "sg-advance", version: "0" }, () => {}, 10);
+  await new Promise((r) => setTimeout(r, 35));
+  assert.ok(sent.filter((op) => op === "hello").length >= 3); // first hello + ticks
+  assert.ok(dispose, "registered an onDispose cleanup");
+  await dispose!();
+  const afterBye = sent.length;
+  assert.equal(sent.at(-1), "bye");
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(sent.length, afterBye); // no hello after dispose
+});
+
+test("heartbeat works on hosts without managed lifecycle", async () => {
+  const cleanup = startHeartbeat(async () => ({ ok: true }), undefined, { plugin: "sg-advance" });
+  await cleanup(); // feature-detected: nothing to register, still stoppable
 });

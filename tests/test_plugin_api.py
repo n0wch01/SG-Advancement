@@ -269,6 +269,40 @@ async def test_hello_after_loss_reports_recovery(api, enrolled: Sensor) -> None:
     assert not [f for f in spooled(enrolled, "finding") if f["rule_id"] == "openclaw-plugin-heartbeat-lost"]
 
 
+def test_goodbye_without_successor_is_lost_quickly() -> None:
+    """Live 2026-11-11: `plugins disable` unloads the hooks at once, without a gateway restart."""
+    from sg_advance.sensor.registry import PluginRegistry
+
+    r = PluginRegistry(lost_after=150, bye_grace=30)
+    r.heartbeat(now=1_000)
+    r.goodbye(now=1_010)
+    assert r.check(now=1_030) is None  # a restart's new instance gets 30 s to say hello
+    assert r.check(now=1_041) == "lost"  # far sooner than the 150 s heartbeat timeout
+
+
+def test_goodbye_then_hello_is_a_restart_not_a_loss() -> None:
+    from sg_advance.sensor.registry import PluginRegistry
+
+    r = PluginRegistry(lost_after=150, bye_grace=30)
+    r.heartbeat(now=1_000)
+    r.goodbye(now=1_010)
+    assert r.heartbeat(now=1_015) is None  # no "recovered": nothing was reported
+    assert r.check(now=1_100) is None
+
+
+async def test_bye_op_and_daemon_detail(api, enrolled: Sensor) -> None:
+    from sg_advance.sensor.daemon import Daemon
+
+    server, path = api
+    server.ctx.plugins.heartbeat()
+    assert await ask(path, {"op": "bye", "plugin": "sg-advance", "reason": "disposed"}) == [{"ok": True}]
+    assert server.ctx.plugins.bye_at is not None
+    daemon = Daemon(enrolled, [], server.ctx)
+    assert daemon.check_plugin_health(now=server.ctx.plugins.bye_at + 31) == "lost"
+    ev = next(e for e in spooled(enrolled, "event") if e["payload"]["kind"] == "sensor.health")
+    assert "unloaded by the gateway" in ev["payload"]["detail"]
+
+
 # ── standing operation: token file, background service ──────────────────────
 
 

@@ -16,11 +16,17 @@ class PluginRegistry:
     - ``expected``: once the plugin has said hello, this endpoint is expected to keep it. The flag
       is sticky and persisted (``state_path``): disabling the plugin and waiting, or restarting the
       daemon, must not silently switch bypass detection off.
-    - ``check()`` reports ``"lost"`` once when heartbeats stop for ``lost_after`` seconds; the next
-      hello reports ``"recovered"``.
+    - ``check()`` reports ``"lost"`` once when heartbeats stop for ``lost_after`` seconds, or sooner
+      (``bye_grace``) after the plugin said goodbye; the next hello reports ``"recovered"``.
     """
 
-    def __init__(self, keep: int = 20_000, lost_after: float = 150.0, state_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        keep: int = 20_000,
+        lost_after: float = 150.0,
+        state_path: Path | None = None,
+        bye_grace: float = 30.0,
+    ) -> None:
         self._seen: OrderedDict[str, float] = OrderedDict()
         self.keep = keep
         self.lost_after = lost_after
@@ -29,6 +35,8 @@ class PluginRegistry:
         self.expected = False
         self.last_contact: float | None = None  # wall clock (epoch seconds)
         self.lost_reported = False
+        self.bye_grace = bye_grace
+        self.bye_at: float | None = None  # the plugin said it was unloaded (not persisted)
         self._started = time.time()
         self._load()
 
@@ -63,6 +71,7 @@ class PluginRegistry:
     def touch(self, now: float | None = None) -> str | None:
         """Any message from the plugin. Returns ``"recovered"`` after a reported loss."""
         self.last_contact = now if now is not None else time.time()
+        self.bye_at = None  # a new instance (gateway restart, plugin re-enabled) is talking to us
         transition = None
         if self.lost_reported:
             self.lost_reported = False
@@ -83,12 +92,21 @@ class PluginRegistry:
         if not self.expected or self.lost_reported:
             return None
         now = now if now is not None else time.time()
+        if self.bye_at is not None and now - self.bye_at > self.bye_grace:
+            self.lost_reported = True  # unloaded and no successor said hello
+            self._save()
+            return "lost"
         since = self.last_contact if self.last_contact is not None else self._started
         if now - since > self.lost_after:
             self.lost_reported = True
             self._save()
             return "lost"
         return None
+
+    def goodbye(self, now: float | None = None) -> None:
+        """The plugin instance is being disposed. A gateway restart or plugin update says hello
+        again within seconds; if nothing does within ``bye_grace``, ``check()`` reports the loss."""
+        self.bye_at = now if now is not None else time.time()
 
     @property
     def active(self) -> bool:

@@ -164,6 +164,32 @@ export async function decide(
 
 // ── transports ─────────────────────────────────────────────────────────────
 
+type Lifecycle = { onDispose?: (cleanup: () => unknown) => unknown } | undefined;
+
+/** Say hello now and every ``intervalMs``; stop and say goodbye when the gateway disposes us.
+ * Disabling, removing or replacing the plugin disposes the instance in place (no gateway restart)
+ * and OpenClaw leaves our timers running unless we stop them: a heartbeat that outlives its hooks
+ * would vouch for a plugin that no longer judges anything. Returns the cleanup for tests. */
+export function startHeartbeat(
+  ask: (req: Record<string, unknown>) => Promise<unknown>,
+  lifecycle: Lifecycle,
+  hello: Record<string, unknown>,
+  onFirstError: (e: Error) => void = () => {},
+  intervalMs = 60_000,
+): () => Promise<void> {
+  ask({ op: "hello", ...hello }).catch(onFirstError);
+  const timer = setInterval(() => {
+    ask({ op: "hello", ...hello }).catch(() => {});
+  }, intervalMs);
+  timer.unref?.();
+  const cleanup = async () => {
+    clearInterval(timer);
+    await ask({ op: "bye", plugin: hello.plugin, reason: "disposed" }).catch(() => {});
+  };
+  lifecycle?.onDispose?.(cleanup);
+  return cleanup;
+}
+
 export function socketAsk(path: string, timeoutMs: number) {
   return (req: object): Promise<Verdict> =>
     new Promise((resolve, reject) => {

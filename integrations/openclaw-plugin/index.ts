@@ -6,7 +6,7 @@
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
-import { cliAsk, decide, settingsFrom, socketAsk } from "./policy.ts";
+import { cliAsk, decide, settingsFrom, socketAsk, startHeartbeat } from "./policy.ts";
 
 const VERSION = "0.1.0";
 
@@ -21,13 +21,10 @@ export default definePluginEntry({
     const log = (level: "info" | "warn", msg: string) => api.logger?.[level]?.(msg);
 
     // Announce ourselves: the daemon only treats unjudged tool calls as a bypass while we're around.
-    askDaemon({ op: "hello", plugin: "sg-advance", version: VERSION }).catch((e: Error) =>
+    // On dispose (plugin disabled/removed/replaced) the heartbeat stops and the daemon hears "bye".
+    startHeartbeat(askDaemon, api.lifecycle, { plugin: "sg-advance", version: VERSION }, (e: Error) =>
       log("warn", `SG-Advance daemon not reachable at ${s.socketPath}: ${e.message}`),
     );
-    const heartbeat = setInterval(() => {
-      askDaemon({ op: "hello", plugin: "sg-advance", version: VERSION }).catch(() => {});
-    }, 60_000);
-    heartbeat.unref?.();
 
     api.on(
       "before_tool_call",

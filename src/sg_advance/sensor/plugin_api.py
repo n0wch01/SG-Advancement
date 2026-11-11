@@ -9,6 +9,8 @@ Protocol: one JSON object per line, one response line per request.
 
 ``{"op": "hello", "plugin": "sg-advance", "version": ...}``
     → ``{"ok": true}``. Marks the plugin as present (enables bypass detection).
+``{"op": "bye", "plugin": "sg-advance", "reason": "disposed"}`` → ``{"ok": true}``. The instance is
+    being unloaded; a loss is reported unless a new instance says hello within 30s.
 ``{"op": "tool_call", "agentId", "sessionKey", "sessionId", "runId", "toolCallId", "toolName",
    "toolKind", "params", "requester": {...}}``
     → ``{"ok": true, "decision": "allow"|"block"|"approve", "action", "rules", "title", "reason"}``
@@ -191,6 +193,10 @@ class LocalApiServer:
         if not isinstance(req, dict):
             return {"ok": False, "error": "expected an object"}
         op = req.get("op")
+        if op == "bye":  # disposed by the gateway (plugin disabled, removed, replaced, or shutdown)
+            log.warning("openclaw plugin unloaded: %s (%s)", req.get("plugin"), req.get("reason"))
+            self.ctx.plugins.goodbye()
+            return {"ok": True}
         transition = self.ctx.plugins.heartbeat() if op == "hello" else self.ctx.plugins.touch()
         if transition == "recovered":
             log.warning("openclaw plugin is back")
