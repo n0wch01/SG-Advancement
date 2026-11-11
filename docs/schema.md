@@ -30,6 +30,7 @@ AgentEvent
 | `net.egress` | 외부 네트워크 요청 | method, url, host, bytes_out, destination |
 | `inventory.snapshot` | 사용 가능한 툴·플러그인·MCP 서버 목록 | tools, plugins, mcp_servers |
 | `sensor.health` | 통제 장치 자체의 상태 (툴 호출이 아님) | component(`openclaw_plugin` 등), status(`up \| lost \| recovered`), detail, last_seen |
+| `config.snapshot` | 에이전트 설치의 보안 설정 (허용된 필드만, 바뀔 때마다) | product, path, changed, guard_plugin, plugins, exec_policies[{scope, security, ask, mode, host, elevated}], runtimes[{scope, model, runtime}] |
 
 `provider.kind`는 툴의 출처를 나타낸다: `builtin | plugin | mcp | function | unknown`.
 
@@ -50,7 +51,8 @@ AgentEvent
 | OpenClaw `tools.effective` / `tools.catalog` RPC | `inventory.snapshot` |
 | OpenClaw `agent` lifecycle start / end | `session.start` / `session.end` |
 | OpenClaw 플러그인 `before_tool_call` (센서 `openclaw_plugin`) | `tool.call` (실행 전, 판정과 함께) |
-| OpenClaw 플러그인 인사(60초) 끊김·재개 | `sensor.health` lost / recovered |
+| OpenClaw 플러그인 인사(60초) 끊김·`bye`·재개 | `sensor.health` lost / recovered |
+| OpenClaw 설정 파일 `~/.openclaw/openclaw.json` (센서 `openclaw_config`) | `config.snapshot` |
 | Claude Code `SessionStart` / `SessionEnd` hook | `session.start` / `session.end` |
 | Claude Code `UserPromptSubmit` hook | `prompt.user` |
 | Claude Code `PreToolUse` / `PostToolUse` hook | `tool.call` / `tool.result` |

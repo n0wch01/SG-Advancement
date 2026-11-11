@@ -70,7 +70,8 @@ B는 등록 토큰을 쓰기 **전에** `/healthz`의 키 지문을 먼저 비�
 | 전송 중 네트워크 오류, 5xx, 408, 429 | 대기열에 그대로 두고 다음 `flush`에서 다시 보낸다 |
 | 응답만 잃어버렸다 (서버는 저장함) | 다시 보내면 서버가 `duplicates`로 세고 버린다 |
 | 401 (장비 토큰 거부) | 대기열을 유지하고 멈춘다. 다시 등록해야 한다 |
-| 400·403·413·422 (같은 내용으로는 절대 성공 못 함) | 배치를 반으로 나눠 가며 문제 항목만 찾아 `dead`로 격리한다. 나머지는 전송된다 |
+| 400·403·413 (같은 내용으로는 절대 성공 못 함) | 배치를 반으로 나눠 가며 문제 항목만 찾아 `dead`로 격리한다. 나머지는 전송된다 |
+| 422 (서버가 센서보다 오래됨: 새 이벤트 종류·필드) | 문제 항목만 **보류**하고 1분·2분·4분… 최대 1시간 간격으로 다시 보낸다. 서버를 올리면 들어간다. 7일이 지나면 `dead` |
 | 오래 끊겨서 대기열이 가득 찼다 (기본 5만 건) | **낮은 등급의 오래된 이벤트부터** 버리고 finding은 지킨다. 등급별로 버린 개수가 `status`에 나온다 |
 
 ## 대기열 우선순위
@@ -246,11 +247,16 @@ OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──
 
 | 상황 | 이벤트 | 룰 |
 |---|---|---|
-| 마지막 인사 후 150초가 지남 (30초마다 점검) | `sensor.health` `status: lost` (한 번만) | `openclaw-plugin-heartbeat-lost` (alert, high) |
+| 플러그인이 언로드되며 `bye`를 보냈고 30초 안에 새 인사가 없음 (10초마다 점검) | `sensor.health` `status: lost` | `openclaw-plugin-heartbeat-lost` (alert, high) |
+| 마지막 인사 후 150초가 지남 (게이트웨이가 죽는 등 `bye`를 못 보낸 경우) | `sensor.health` `status: lost` (한 번만) | 같은 룰 |
 | 끊긴 뒤 다시 인사가 옴 | `sensor.health` `status: recovered` | 없음 (기록만) |
 | 신호가 끊긴 동안 실행된 툴 호출 | `tool.call` + `labels.sga_plugin: missing` | `openclaw-plugin-bypass` |
 
 `sensor.health`는 이번에 추가한 이벤트 종류다. 툴 호출이 아니라 **통제 장치 자체의 상태**를 나타낸다.
+
+플러그인은 OpenClaw가 인스턴스를 정리할 때(`api.lifecycle.onDispose`) 인사 타이머를 멈추고 `bye`를 보낸다.
+OpenClaw는 플러그인의 타이머를 대신 멈추지 않으므로, 이걸 안 하면 판정 hook이 빠진 뒤에도 인사가 계속 간다(아래 실환경 결과).
+`bye` 뒤 30초를 기다리는 이유는 정상적인 게이트웨이 재시작이나 플러그인 교체에서는 새 인스턴스가 몇 초 안에 인사하기 때문이다.
 
 ### 상시 운영
 
@@ -286,9 +292,54 @@ sga-sensor service status | uninstall
 | 16:10:52 | 에이전트가 `pwd` 실행 (플러그인 없이 그대로 실행) | ✅ `openclaw-plugin-bypass` (high) |
 | 16:12:27 | `plugins enable` 후 게이트웨이 재시작, 인사 재개 | ✅ `sensor.health recovered` |
 
-- `plugins disable`만으로는 **실행 중인 게이트웨이에서 플러그인이 내려가지 않는다**(재시작 전까지 인사가 계속 왔다).
-  통제를 끄려면 게이트웨이를 재시작해야 하고, 그 재시작은 신호 감시가 약 2.5분 안에 잡는다.
-- 그 사이 툴은 막히지 않고 실행된다. 이 공백은 실시간 우회 finding이 메운다(사후 탐지). 공백을 없애려면 M5d의 설정 변경 감시가 필요하다.
+- ~~`plugins disable`만으로는 실행 중인 게이트웨이에서 플러그인이 내려가지 않는다~~ → **틀린 결론이었다**(아래 재시험).
+  재시작 전까지 인사가 계속 온 것은 플러그인이 타이머를 정리하지 않았기 때문이고, 판정 hook은 이미 빠져 있었다.
+
+재시험 (같은 날, 재시작 없이 `plugins disable`만):
+
+| 시각 (KST) | 일어난 일 | 결과 |
+|---|---|---|
+| 17:46:01 | `plugins disable sg-advance` | 설정 파일 변경 |
+| 17:46:02 | 설정 감시(M5d) | ✅ `openclaw-guard-plugin-disabled` (high), 1초 |
+| 17:46:51 | 에이전트가 `pwd` 실행 | ⚠️ **판정 없이 실행됨**(hook은 즉시 빠진다). WS가 `openclaw-plugin-bypass`로 잡음 |
+| 17:46:36~ | 인사 | ⚠️ 계속 옴 → "인사 = 판정 중"이 성립하지 않았다 |
+
+`onDispose` 정리와 `bye`를 넣은 뒤 (게이트웨이 재시작으로 새 코드 로드, 다시 `plugins disable`만):
+
+| 시각 (KST) | 일어난 일 | 결과 |
+|---|---|---|
+| 17:55:21.71 | 설정 감시 | ✅ `openclaw-guard-plugin-disabled` |
+| 17:55:21.96 | 플러그인이 정리되며 `bye` | 데몬 로그 `openclaw plugin unloaded` |
+| 17:56:01 | `bye` 후 30초 + 점검 주기 | ✅ `openclaw-plugin-heartbeat-lost` "unloaded by the gateway and did not return within 30s" |
+| 이후 | 인사 | ✅ 멈춤 |
+
+끄는 순간 설정 finding, 40초 안에 끊김 finding, 그 사이 실행된 툴은 우회 finding. 세 신호가 서로를 받쳐 준다.
+
+## OpenClaw 설정 기준선 감시 (M5d)
+
+`sga-sensor run --openclaw`은 게이트웨이와 함께 그 설정 파일(`~/.openclaw/openclaw.json`, `--openclaw-config`로 변경,
+`--no-openclaw-config`로 끔)도 2초마다 확인한다. 보안에 관련된 값이 바뀌면 `config.snapshot` 이벤트를 보낸다(시작할 때 한 번 더).
+
+- **허용 목록만 보낸다.** 설정 파일에는 게이트웨이 토큰과 계정 이메일이 들어 있다. 아래 값만 골라 보내고 원본은 보내지 않는다.
+  토큰만 바뀐 경우처럼 이 값들이 그대로면 이벤트도 없다.
+- 플러그인을 끄면 설정이 먼저 바뀌므로, **끄는 순간** 잡는다(신호 감시보다 빠르다).
+
+| 필드 | 읽는 설정 | 룰 (모두 `alert`) |
+|---|---|---|
+| `guard_plugin` | `plugins.enabled`, `plugins.allow/deny`, `plugins.entries.sg-advance.enabled`, 설치·로드 경로 | `openclaw-guard-plugin-disabled` (high): `disabled` 또는 `missing` |
+| `exec_policies[]` | `tools.exec.security/ask/mode/host`, `tools.elevated.enabled`, 에이전트별 `tools` | `openclaw-exec-policy-unsafe` (high): `full` 또는 `ask=off` / `openclaw-elevated-exec-enabled` (medium) |
+| `runtimes[]` | 모델별 `agentRuntime.id` (에이전트 > 기본 에이전트 > 프로바이더 모델 > 프로바이더), 에이전트 `runtime.type: acp` | `openclaw-runtime-unapproved` (medium): `openclaw`, `codex` 외 전부 |
+| `plugins[]` | 플러그인 id·버전·켜짐 | (인벤토리용, 룰 없음) |
+
+결정(2026-11-11): 대응은 알림만(설정을 건드리지 않음), exec는 위험한 값만 위반(기본값과 더 엄격한 값은 통과),
+런타임은 플러그인 차단을 실환경에서 확인한 `openclaw`와 `codex`만 허용. `auto`, CLI 백엔드(`claude-cli` 등), ACP 하네스,
+**고정하지 않은 모델**(`default`)은 위반이다. CLI 백엔드나 ACP 하네스에서는 툴이 게이트웨이 hook을 거치지 않을 수 있다.
+
+오탐·미탐:
+- 고정하지 않은 모델을 위반으로 보므로, OpenClaw 기본 설치는 처음에 `openclaw-runtime-unapproved`에 걸린다(기준선이 "모든 모델 고정").
+- 점검·업그레이드로 잠시 플러그인을 꺼도 걸린다.
+- `utilityModel`, `decisionModel`은 아직 보지 않는다(미탐 가능).
+- 설정 파일을 거치지 않는 변경(실행 중 RPC로만 바꾼 값)은 보지 못한다.
 
 ### 설치
 
