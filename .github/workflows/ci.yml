@@ -10,7 +10,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      # Node runs the OpenClaw plugin's tests and the plugin<->daemon test in pytest
+      # (TypeScript type stripping needs Node >= 22.18).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
       - run: uv sync
       - run: uvx ruff check .
       - run: uv run python scripts/export_schema.py --check
+      - run: node --test integrations/openclaw-plugin/policy.test.ts
       - run: uv run pytest

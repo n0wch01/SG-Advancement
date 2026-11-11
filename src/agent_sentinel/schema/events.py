@@ -26,6 +26,7 @@ class EventKind(StrEnum):
     LLM_CALL = "llm.call"
     NET_EGRESS = "net.egress"
     INVENTORY_SNAPSHOT = "inventory.snapshot"
+    SENSOR_HEALTH = "sensor.health"
 
 
 class ToolProviderKind(StrEnum):
@@ -147,6 +148,18 @@ class InventorySnapshot(StrictModel):
     mcp_servers: tuple[str, ...] = ()
 
 
+class SensorHealth(StrictModel):
+    """State of an enforcement or observation component, reported by the sensor itself.
+    A component that goes quiet (e.g. a gateway plugin that stopped sending heartbeats) is a
+    control gap: tool calls may now run without a pre-execution check."""
+
+    kind: Literal[EventKind.SENSOR_HEALTH] = EventKind.SENSOR_HEALTH
+    component: str = Field(description="e.g. openclaw_plugin")
+    status: Literal["up", "lost", "recovered"]
+    detail: str | None = None
+    last_seen: AwareDatetime | None = Field(default=None, description="Last sign of life before this report")
+
+
 Payload = Annotated[
     SessionStart
     | SessionEnd
@@ -156,7 +169,8 @@ Payload = Annotated[
     | ToolResult
     | LlmCall
     | NetEgress
-    | InventorySnapshot,
+    | InventorySnapshot
+    | SensorHealth,
     Field(discriminator="kind"),
 ]
 

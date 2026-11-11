@@ -14,10 +14,11 @@ abort after a tool started (or deny a pending shell approval).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 from ...schema import Enforcement
+from ..registry import PluginRegistry
 
 if TYPE_CHECKING:
     from ...schema import AgentEvent
@@ -29,6 +30,7 @@ class AdapterContext:
     sensor: Sensor
     user_id: str  # the employee this endpoint's agents act for
     hostname: str | None = None
+    plugins: PluginRegistry = field(default_factory=PluginRegistry)  # in-gateway plugin's judgements
 
     def evaluate(self, event: AgentEvent) -> ProcessResult:
         return self.sensor.evaluate(event)

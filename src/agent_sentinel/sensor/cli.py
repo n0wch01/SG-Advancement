@@ -106,6 +106,19 @@ def _cmd_replay(home: SensorHome, args: argparse.Namespace) -> int:
     return 0 if r.ok else 1
 
 
+def _openclaw_token(home: SensorHome, token_file: Path | None) -> str:
+    """Gateway token: OPENCLAW_GATEWAY_TOKEN, else a 0600 file (default <home>/openclaw-token).
+    A file keeps the secret out of launchd plists and shell history."""
+    if os.environ.get("OPENCLAW_GATEWAY_TOKEN"):
+        return os.environ["OPENCLAW_GATEWAY_TOKEN"]
+    path = token_file or home.root / "openclaw-token"
+    if path.exists():
+        if path.stat().st_mode & 0o077:
+            raise SensorError(f"{path} must not be readable by others (chmod 600)")
+        return path.read_text("utf-8").strip()
+    return ""
+
+
 def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
     from .adapters.base import AdapterContext
     from .daemon import Daemon
@@ -127,17 +140,38 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
 
         adapters.append(
             OpenClawAdapter(
-                args.openclaw, enforce=not args.observe_only, gate_exec=args.gate_exec, capture=args.capture
+                args.openclaw,
+                token=_openclaw_token(home, args.openclaw_token_file),
+                enforce=not args.observe_only,
+                gate_exec=args.gate_exec,
+                capture=args.capture,
             )
         )
     if args.replay:
         adapters.append(ReplayAdapter(args.replay, delay=args.replay_delay))
-    if not adapters:
-        print("nothing to watch: pass --openclaw and/or --replay", file=sys.stderr)
+    if not adapters and args.no_local_api:
+        print("nothing to do: pass --openclaw, --replay, or keep the local API on", file=sys.stderr)
         return 2
-    ctx = AdapterContext(sensor, user_id=args.user, hostname=socket.gethostname())
+    from .registry import PluginRegistry
+
+    plugins = PluginRegistry(state_path=home.root / "plugin-state.json")  # survives restarts
+    ctx = AdapterContext(sensor, user_id=args.user, hostname=socket.gethostname(), plugins=plugins)
+    local_api = None
+    if not args.no_local_api:
+        from .plugin_api import LocalApiServer
+
+        sock = args.socket or home.root / "sentinel.sock"
+        if len(str(sock).encode()) > 100:  # AF_UNIX path limit (104 on macOS, 108 on Linux)
+            print(f"socket path too long for a unix socket: {sock} (use --socket)", file=sys.stderr)
+            return 2
+        local_api = LocalApiServer(ctx, sock)
     daemon = Daemon(
-        sensor, adapters, ctx, sync_interval=args.sync_interval, flush_interval=args.flush_interval
+        sensor,
+        adapters,
+        ctx,
+        sync_interval=args.sync_interval,
+        flush_interval=args.flush_interval,
+        local_api=local_api,
     )
 
     async def main_task() -> None:
@@ -151,6 +185,47 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
         asyncio.run(main_task())
     s = sensor.spool.stats()
     print(f"stopped; {s['pending_events']} events, {s['pending_findings']} findings still queued")
+    return 0
+
+
+def _cmd_evaluate(home: SensorHome, args: argparse.Namespace) -> int:
+    """Degraded path for the OpenClaw plugin when the daemon is unreachable: judge one request
+    (JSON on stdin) with the signed policy cache only — no network, no sequence/rate state."""
+    import json
+
+    from .adapters.base import AdapterContext
+    from .plugin_api import judge
+
+    try:
+        req = json.loads(sys.stdin.read())
+        sensor = Sensor(home)
+    except (ValueError, SensorError) as e:
+        print(json.dumps({"ok": False, "error": str(e)}))
+        return 3
+    if not sensor.load_cached_policy():
+        print(json.dumps({"ok": False, "error": "no valid cached policy"}))
+        return 3
+    ctx = AdapterContext(sensor, user_id=args.user, hostname=socket.gethostname())
+    print(json.dumps(judge(ctx, req, labels={"sentinel_verdict": "degraded"})))
+    return 0
+
+
+def _cmd_service(home: SensorHome, args: argparse.Namespace) -> int:
+    from . import service
+
+    if args.action == "install":
+        run_args: list[str] = ["--user", args.user]
+        if args.openclaw:
+            run_args += ["--openclaw", args.openclaw]
+        try:
+            print(service.install(home.root, run_args, dry_run=args.dry_run))
+        except RuntimeError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+    elif args.action == "uninstall":
+        print(service.uninstall())
+    else:
+        print(service.status())
     return 0
 
 
@@ -191,7 +266,27 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--flush-interval", type=float, default=5.0)
     p.add_argument("--duration", type=float, default=0.0, help="stop after N seconds (0 = run until Ctrl+C)")
     p.add_argument("--log-level", default="info")
+    p.add_argument("--socket", type=Path, help="local verdict API socket (default: <home>/sentinel.sock)")
+    p.add_argument("--no-local-api", action="store_true", help="don't serve verdicts to gateway plugins")
+    p.add_argument(
+        "--openclaw-token-file",
+        type=Path,
+        help="gateway token file, mode 0600 (default: <home>/openclaw-token)",
+    )
     p.set_defaults(fn=_cmd_run)
+
+    p = sub.add_parser("service", help="run the daemon as a background service (macOS launchd)")
+    p.add_argument("action", choices=["install", "uninstall", "status"])
+    p.add_argument(
+        "--openclaw", nargs="?", const="ws://127.0.0.1:18789", metavar="URL", help="watch an OpenClaw gateway"
+    )
+    p.add_argument("--user", default=os.environ.get("SENTINEL_USER") or getpass.getuser(), help="employee id")
+    p.add_argument("--dry-run", action="store_true", help="print the service definition, change nothing")
+    p.set_defaults(fn=_cmd_service)
+
+    p = sub.add_parser("evaluate", help="judge one plugin request from stdin with the cached policy")
+    p.add_argument("--user", default=os.environ.get("SENTINEL_USER") or getpass.getuser(), help="employee id")
+    p.set_defaults(fn=_cmd_evaluate)
 
     args = ap.parse_args(argv)
     home = SensorHome(args.home)

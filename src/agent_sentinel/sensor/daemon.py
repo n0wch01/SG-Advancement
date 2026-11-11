@@ -17,11 +17,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from .adapters.base import Adapter, AdapterContext
 from .core import NoPolicy, Sensor, SyncStatus
+from .plugin_api import LocalApiServer, record_health
 from .spool import FlushResult
 
 log = logging.getLogger(__name__)
@@ -45,12 +47,16 @@ class Daemon:
         *,
         sync_interval: float = 60.0,
         flush_interval: float = 5.0,
+        local_api: LocalApiServer | None = None,
+        health_interval: float = 30.0,
     ) -> None:
         self.sensor = sensor
         self.adapters = list(adapters)
         self.ctx = ctx
         self.sync_interval = sync_interval
         self.flush_interval = flush_interval
+        self.local_api = local_api
+        self.health_interval = health_interval
         self.stats = DaemonStats()
         self.ready = asyncio.Event()  # set once a policy is loaded and adapters are running
 
@@ -73,6 +79,28 @@ class Daemon:
                 self.stats.policy_syncs += 1
             except Exception as e:  # noqa: BLE001 - keep the last good policy
                 log.warning("policy sync failed, keeping current policy: %s", e)
+
+    def check_plugin_health(self, now: float | None = None) -> str | None:
+        """Emit a sensor.health event when the gateway plugin's heartbeats stop."""
+        plugins = self.ctx.plugins
+        if plugins.check(now) != "lost":
+            return None
+        last = plugins.last_contact
+        quiet = (now or time.time()) - last if last is not None else None
+        detail = (
+            f"no heartbeat for {quiet:.0f}s" if quiet is not None else "no heartbeat since the sensor started"
+        )
+        log.warning("openclaw plugin heartbeat lost (%s)", detail)
+        record_health(self.ctx, "lost", detail, last)
+        return "lost"
+
+    async def _health_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self.health_interval)
+            try:
+                self.check_plugin_health()
+            except Exception:  # never let monitoring take the daemon down
+                log.exception("plugin health check failed")
 
     async def flush_once(self) -> FlushResult:
         r = await asyncio.to_thread(self.sensor.flush)
@@ -98,7 +126,13 @@ class Daemon:
 
     async def run(self) -> None:
         await self._wait_for_policy()
-        tasks = [asyncio.create_task(self._sync_loop()), asyncio.create_task(self._flush_loop())]
+        if self.local_api is not None:
+            await self.local_api.start()
+        tasks = [
+            asyncio.create_task(self._sync_loop()),
+            asyncio.create_task(self._flush_loop()),
+            asyncio.create_task(self._health_loop()),
+        ]
         tasks += [asyncio.create_task(self._run_adapter(a), name=f"adapter:{a.name}") for a in self.adapters]
         self.ready.set()
         try:
@@ -109,5 +143,8 @@ class Daemon:
             for t in tasks:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await t
+            if self.local_api is not None:
+                with contextlib.suppress(Exception):
+                    await self.local_api.close()
             with contextlib.suppress(Exception):
                 await self.flush_once()  # best effort: ship what we have before exiting

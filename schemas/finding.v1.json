@@ -233,6 +233,7 @@
       "description": "How the activity was observed. One agent can be seen by several sensors\n(e.g. Claude Code via its hooks *and* via the MCP proxy).",
       "enum": [
         "openclaw_gateway",
+        "openclaw_plugin",
         "claude_code_hook",
         "gemini_cli_hook",
         "codex_cli_hook",

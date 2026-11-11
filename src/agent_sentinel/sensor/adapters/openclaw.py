@@ -423,6 +423,7 @@ class OpenClawAdapter:
         identity_path: Path | None = None,
         inventory_interval: float = 300.0,
         max_backoff: float = 60.0,
+        plugin_grace: float = 3.0,
     ) -> None:
         self.url = url
         self.token = token if token is not None else os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
@@ -432,6 +433,7 @@ class OpenClawAdapter:
         self._pairing_hint_shown: str | None = None
         self.inventory_interval = inventory_interval
         self.max_backoff = max_backoff
+        self.plugin_grace = plugin_grace  # seconds to wait for the plugin's judgement of a call
         self.gate_exec = gate_exec and enforce
         self.capture = capture
         self.scopes = ["operator.read", "operator.write"] if enforce else ["operator.read"]
@@ -568,6 +570,25 @@ class OpenClawAdapter:
             log.warning("tools.catalog failed: %s", res.get("error"))
 
     async def _handle(self, ctx: AdapterContext, conn: GatewayConnection, event: AgentEvent) -> None:
+        if event.kind.value == "inventory.snapshot":
+            ctx.plugins.tool_plugins.update(  # lets plugin-judged calls carry the right provider
+                {t.name: t.provider.plugin_id for t in event.payload.tools if t.provider.plugin_id}  # type: ignore[union-attr]
+            )
+        if event.kind.value == "tool.call":
+            call_id = event.payload.call_id  # type: ignore[union-attr]
+            if ctx.plugins.active and not call_id.startswith("approval:") and not ctx.plugins.seen(call_id):
+                # Live gateways can broadcast the tool start before (or while) the plugin's
+                # before_tool_call reaches us, so give the plugin a moment. The daemon runs one
+                # event loop: while we wait here, the plugin's request is still served.
+                deadline = asyncio.get_running_loop().time() + self.plugin_grace
+                while not ctx.plugins.seen(call_id) and asyncio.get_running_loop().time() < deadline:
+                    await asyncio.sleep(0.05)
+            if ctx.plugins.seen(call_id):
+                return  # the gateway plugin judged and recorded this call before it ran
+            if ctx.plugins.active and not call_id.startswith("approval:"):
+                # The plugin is running but never saw this call: it was disabled, failed, or the
+                # call took a path it doesn't cover. Rules decide how loud this is.
+                event = event.model_copy(update={"labels": event.labels | {"sentinel_plugin": "missing"}})
         result = ctx.evaluate(event)
         ctx.record(result, await self._enforce(conn, event, result.verdict.action))
 

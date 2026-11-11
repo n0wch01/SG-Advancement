@@ -31,6 +31,7 @@ class SensorType(StrEnum):
     (e.g. Claude Code via its hooks *and* via the MCP proxy)."""
 
     OPENCLAW_GATEWAY = "openclaw_gateway"  # gateway WebSocket subscription
+    OPENCLAW_PLUGIN = "openclaw_plugin"  # in-gateway plugin, before_tool_call (pre-execution)
     CLAUDE_CODE_HOOK = "claude_code_hook"  # PreToolUse / PostToolUse ... hooks
     GEMINI_CLI_HOOK = "gemini_cli_hook"
     CODEX_CLI_HOOK = "codex_cli_hook"

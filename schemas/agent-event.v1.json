@@ -409,10 +409,69 @@
       "title": "Principal",
       "type": "object"
     },
+    "SensorHealth": {
+      "additionalProperties": false,
+      "description": "State of an enforcement or observation component, reported by the sensor itself.\nA component that goes quiet (e.g. a gateway plugin that stopped sending heartbeats) is a\ncontrol gap: tool calls may now run without a pre-execution check.",
+      "properties": {
+        "kind": {
+          "const": "sensor.health",
+          "default": "sensor.health",
+          "title": "Kind",
+          "type": "string"
+        },
+        "component": {
+          "description": "e.g. openclaw_plugin",
+          "title": "Component",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "up",
+            "lost",
+            "recovered"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "last_seen": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Last sign of life before this report",
+          "title": "Last Seen"
+        }
+      },
+      "required": [
+        "component",
+        "status"
+      ],
+      "title": "SensorHealth",
+      "type": "object"
+    },
     "SensorType": {
       "description": "How the activity was observed. One agent can be seen by several sensors\n(e.g. Claude Code via its hooks *and* via the MCP proxy).",
       "enum": [
         "openclaw_gateway",
+        "openclaw_plugin",
         "claude_code_hook",
         "gemini_cli_hook",
         "codex_cli_hook",
@@ -863,6 +922,7 @@
           "message.assistant": "#/$defs/AssistantMessage",
           "net.egress": "#/$defs/NetEgress",
           "prompt.user": "#/$defs/UserPrompt",
+          "sensor.health": "#/$defs/SensorHealth",
           "session.end": "#/$defs/SessionEnd",
           "session.start": "#/$defs/SessionStart",
           "tool.call": "#/$defs/ToolCall",
@@ -897,6 +957,9 @@
         },
         {
           "$ref": "#/$defs/InventorySnapshot"
+        },
+        {
+          "$ref": "#/$defs/SensorHealth"
         }
       ],
       "title": "Payload"

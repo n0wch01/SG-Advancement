@@ -31,6 +31,7 @@ KIND_PRIORITY: dict[EventKind, Priority] = {
     EventKind.TOOL_CALL: Priority.HIGH,
     EventKind.NET_EGRESS: Priority.HIGH,
     EventKind.INVENTORY_SNAPSHOT: Priority.HIGH,
+    EventKind.SENSOR_HEALTH: Priority.HIGH,  # a silent enforcement point is a control gap
     EventKind.SESSION_START: Priority.HIGH,
     EventKind.SESSION_END: Priority.HIGH,
     # The user's own words show intent (an insider driving the agent) and the instructions the

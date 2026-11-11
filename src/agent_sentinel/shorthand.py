@@ -5,7 +5,7 @@ Used by rule regression cases (tests/rule_cases) and anything else that hand-wri
     {at: 3, session: a, kind: tool.call, tool: Bash, arguments: {command: "cat .env"}}
 
 Envelope keys (``at`` seconds from ``t0``, ``session``, ``user``, ``device``, ``agent``,
-``sensor``) are pulled out; everything else is the payload. Missing envelope values come from
+``sensor``, ``labels``) are pulled out; everything else is the payload. Missing envelope values come from
 ``defaults``, then from built-in test defaults.
 """
 
@@ -17,7 +17,7 @@ from typing import Any
 from .schema import AgentEvent
 
 T0 = datetime(2026, 11, 10, tzinfo=UTC)
-ENVELOPE_KEYS = frozenset({"at", "session", "user", "device", "agent", "sensor"})
+ENVELOPE_KEYS = frozenset({"at", "session", "user", "device", "agent", "sensor", "labels"})
 DEFAULT_SENSOR = {
     "openclaw": "openclaw_gateway",
     "claude_code": "claude_code_hook",
@@ -49,5 +49,6 @@ def build_event(
             "agent": {"type": agent, "session_id": ctx["session"]},
             "source": {"sensor": ctx.get("sensor") or DEFAULT_SENSOR.get(agent, "mcp_proxy")},
             "payload": payload,
+            "labels": spec.get("labels", {}),
         }
     )

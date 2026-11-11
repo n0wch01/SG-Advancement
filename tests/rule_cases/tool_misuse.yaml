@@ -63,3 +63,35 @@ cases:
       - {kind: session.start, permission_mode: plan, interactive: false, session: s2}
       - {kind: session.start, reason: startup, session: s3}
     expect_not: [agent-safety-bypass, agent-unattended-safety-bypass]
+
+  # ── 게이트웨이 플러그인 우회 (M5c; docs/sensor.md) ──
+  - name: 플러그인이 동작 중인데 판정 없이 실행된 툴 호출
+    agent: openclaw
+    sensor: openclaw_gateway
+    events:
+      - {kind: tool.call, tool: exec, arguments: {command: "ls"}, labels: {sentinel_plugin: missing}}
+    expect: [openclaw-plugin-bypass]
+
+  - name: 플러그인이 판정한 호출과 플러그인이 없는 환경은 정상
+    agent: openclaw
+    sensor: openclaw_gateway
+    events:
+      - {kind: tool.call, tool: exec, arguments: {command: "ls"}, labels: {sentinel_source: openclaw_plugin}}
+      - {kind: tool.call, tool: exec, arguments: {command: "ls"}}
+    expect_not: [openclaw-plugin-bypass]
+
+  - name: 게이트웨이 플러그인 신호 끊김
+    agent: openclaw
+    sensor: openclaw_plugin
+    events:
+      - {kind: sensor.health, component: openclaw_plugin, status: lost, detail: "no heartbeat for 151s"}
+    expect: [openclaw-plugin-heartbeat-lost]
+
+  - name: 플러그인 정상·복구 신호는 조용히
+    agent: openclaw
+    sensor: openclaw_plugin
+    events:
+      - {kind: sensor.health, component: openclaw_plugin, status: up}
+      - {kind: sensor.health, component: openclaw_plugin, status: recovered, session: s2}
+      - {kind: sensor.health, component: openclaw_gateway, status: lost, session: s3}
+    expect_not: [openclaw-plugin-heartbeat-lost]
