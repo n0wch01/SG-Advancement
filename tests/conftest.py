@@ -37,7 +37,11 @@ def cp(tmp_path: Path) -> Iterator[TestClient]:
     rules = tmp_path / "cp-rules"
     shutil.copytree(ROOT / "rules", rules)
     settings = Settings(
-        db_url="sqlite://",
+        # A file DB, like production. An in-memory DB shares one connection across threads
+        # (StaticPool): a request finishing on one thread could roll back another thread's
+        # uncommitted ingest, which then still answered 200 — the sensor dropped events the
+        # server never kept. That was the intermittent CI failure in test_daemon (#10-12, #16, #24).
+        db_url=f"sqlite:///{tmp_path / 'cp.db'}",
         rules_dir=rules,
         admin_token="admin-test",
         signing_key_path=tmp_path / "cp-key.pem",
