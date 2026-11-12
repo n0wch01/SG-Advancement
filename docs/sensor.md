@@ -382,6 +382,36 @@ sga-sensor service status | uninstall
 - `utilityModel`, `decisionModel`은 아직 보지 않는다(미탐 가능).
 - 설정 파일을 거치지 않는 변경(실행 중 RPC로만 바꾼 값)은 보지 못한다.
 
+### 게이트웨이가 실제로 쓰는 런타임과 묶인 대화 (T19)
+
+설정 감시는 설정 파일에 적힌 모델만 본다. 하지만 화면에서는 프로바이더가 보여 주는 모든 모델을 고를 수 있고, 고정되지 않은 모델은
+OpenClaw가 런타임을 고른다(공식 OpenAI 모델은 Codex). 그래서 WS 어댑터가 에이전트별 인벤토리에 게이트웨이 쪽 시각을 더한다.
+
+| 필드 | 출처 | 룰 |
+|---|---|---|
+| `model_runtimes[]` (model, runtime, source) | `models.list {agentId}`: 고를 수 있는 모델과 런타임, `source: model`(고정) / `implicit`(OpenClaw가 고름) | `openclaw-model-runtime-unpinned` (medium): `implicit`가 하나라도 있으면 |
+| `sessions[]` (session_key, model, runtime, runtime_source, expected_runtime, binding) | `sessions.list`(보관 안 된 대화, 최근 200개) + 그 모델의 현재 런타임 | `openclaw-session-runtime-stale` (medium): `binding: stale` / `openclaw-session-runtime-unapproved` (high): `openclaw`, `codex` 외 런타임 |
+
+`sessions.list`의 런타임은 **그 대화의 다음 턴이 쓸 런타임**이다. 대화에 기록된 런타임(`source: session`, 예: Codex 스레드)이나
+대화 단위 지정(`session-key`)이 설정보다 우선한다(OpenClaw 2026.11.3 `resolveCurrentSessionAgentRuntimeMetadata`).
+그래서 대화를 시작한 뒤 고정이 바뀌면 대화는 예전 런타임에 남는다. `binding`은 이렇게 정한다.
+
+| binding | 뜻 |
+|---|---|
+| `current` | 대화의 모델이 회사 설정으로 고정돼 있고, 대화도 그 런타임 |
+| `stale` | 모델은 고정돼 있는데 대화는 다른 런타임에 묶여 있음 → 경보 |
+| `unpinned` | 모델이 고정돼 있지 않음. 따를 회사 설정이 없다(모델 쪽은 unpinned 룰) |
+| `unknown` | 모델이 목록에 없음 |
+
+결정(2026-11-12, 사용자 확정): 알림만. 센서에는 admin이 없어(결정 B) 대화를 대신 보관·중단할 수 없다.
+
+실환경(2026-11-12, 팀 게이트웨이):
+- 고정되지 않은 선택 가능 모델이 10개(`gpt-6.1-sol`, `gpt-5.5` 등, 모두 Codex) → `openclaw-model-runtime-unpinned`. 몇 분 뒤 프로바이더 목록에
+  `gpt-6.1-terra`, `gpt-daybreak-blue-latest`가 새로 생겨 11개(모델 하나씩 고정해서는 따라잡을 수 없다).
+- alice가 새 대화에서 모델만 Sol로 바꿈 → 대화는 만들어질 때의 `openclaw`를 유지(`session-key`), 새 대화로 Sol을 고르면 Codex. 처음 구현은
+  이것을 `stale`로 봤다(오탐) → 고정되지 않은 모델은 `unpinned`로 바꿈.
+- Sol을 잠시 `codex`로 고정(`config patch`, 재시작 없이 적용) → alice의 대화는 `openclaw`에 묶인 채 남음 → `openclaw-session-runtime-stale`. 확인 후 되돌림.
+
 ## 설치된 코드 무결성 (M5d)
 
 `sga-sensor run --openclaw`은 5분마다, 그리고 정책의 매니페스트가 바뀔 때마다 OpenClaw가 실제로 로드한 코드를 검사한다
