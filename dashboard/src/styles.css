@@ -102,6 +102,7 @@ button.link { background: none; border: 0; color: var(--accent); padding: 0; }
 .tile { display: block; background: var(--surface); border-radius: var(--radius); box-shadow: 0 0 0 1px var(--line); padding: 14px 16px; color: var(--ink); }
 a.tile:hover { text-decoration: none; box-shadow: 0 0 0 1px var(--accent); }
 .tile-alert { background: var(--alert-bg); }
+.notice { background: var(--alert-bg); border-radius: var(--radius); padding: 10px 12px; margin: 0 0 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .tile-label { font-size: 12px; color: var(--ink-2); }
 .tile-value { font-size: 28px; font-weight: 600; line-height: 1.2; margin-top: 4px; }
 .tile-note { font-size: 12px; }

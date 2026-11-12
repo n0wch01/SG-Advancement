@@ -3,7 +3,18 @@ import { useState } from "react";
 import { ApiError, type Api } from "../api";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
-import { ACTION_STATUS_LABEL, REMOTE_ACTION_LABEL, eventSummary, findingsHref, formatTime, responseText, timelineHref } from "../format";
+import {
+  ACTION_STATUS_LABEL,
+  CAMPAIGN_RULE,
+  REMOTE_ACTION_LABEL,
+  campaignPeople,
+  eventSummary,
+  findingsHref,
+  formatTime,
+  relativeTime,
+  responseText,
+  timelineHref,
+} from "../format";
 import type { AgentEvent, FindingDetail as Detail, Finding, Role } from "../types";
 import { useAsync } from "../useAsync";
 
@@ -17,7 +28,7 @@ export function FindingDetail({ api, id, role }: { api: Api; id: string; role: R
       {error && <ErrorBox error={error} />}
       {loading && !data && <Loading />}
       {data && <DetailBody d={data} />}
-      {data && role === "admin" && <Respond api={api} f={data.finding} />}
+      {data && data.finding.rule_id !== CAMPAIGN_RULE && role === "admin" && <Respond api={api} f={data.finding} />}
     </section>
   );
 }
@@ -32,6 +43,14 @@ function DetailBody({ d }: { d: Detail }) {
           <SeverityBadge severity={f.severity} /> {f.title}
         </h1>
       </div>
+
+      {(d.campaigns ?? []).map((c) => (
+        <p key={c.finding_id} className="notice" role="note">
+          <span className="chip chip-bad">캠페인</span> 같은 지표가 {c.labels.people_count}명 이상에게 나타난 캠페인의 일부입니다.{" "}
+          <a href={`#/findings/${encodeURIComponent(c.finding_id)}`}>캠페인 보기 →</a>
+        </p>
+      ))}
+      {f.rule_id === CAMPAIGN_RULE && <Campaign f={f} members={d.campaign_members ?? []} />}
 
       <div className="grid-2">
         <div className="card">
@@ -137,6 +156,70 @@ function DetailBody({ d }: { d: Detail }) {
         </div>
       )}
     </>
+  );
+}
+
+// Campaign (M11): who got the same indicator, on which device, and where to respond for each person.
+function Campaign({ f, members }: { f: Finding; members: Finding[] }) {
+  const people = campaignPeople(members);
+  const raised = Number(f.labels.people_count ?? 0);
+  return (
+    <div className="card">
+      <h2>캠페인: 같은 지표를 받은 사람들</h2>
+      <dl className="facts">
+        <dt>원래 룰</dt>
+        <dd>
+          <a className="mono" href={findingsHref({ rule_id: f.labels.source_rule })}>
+            {f.labels.source_rule}
+          </a>
+        </dd>
+        <dt>지표</dt>
+        <dd className="mono">{f.labels.indicator}</dd>
+        <dt>사람 수</dt>
+        <dd>
+          {people.length}명
+          {people.length > raised && <span className="muted"> (탐지 당시 {raised}명, 이후 {people.length - raised}명 늘어남)</span>}
+        </dd>
+      </dl>
+      <p className="muted small">
+        관제 서버가 24시간 안에 서로 다른 사람 3명 이상에게서 같은 룰·같은 지표를 보고 만든 Finding입니다. 차단은 사람마다 그 사람의 Finding에서
+        보냅니다(Finding이 나온 장비로 가야 효과가 있습니다).
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>사람</th>
+            <th>장비</th>
+            <th>처음 · 마지막</th>
+            <th>대응</th>
+          </tr>
+        </thead>
+        <tbody>
+          {people.map((p) => {
+            const first = p.findings[0];
+            const last = p.findings[p.findings.length - 1];
+            return (
+              <tr key={p.user_id}>
+                <td>
+                  {p.user_id}
+                  <a className="small side" href={timelineHref({ user_id: p.user_id })}>
+                    타임라인
+                  </a>
+                </td>
+                <td className="small">{p.devices.join(", ")}</td>
+                <td className="small nowrap" title={`${formatTime(first.ts)} · ${formatTime(last.ts)}`}>
+                  {relativeTime(first.ts)}
+                  {p.findings.length > 1 && ` · ${relativeTime(last.ts)} (${p.findings.length}건)`}
+                </td>
+                <td className="small">
+                  <a href={`#/findings/${encodeURIComponent(last.finding_id)}`}>Finding에서 대응 →</a>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

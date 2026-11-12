@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeBlocks,
+  campaignPeople,
   agentPosture,
   reasonText,
   responseChoices,
@@ -20,7 +21,7 @@ import {
   sinceFor,
   waitText,
 } from "./format";
-import type { AgentEvent } from "./types";
+import type { AgentEvent, Finding } from "./types";
 
 function ev(payload: Record<string, unknown>): AgentEvent {
   return {
@@ -148,6 +149,21 @@ describe("format", () => {
     ]);
     expect(blocks.map((b) => b.target)).toEqual(["mallory"]);
     expect(parseHash("#/actions")).toEqual({ page: "actions" });
+  });
+
+  it("groups campaign members by person", () => {
+    const f = (user: string, device: string, ts: string) =>
+      ({ finding_id: `${user}-${ts}`, ts, principal: { user_id: user }, endpoint: { device_id: device } }) as Finding;
+    const people = campaignPeople([
+      f("bob", "pc-b", "2026-11-12T02:00:00Z"),
+      f("alice", "pc-a", "2026-11-12T01:00:00Z"),
+      f("alice", "pc-a2", "2026-11-12T03:00:00Z"),
+      f("unknown", "pc-u", "2026-11-12T04:00:00Z"),
+    ]);
+    expect(people.map((p) => [p.user_id, p.devices, p.findings.length])).toEqual([
+      ["alice", ["pc-a", "pc-a2"], 2],
+      ["bob", ["pc-b"], 1],
+    ]);
   });
 
   it("computes time ranges", () => {

@@ -1,6 +1,6 @@
 // Pure helpers: labels, time, event one-liners, hash routes. Kept free of React for unit tests.
 
-import type { AgentEvent, Severity } from "./types";
+import type { AgentEvent, Finding, Severity } from "./types";
 
 export const SEVERITIES: Severity[] = ["critical", "high", "medium", "low", "info"];
 
@@ -302,4 +302,27 @@ export function activeBlocks<T extends { device_id: string; action: string; targ
     latest.set(`${a.device_id}|${kind}|${a.target}`, a);
   }
   return [...latest.values()].filter((a) => a.action.startsWith("block_"));
+}
+
+// Campaign detection (M11): the control plane's own finding when one rule + indicator reaches 3+ people.
+export const CAMPAIGN_RULE = "multi-user-campaign";
+
+export interface CampaignPerson {
+  user_id: string;
+  devices: string[];
+  findings: Finding[]; // oldest first
+}
+
+/** Members of a campaign grouped by person, earliest person first; "unknown" is not a person. */
+export function campaignPeople(members: Finding[]): CampaignPerson[] {
+  const by = new Map<string, CampaignPerson>();
+  for (const f of [...members].sort((a, b) => a.ts.localeCompare(b.ts))) {
+    const user = f.principal.user_id;
+    if (!user || user === "unknown") continue;
+    const p = by.get(user) ?? { user_id: user, devices: [], findings: [] };
+    if (!p.devices.includes(f.endpoint.device_id)) p.devices.push(f.endpoint.device_id);
+    p.findings.push(f);
+    by.set(user, p);
+  }
+  return [...by.values()];
 }

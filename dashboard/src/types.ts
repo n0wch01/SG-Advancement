@@ -45,6 +45,7 @@ export interface Finding {
   response?: Enforcement | null;
   tags: string[];
   labels: Record<string, string>;
+  detector?: "local" | "central";
 }
 
 export interface AgentEvent {
@@ -93,6 +94,8 @@ export interface FindingDetail {
   evidence: AgentEvent[];
   session_events: AgentEvent[];
   session_findings: Finding[];
+  campaign_members?: Finding[];
+  campaigns?: Finding[];
 }
 
 export interface FindingRef {
