@@ -71,3 +71,21 @@ rules:
       type: allowlist
       field: payload.runtimes[].runtime
       allow: [openclaw, codex]
+
+  # 에이전트 기본 권한 모드 (M5b): inventory.snapshot의 permission_mode. OpenClaw는 read-only < guarded < workspace < full.
+  # 결정(2026-11-12): full만 경보(A), 팀 게이트웨이를 실제로 낮출지는 추후 결정. 인벤토리는 주기적으로 오므로 dedup은 기본(session).
+  # 오탐 주의: 운영자가 의도해서 full로 둔 에이전트(예: 격리된 빌드 전용)도 걸린다.
+  - id: openclaw-agent-permission-full
+    severity: medium
+    category: policy_violation
+    title: 에이전트 기본 권한 모드 full
+    message: 에이전트의 기본 권한 모드가 가장 넓은 full입니다. 새 세션이 가장 넓은 권한 범위로 시작됩니다.
+    recommended_action: 필요한 범위에 맞게 workspace나 guarded로 낮출 수 있는지 검토하세요.
+    response: alert
+    tags: [owasp-agentic:ASI03, owasp-llm:LLM06]
+    when: {payload.kind: inventory.snapshot}
+    match:
+      type: regex
+      fields: [payload.permission_mode]
+      pattern: '^full$'
+

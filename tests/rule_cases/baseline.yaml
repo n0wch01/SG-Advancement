@@ -97,3 +97,21 @@ cases:
     events:
       - {kind: config.snapshot, product: openclaw, runtimes: [{scope: defaults, model: openai/gpt-6-astra, runtime: openclaw}, {scope: "agent:main", model: openai/gpt-6.1-sol, runtime: codex}]}
     expect_not: [openclaw-runtime-unapproved]
+
+  # ── 에이전트 기본 권한 모드 (M5b 에이전트별 인벤토리) ──
+  # OpenClaw 권한 모드: read-only < guarded < workspace < full. 결정(2026-11-12): full만 경보(A), 실제로 낮출지는 추후 결정.
+  - name: 기본 권한 모드가 full인 에이전트
+    agent: openclaw
+    events:
+      - {kind: inventory.snapshot, agent_id: research, permission_mode: full}
+    expect: [openclaw-agent-permission-full]
+
+  - name: workspace·guarded·read-only, 또는 정보 없음은 통과
+    agent: openclaw
+    events:
+      - {kind: inventory.snapshot, agent_id: a, permission_mode: workspace}
+      - {kind: inventory.snapshot, agent_id: b, permission_mode: guarded}
+      - {kind: inventory.snapshot, agent_id: c, permission_mode: read-only}
+      - {kind: inventory.snapshot, agent_id: d}
+    expect_not: [openclaw-agent-permission-full]
+
