@@ -167,6 +167,17 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
             adapters.append(
                 OpenClawIntegrityAdapter(interval=args.integrity_interval, quarantine=not args.observe_only)
             )
+    if args.egress_proxy:  # the agent network's only way out, judged by the policy (M5d)
+        from .adapters.egress_proxy import EgressProxyAdapter
+
+        adapters.append(
+            EgressProxyAdapter(
+                args.egress_proxy,
+                enforce=args.egress_enforce,
+                internal_suffixes=tuple(args.egress_internal_suffix)
+                or (".corp", ".internal", ".local", ".lan"),
+            )
+        )
     if args.openclaw_audit_proxy:  # team gateway: who approved / stopped what (M5b)
         if not args.audit_trusted_peer:
             print(
@@ -183,7 +194,7 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
     if args.replay:
         adapters.append(ReplayAdapter(args.replay, delay=args.replay_delay))
     if not adapters and args.no_local_api:
-        print("nothing to do: pass --openclaw, --replay, or keep the local API on", file=sys.stderr)
+        print("nothing to do: pass --openclaw, --replay, a proxy, or keep the local API on", file=sys.stderr)
         return 2
     from .registry import PluginRegistry
 
@@ -316,6 +327,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--log-level", default="info")
     p.add_argument("--socket", type=Path, help="local verdict API socket (default: <home>/sga.sock)")
     p.add_argument("--no-local-api", action="store_true", help="don't serve verdicts to gateway plugins")
+    p.add_argument("--egress-proxy", metavar="HOST:PORT", help="run the egress proxy (HTTP + CONNECT)")
+    p.add_argument(
+        "--egress-enforce",
+        action="store_true",
+        help="refuse destinations the policy blocks (default: monitor, record only)",
+    )
+    p.add_argument(
+        "--egress-internal-suffix",
+        action="append",
+        default=[],
+        metavar="SUFFIX",
+        help="host suffix counted as internal (repeatable; default .corp .internal .local .lan)",
+    )
     p.add_argument(
         "--openclaw-audit-proxy",
         metavar="HOST:PORT",

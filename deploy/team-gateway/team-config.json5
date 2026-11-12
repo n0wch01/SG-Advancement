@@ -63,6 +63,9 @@
       },
     },
   },
+  // Egress (M5d): the gateway has no direct route out; web_fetch goes through team-egress, which
+  // enforces the outbound policy (so letting the proxy resolve DNS is safe).
+  tools: { web: { fetch: { useTrustedEnvProxy: true } } },
   // Company baseline (M5d): every model pinned to a runtime the plugin is verified with.
   agents: {
     defaults: {

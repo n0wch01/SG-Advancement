@@ -56,6 +56,21 @@ cases:
       - {kind: net.egress, url: "http://wiki.corp/x", host: wiki.corp, destination: internal}
     expect_not: [egress-unapproved-host]
 
+  # 팀 게이트웨이 egress 실측(2026-11-12): 구독 로그인 방식의 모델 호출은 chatgpt.com으로 나간다. 결정: chatgpt.com만 허용.
+  - name: 구독 방식 모델 호출(chatgpt.com)은 허용
+    sensor: egress_proxy
+    events:
+      - {kind: net.egress, method: CONNECT, url: "https://chatgpt.com:443", host: chatgpt.com, destination: external}
+    expect_not: [egress-unapproved-host]
+
+  # 아바타 조회는 직원 이메일 해시를 외부 서비스로 보낸다(데이터 최소화). 결정: 허용하지 않음. 비슷한 이름도 막힌다.
+  - name: gravatar와 chatgpt.com을 흉내 낸 이름은 차단
+    sensor: egress_proxy
+    events:
+      - {kind: net.egress, method: CONNECT, url: "https://www.gravatar.com:443", host: www.gravatar.com, destination: external}
+      - {kind: net.egress, method: CONNECT, url: "https://chatgpt.com.evil.test:443", host: chatgpt.com.evil.test, destination: external}
+    expect: [egress-unapproved-host]
+
   # ── 민감 파일을 네트워크로 내보내는 한 줄 명령 (인젝션 없이도 차단) ──
   - name: 민감 파일을 업로드하는 명령
     events:

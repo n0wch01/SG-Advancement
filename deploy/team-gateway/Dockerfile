@@ -24,8 +24,8 @@ COPY --from=sensor /opt/sga/venv /opt/sga/venv
 RUN ldconfig && /opt/sga/venv/bin/sga-sensor --help >/dev/null
 COPY integrations/openclaw-plugin /opt/sga/plugin
 COPY deploy/team-gateway/team-config.json5 deploy/team-gateway/start.sh deploy/team-gateway/set-role.py \
-     deploy/team-gateway/audit-start.sh /opt/sga/
-RUN chmod 0755 /opt/sga/start.sh /opt/sga/audit-start.sh && chown -R node:node /opt/sga/plugin \
+     deploy/team-gateway/audit-start.sh deploy/team-gateway/egress-start.sh /opt/sga/
+RUN chmod 0755 /opt/sga/start.sh /opt/sga/audit-start.sh /opt/sga/egress-start.sh && chown -R node:node /opt/sga/plugin \
  # Fresh named volumes copy these owners/modes; otherwise Docker makes them root-owned.
  && mkdir -p /home/node/.openclaw /home/node/.sg-advance \
  && chown node:node /home/node/.openclaw /home/node/.sg-advance \

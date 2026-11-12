@@ -91,6 +91,7 @@ rules:
       allow:
         - api.anthropic.com
         - "*.openai.com"
+        - chatgpt.com             # 구독 로그인 방식 모델 호출 (팀 게이트웨이 실측, 2026-11-12). www.gravatar.com은 일부러 뺌(이메일 해시 외부 전송)
         - generativelanguage.googleapis.com
         - github.com
         - "*.github.com"

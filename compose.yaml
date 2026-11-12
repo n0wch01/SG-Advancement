@@ -14,14 +14,14 @@ services:
       - control-plane-data:/data
     ports:
       - "127.0.0.1:${SGA_PORT:-8000}:8000"
-    networks: [corp-net]
+    networks: [corp-net, team-net]  # team-net: sensors on the isolated agent network report here
     restart: unless-stopped
 
   # Shared company OpenClaw gateway with the SG-Advance sensor and plugin installed (M5b).
   # Not published to the host: people reach it only through team-proxy, which stamps identity.
   team-gateway:
     profiles: [team]
-    image: sg-advance-team-gateway:local  # also used by team-audit
+    image: sg-advance-team-gateway:local  # also used by team-audit and team-egress
     build:
       context: .
       dockerfile: deploy/team-gateway/Dockerfile
@@ -29,14 +29,21 @@ services:
       OPENCLAW_GATEWAY_PASSWORD: ${OPENCLAW_TEAM_PASSWORD:-}  # required: start.sh refuses to run without it
       SGA_SERVER: http://control-plane:8000
       SGA_ENROLL_TOKEN: ${SGA_TEAM_ENROLL_TOKEN:-}
+      # No direct route out (team-net is internal): everything external goes through team-egress.
+      HTTP_PROXY: http://172.28.0.12:3128
+      HTTPS_PROXY: http://172.28.0.12:3128
+      http_proxy: http://172.28.0.12:3128
+      https_proxy: http://172.28.0.12:3128
+      NO_PROXY: localhost,127.0.0.1,control-plane,172.28.0.0/24
+      no_proxy: localhost,127.0.0.1,control-plane,172.28.0.0/24
+      NODE_USE_ENV_PROXY: "1"  # Node's fetch/http honour the variables above
     volumes:
       - team-openclaw:/home/node/.openclaw
       - team-sga:/home/node/.sg-advance
     networks:
-      corp-net: {}
       team-net:
         ipv4_address: 172.28.0.20
-    depends_on: [control-plane]
+    depends_on: [control-plane, team-egress]
     restart: unless-stopped
 
   # SG-Advance audit proxy: WebSockets from team-proxy pass through here, so approvals and aborts
@@ -54,10 +61,31 @@ services:
     volumes:
       - team-audit:/home/node/.sg-advance
     networks:
-      corp-net: {}
       team-net:
         ipv4_address: 172.28.0.11
     depends_on: [team-gateway]
+    restart: unless-stopped
+
+  # SG-Advance egress proxy: the agent network's only way out. Every destination is judged by the
+  # signed policy (egress-unapproved-host). SGA_EGRESS_MODE=monitor (default) records, enforce refuses.
+  team-egress:
+    profiles: [team]
+    image: sg-advance-team-gateway:local
+    pull_policy: never
+    entrypoint: ["tini", "-s", "--", "/opt/sga/egress-start.sh"]
+    healthcheck:
+      disable: true
+    environment:
+      SGA_SERVER: http://control-plane:8000
+      SGA_ENROLL_TOKEN: ${SGA_EGRESS_ENROLL_TOKEN:-}
+      SGA_EGRESS_MODE: ${SGA_EGRESS_MODE:-monitor}
+    volumes:
+      - team-egress:/home/node/.sg-advance
+    networks:
+      corp-net: {}  # the internet
+      team-net:
+        ipv4_address: 172.28.0.12
+    depends_on: [control-plane]
     restart: unless-stopped
 
   # Demo identity proxy (stand-in for Cloudflare Access / SSO): one host port per employee.
@@ -70,6 +98,7 @@ services:
     ports:
       - "127.0.0.1:18801-18804:18801-18804"
     networks:
+      team-edge: {}  # published ports need a non-internal network
       team-net:
         ipv4_address: 172.28.0.10
     depends_on: [team-gateway, team-audit]
@@ -78,7 +107,9 @@ services:
 networks:
   corp-net: {}
   internet-sim: {}
+  team-edge: {}
   team-net:
+    internal: true  # the agent network: no route out except team-egress
     ipam:
       config:
         - subnet: 172.28.0.0/24
@@ -88,3 +119,4 @@ volumes:
   team-openclaw: {}
   team-sga: {}
   team-audit: {}
+  team-egress: {}
