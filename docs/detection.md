@@ -72,6 +72,7 @@ YAML 인라인 리스트 안에 `[]`가 들어간 경로를 쓸 때는 따옴표
 |---|---|---|---|
 | `regex` | `fields` 아래 문자열 중 하나에 `pattern`이 있음 | `fields`, `pattern`, `ignore_case` | trace_line_regex, event_payload_regex |
 | `allowlist` | `field` 값이 `allow` glob 목록 어디에도 해당하지 않음. 값이 없으면 무시 | `field`, `allow`, `ignore_case`(기본 true) | tools_effective_diff, whitelist-violation |
+| `in_set` | `fields` 중 한 값이 센서가 관리하는 집합 `set`에 있음. 센서 밖(재생)에서는 집합이 비어 걸리지 않는다 (M11 원격 대응: `remote_blocked_sessions`, `remote_blocked_users`) | `set`, `fields` | (새로 추가) |
 | `rate` | 한 그룹에서 `window_seconds` 안에 이벤트가 `threshold`개 이상 | `group_by`(기본 device, session, tool) | rate_limit |
 | `repeat` | 한 그룹에서 `same` 값이 같은 이벤트가 `threshold`번 연속 | `group_by`, `same` | loop_detect |
 | `sequence` | 같은 세션에서 `steps`가 순서대로, 모두 `within_seconds` 안에 일어남 | `steps[].when`, `pattern`, `fields`, `name`, `scope`, `distinct_sessions` | event_sequence |
