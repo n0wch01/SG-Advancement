@@ -216,3 +216,18 @@ export interface Device {
   policy_current: boolean;
   group: string | null;
 }
+
+export interface RemoteAction {
+  id: string;
+  device_id: string;
+  action: string;
+  target: string;
+  finding_id: string | null;
+  status: "pending" | "delivered" | "done" | "failed";
+  created_at: string;
+  created_by: string;
+  reason: string;
+  delivered_at: string | null;
+  result_at: string | null;
+  result_detail: string | null;
+}

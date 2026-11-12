@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  activeBlocks,
   agentPosture,
   reasonText,
   responseChoices,
@@ -134,6 +135,19 @@ describe("format", () => {
     expect(responseChoices("common", "block")[0]).toBe("allow");
     expect(responseChoices("data-team", "require_approval")).toEqual(["require_approval", "block", "abort_session", "quarantine"]);
     expect(parseHash("#/policy?scope=data-team")).toEqual({ page: "policy", query: { scope: "data-team" } });
+  });
+
+  it("works out what is blocked right now", () => {
+    const a = (action: string, target: string, created_at: string, status = "done") => ({ device_id: "gw", action, target, created_at, status });
+    const blocks = activeBlocks([
+      a("block_session", "s1", "2026-11-12T01:00:00Z"),
+      a("unblock_session", "s1", "2026-11-12T02:00:00Z"),
+      a("block_user", "mallory", "2026-11-12T03:00:00Z", "pending"),
+      a("block_session", "s2", "2026-11-12T04:00:00Z", "failed"),
+      a("abort_session", "s3", "2026-11-12T05:00:00Z"),
+    ]);
+    expect(blocks.map((b) => b.target)).toEqual(["mallory"]);
+    expect(parseHash("#/actions")).toEqual({ page: "actions" });
   });
 
   it("computes time ranges", () => {

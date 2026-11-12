@@ -1,13 +1,13 @@
 import { useState } from "react";
 
-import type { Api } from "../api";
+import { ApiError, type Api } from "../api";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
-import { eventSummary, findingsHref, formatTime, responseText, timelineHref } from "../format";
-import type { AgentEvent, FindingDetail as Detail } from "../types";
+import { ACTION_STATUS_LABEL, REMOTE_ACTION_LABEL, eventSummary, findingsHref, formatTime, responseText, timelineHref } from "../format";
+import type { AgentEvent, FindingDetail as Detail, Finding, Role } from "../types";
 import { useAsync } from "../useAsync";
 
-export function FindingDetail({ api, id }: { api: Api; id: string }) {
+export function FindingDetail({ api, id, role }: { api: Api; id: string; role: Role | null }) {
   const { data, error, loading } = useAsync(() => api.finding(id), [api, id]);
   return (
     <section>
@@ -17,6 +17,7 @@ export function FindingDetail({ api, id }: { api: Api; id: string }) {
       {error && <ErrorBox error={error} />}
       {loading && !data && <Loading />}
       {data && <DetailBody d={data} />}
+      {data && role === "admin" && <Respond api={api} f={data.finding} />}
     </section>
   );
 }
@@ -151,4 +152,80 @@ function EventCard({ e, open = false }: { e: AgentEvent; open?: boolean }) {
       {show && <pre className="json">{JSON.stringify(e.payload, null, 2)}</pre>}
     </div>
   );
+}
+
+// Remote response (M11), admin token only. Targets come from the finding: the conversation at the top
+// of its delegation chain (blocking it also blocks the sub-agents), the person, the device it came from.
+function Respond({ api, f }: { api: Api; f: Finding }) {
+  const session = f.agent.root_session_id ?? f.agent.session_id;
+  const [by, setBy] = useState("");
+  const [reason, setReason] = useState(`${f.title} (${f.rule_id})`);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+  const sent = useAsyncList(api, f.endpoint.device_id, tick);
+  const send = async (action: string, target: string) => {
+    setMsg(null);
+    try {
+      await api.createAction({ device_id: f.endpoint.device_id, action, target, finding_id: f.finding_id, by, reason });
+      setMsg(`${REMOTE_ACTION_LABEL[action]}을(를) 보냈습니다. 센서가 몇 초 안에 실행합니다.`);
+      setTick((t) => t + 1);
+    } catch (e) {
+      setMsg(e instanceof ApiError ? e.message : String(e));
+    }
+  };
+  const ready = by.trim() !== "" && reason.trim() !== "";
+  return (
+    <div className="card">
+      <h2>원격 대응</h2>
+      <p className="muted small">
+        장비 <strong>{f.endpoint.device_id}</strong>로 보냅니다. 대화 차단은 이 대화와 거기서 위임된 하위 에이전트의 이후 툴 호출을 모두 막습니다.
+      </p>
+      <div className="filters">
+        <label>
+          누가
+          <input value={by} onChange={(e) => setBy(e.target.value)} placeholder="예: secops@corp.test" />
+        </label>
+        <label className="grow">
+          왜
+          <input value={reason} onChange={(e) => setReason(e.target.value)} />
+        </label>
+      </div>
+      <div className="editor-actions">
+        <button className="primary" disabled={!ready} onClick={() => void send("block_session", session)}>
+          이 대화 차단
+        </button>
+        <button className="primary" disabled={!ready} onClick={() => void send("block_user", f.principal.user_id)}>
+          {f.principal.user_id} 차단
+        </button>
+        <button className="link" disabled={!ready} onClick={() => void send("abort_session", f.agent.session_id)}>
+          실행 중단 시도
+        </button>
+        <a className="small" href="#/actions">
+          대응 목록 →
+        </a>
+      </div>
+      {msg && <p className="small">{msg}</p>}
+      {sent.length > 0 && (
+        <ul className="feed">
+          {sent
+            .filter((a) => a.finding_id === f.finding_id || a.target === session || a.target === f.principal.user_id)
+            .map((a) => (
+              <li key={a.id}>
+                <span>{REMOTE_ACTION_LABEL[a.action] ?? a.action}</span>
+                <span className="mono small">{a.target}</span>
+                <span className="muted small">
+                  {ACTION_STATUS_LABEL[a.status]}
+                  {a.result_detail ? ` · ${a.result_detail}` : ""}
+                </span>
+              </li>
+            ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function useAsyncList(api: Api, device: string, tick: number) {
+  const { data } = useAsync(() => api.actions({ device_id: device }), [api, device, tick]);
+  return data ?? [];
 }

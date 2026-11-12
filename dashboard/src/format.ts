@@ -139,7 +139,8 @@ export type Route =
   | { page: "approvals"; query: Record<string, string> }
   | { page: "inventory" }
   | { page: "timeline"; query: Record<string, string> }
-  | { page: "policy"; query: Record<string, string> };
+  | { page: "policy"; query: Record<string, string> }
+  | { page: "actions" };
 
 export function parseHash(hash: string): Route {
   const [path, qs = ""] = hash.replace(/^#/, "").split("?", 2);
@@ -147,6 +148,7 @@ export function parseHash(hash: string): Route {
   if (parts[0] === "findings" && parts[1]) return { page: "finding", id: decodeURIComponent(parts[1]) };
   if (parts[0] === "findings") return { page: "findings", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "inventory") return { page: "inventory" };
+  if (parts[0] === "actions") return { page: "actions" };
   if (parts[0] === "policy") return { page: "policy", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "timeline") return { page: "timeline", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "approvals") return { page: "approvals", query: Object.fromEntries(new URLSearchParams(qs)) };
@@ -270,3 +272,34 @@ export const CHANGE_LABEL: Record<string, string> = {
   "group.create": "팀 생성",
   "device.assign": "장비 배정",
 };
+
+export const REMOTE_ACTION_LABEL: Record<string, string> = {
+  block_session: "대화 차단",
+  unblock_session: "대화 차단 해제",
+  block_user: "사람 차단",
+  unblock_user: "사람 차단 해제",
+  abort_session: "실행 중단",
+  disable_plugin: "플러그인 격리",
+  disable_skill: "스킬 격리",
+};
+
+export const ACTION_STATUS_LABEL: Record<string, string> = {
+  pending: "대기",
+  delivered: "센서가 받음",
+  done: "완료",
+  failed: "실패",
+};
+
+/** What is blocked right now: the latest successful block/unblock per device and target wins. */
+export function activeBlocks<T extends { device_id: string; action: string; target: string; status: string; created_at: string }>(
+  actions: T[],
+): T[] {
+  const latest = new Map<string, T>();
+  const pairs: Record<string, string> = { block_session: "session", unblock_session: "session", block_user: "user", unblock_user: "user" };
+  for (const a of [...actions].sort((x, y) => x.created_at.localeCompare(y.created_at))) {
+    const kind = pairs[a.action];
+    if (!kind || a.status === "failed") continue;
+    latest.set(`${a.device_id}|${kind}|${a.target}`, a);
+  }
+  return [...latest.values()].filter((a) => a.action.startsWith("block_"));
+}

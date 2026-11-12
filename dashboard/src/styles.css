@@ -219,6 +219,9 @@ textarea { font: inherit; background: var(--surface); color: inherit; border: 0;
 .editor-actions { display: flex; gap: 12px; align-items: center; }
 button.primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 6px; padding: 7px 14px; }
 .changes li { align-items: flex-start; }
+.filters .grow { flex: 1 1 320px; }
+.filters .grow input { width: 100%; }
+.editor-actions { flex-wrap: wrap; }
 
 .error { color: var(--sev-critical); }
 .empty { padding: 8px 0; }

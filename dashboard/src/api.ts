@@ -11,6 +11,7 @@ import type {
   PolicyChange,
   PolicyRule,
   PolicyScope,
+  RemoteAction,
   Role,
   Summary,
   Timeline,
@@ -134,6 +135,14 @@ export class Api {
 
   assignDevice(device: string, body: { group: string | null; by: string; reason: string }) {
     return this.call<{ revision: number }>("PUT", `/devices/${encodeURIComponent(device)}/group`, body);
+  }
+
+  actions(q: { device_id?: string; target?: string } = {}) {
+    return this.get<RemoteAction[]>("/actions", { ...q, limit: 200 });
+  }
+
+  createAction(body: { device_id: string; action: string; target: string; finding_id?: string; by: string; reason: string }) {
+    return this.call<RemoteAction>("POST", "/actions", body);
   }
 
   inventory() {
