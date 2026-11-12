@@ -37,6 +37,7 @@ def base_config(tmp_path: Path) -> dict[str, Any]:
             "defaults": {
                 "model": "openai/gpt-6-astra@openai:setup-1",
                 "models": {"openai/gpt-6-astra": {"agentRuntime": {"id": "openclaw"}}},
+                "sandbox": {"mode": "all", "workspaceAccess": "rw"},  # company baseline: sandboxed
             },
             "entries": {"main": {"models": {"openai/gpt-6-astra": {"agentRuntime": {"id": "openclaw"}}}}},
         },
@@ -189,3 +190,31 @@ def test_watcher_survives_a_half_written_file(tmp_path: Path, enrolled: Sensor) 
 def test_missing_config_is_quiet(tmp_path: Path, enrolled: Sensor) -> None:
     watcher = OpenClawConfigAdapter(tmp_path / "nope.json")
     assert watcher.poll(AdapterContext(enrolled, user_id="alice")) is False
+
+
+def test_sandbox_posture_fills_openclaw_defaults_and_agent_overrides() -> None:
+    from sg_advance.sensor.adapters.openclaw_config import sandboxes
+
+    assert sandboxes({}) == [
+        {"scope": "defaults", "mode": "off", "mode_source": "default", "elevated_default": "on"}
+    ]
+    cfg = {
+        "agents": {
+            "defaults": {
+                "sandbox": {"mode": "non-main", "workspaceAccess": "ro", "scope": "session"},
+                "elevatedDefault": "ask",
+            },
+            "entries": {"main": {"workspace": "/w"}, "research": {"sandbox": {"mode": "off"}}},
+        }
+    }
+    assert sandboxes(cfg) == [
+        {
+            "scope": "defaults",
+            "mode": "non-main",
+            "mode_source": "set",
+            "workspace_access": "ro",
+            "scope_kind": "session",
+            "elevated_default": "ask",
+        },
+        {"scope": "agent:research", "mode": "off", "mode_source": "set"},  # main inherits: no row
+    ]

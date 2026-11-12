@@ -115,3 +115,60 @@ cases:
       - {kind: inventory.snapshot, agent_id: d}
     expect_not: [openclaw-agent-permission-full]
 
+  # ── 샌드박스 (M5d) ──
+  # agents.defaults.sandbox / agents.entries.<id>.sandbox. 설정이 없으면 OpenClaw 런타임 기본값 mode=off(호스트에서 바로 실행).
+  # 결정(2026-11-12, 추천안으로 먼저 구현): 실제로 꺼져 있으면(설정값이든 기본값이든) 경보만.
+  - name: 샌드박스를 설정하지 않음 (기본값 off)
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - kind: config.snapshot
+        product: openclaw
+        sandboxes: [{scope: defaults, mode: "off", mode_source: default, workspace_access: none, elevated_default: "on"}]
+    expect: [openclaw-sandbox-off]
+
+  - name: 특정 에이전트만 샌드박스를 끔
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - kind: config.snapshot
+        product: openclaw
+        sandboxes:
+          - {scope: defaults, mode: all, mode_source: set}
+          - {scope: "agent:research", mode: "off", mode_source: set}
+    expect: [openclaw-sandbox-off]
+
+  - name: 모든 세션 또는 main 외 세션을 샌드박스에서 실행
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - kind: config.snapshot
+        product: openclaw
+        sandboxes: [{scope: defaults, mode: all, mode_source: set}, {scope: "agent:research", mode: non-main, mode_source: set}]
+    expect_not: [openclaw-sandbox-off]
+
+  # ── 대화 단위 권한 올리기 (감사 프록시, M5d) ──
+  # sessions.patch로 한 대화의 권한만 올리면 설정 파일 기준선에는 안 보인다. 누가 바꿨는지는 감사 프록시가 안다.
+  - name: 대화 하나의 권한 모드를 full로, 셸 승인을 끔
+    agent: openclaw
+    sensor: openclaw_audit_proxy
+    events:
+      - {kind: operator.action, action: session.privilege, method: sessions.patch, ok: true, target_session_id: s1, changes: ["permissionMode=full", "execAsk=off"]}
+    expect: [openclaw-session-privilege-raised]
+
+  - name: 대화의 샌드박스를 끄거나 elevated를 켬
+    agent: openclaw
+    sensor: openclaw_audit_proxy
+    events:
+      - {kind: operator.action, action: session.privilege, method: sessions.patch, ok: true, changes: ["sandboxMode=off"]}
+      - {kind: operator.action, action: session.privilege, method: sessions.patch, ok: true, session: s2, changes: ["elevatedLevel=full"]}
+    expect: [openclaw-session-privilege-raised]
+
+  - name: 권한을 낮추거나 게이트웨이가 거부한 변경은 정상
+    agent: openclaw
+    sensor: openclaw_audit_proxy
+    events:
+      - {kind: operator.action, action: session.privilege, method: sessions.patch, ok: true, changes: ["permissionMode=guarded", "execAsk=always", "elevatedLevel=off"]}
+      - {kind: operator.action, action: session.privilege, method: sessions.patch, ok: false, error: FORBIDDEN, session: s3, changes: ["permissionMode=full"]}
+    expect_not: [openclaw-session-privilege-raised]
+

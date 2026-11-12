@@ -12,6 +12,8 @@ token and account e-mails. Only these are copied:
 - exec policy per scope (``tools.exec.security/ask/mode/host``, ``tools.elevated.enabled``)
 - the runtime that runs each configured model (``agentRuntime.id`` at agent > default-agent >
   provider-model > provider precedence, and agent ``runtime.type: acp``)
+- the sandbox per scope (``agents.defaults.sandbox`` / ``agents.entries.<id>.sandbox``: mode, workspaceAccess,
+  scope) and ``agents.defaults.elevatedDefault``, with OpenClaw's runtime defaults filled in when unset
 
 A snapshot goes out at start and whenever these values change (polling mtime; the file is small).
 """
@@ -171,6 +173,40 @@ def runtime_pins(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+# OpenClaw 2026.11.3 runtime defaults when nothing is configured (sandbox?.mode ?? "off",
+# workspaceAccess ?? "none", elevatedDefault ?? "on").
+SANDBOX_DEFAULT_MODE = "off"
+ELEVATED_DEFAULT = "on"
+
+
+def _sandbox(scope: str, spec: Any, *, defaults: bool) -> dict[str, Any] | None:
+    spec = spec if isinstance(spec, dict) else {}
+    mode = spec.get("mode") if isinstance(spec.get("mode"), str) else None
+    if not defaults and mode is None and not spec:
+        return None  # the agent inherits the defaults row
+    out: dict[str, Any] = {
+        "scope": scope,
+        "mode": mode or (SANDBOX_DEFAULT_MODE if defaults else None),
+        "mode_source": "set" if mode else ("default" if defaults else None),
+    }
+    for key, field in (("workspaceAccess", "workspace_access"), ("scope", "scope_kind")):
+        if isinstance(spec.get(key), str):
+            out[field] = spec[key]
+    return out
+
+
+def sandboxes(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    defaults = _get(cfg, "agents", "defaults") or {}
+    row = _sandbox("defaults", defaults.get("sandbox"), defaults=True) or {}
+    elevated = defaults.get("elevatedDefault")
+    row["elevated_default"] = elevated if isinstance(elevated, str) else ELEVATED_DEFAULT
+    out = [row]
+    for aid, entry in sorted((_get(cfg, "agents", "entries") or {}).items()):
+        if isinstance(entry, dict) and (r := _sandbox(f"agent:{aid}", entry.get("sandbox"), defaults=False)):
+            out.append(r)
+    return out
+
+
 def posture(cfg: dict[str, Any], guard_id: str = GUARD_PLUGIN_ID) -> dict[str, Any]:
     """The allowlisted, comparable view of the config (the payload minus kind/path/changed)."""
     state, detail = guard_state(cfg, guard_id)
@@ -180,6 +216,7 @@ def posture(cfg: dict[str, Any], guard_id: str = GUARD_PLUGIN_ID) -> dict[str, A
         "plugins": plugin_list(cfg),
         "exec_policies": exec_policies(cfg),
         "runtimes": runtime_pins(cfg),
+        "sandboxes": sandboxes(cfg),
     }
 
 

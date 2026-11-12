@@ -276,3 +276,55 @@ async def test_archiving_and_deleting_conversations(gateway, enrolled: Sensor) -
     assert deletes["s-1"]["archived_only"] is True
     assert deletes["s-2"]["archived_only"] is False and deletes["s-2"]["delete_transcript"] is True
     assert all(a["principal"]["user_id"] == "secops@corp.test" for a in actions(enrolled))
+
+
+async def test_per_conversation_privilege_changes_are_recorded(gateway, enrolled: Sensor) -> None:
+    """sessions.patch can widen one conversation without touching the config file (M5d)."""
+    _, upstream = gateway
+    _, task, url = await start(enrolled, upstream)
+    reqs = [
+        {
+            "type": "req",
+            "id": "q1",
+            "method": "sessions.patch",
+            "params": {"key": "s-1", "permissionMode": "full", "execAsk": "off", "label": "x"},
+        },
+        {
+            "type": "req",
+            "id": "q2",
+            "method": "sessions.patch",
+            "params": {
+                "key": "s-2",
+                "archived": True,
+                "sandboxMode": None,
+                "toolOverrides": {"exec": "allow"},
+            },
+        },
+        {"type": "req", "id": "q3", "method": "sessions.patch", "params": {"key": "s-3", "unread": False}},
+    ]
+    try:
+        async with connect(url, additional_headers=IDENTITY) as ws:  # type: ignore[arg-type]
+            await ws.recv()
+            for req in reqs:
+                await ws.send(json.dumps(req))
+                await ws.recv()
+        await until(lambda: len(actions(enrolled)) == 3)
+    finally:
+        task.cancel()
+    got = sorted(
+        (a["payload"]["action"], a["payload"]["target_session_id"], tuple(a["payload"].get("changes", ())))
+        for a in actions(enrolled)
+    )
+    assert got == [
+        ("session.archive", "s-2", ()),
+        ("session.privilege", "s-1", ("permissionMode=full", "execAsk=off")),  # label is not a privilege
+        ("session.privilege", "s-2", ("sandboxMode=null", "toolOverrides=set")),
+    ]
+    raised = [f for f in _findings(enrolled) if f["rule_id"] == "openclaw-session-privilege-raised"]
+    assert len(raised) == 1  # permissionMode=full / execAsk=off; null/set values are recorded only
+    assert raised[0]["principal"]["user_id"] == "secops@corp.test"  # who widened it
+
+
+def _findings(sensor: Sensor) -> list[dict[str, Any]]:
+    with sqlite3.connect(sensor.spool.path) as db:
+        return [json.loads(d) for (d,) in db.execute("SELECT doc FROM outbox WHERE kind = 'finding'")]

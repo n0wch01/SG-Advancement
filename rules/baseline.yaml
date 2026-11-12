@@ -89,3 +89,39 @@ rules:
       fields: [payload.permission_mode]
       pattern: '^full$'
 
+  # 샌드박스 (M5d): config.snapshot의 sandboxes. 설정하지 않으면 OpenClaw 기본값 off(호스트에서 바로 실행).
+  # 결정(2026-11-12, 먼저 추천안으로): 실제로 꺼져 있으면 설정값이든 기본값이든 경보만. 기본 동작 자체가 위험 값이라 기본값도 본다.
+  # 오탐 주의: 게이트웨이 전체가 이미 격리된 컨테이너·VM 안에서 도는 경우(데모 팀 게이트웨이)에도 걸린다.
+  - id: openclaw-sandbox-off
+    severity: medium
+    category: policy_violation
+    title: 에이전트 샌드박스 꺼짐
+    message: 에이전트의 툴이 샌드박스 없이 게이트웨이 호스트에서 바로 실행됩니다(설정이 없으면 OpenClaw 기본값이 off).
+    recommended_action: agents.defaults.sandbox.mode를 all(또는 non-main)로 설정하고, 작업 공간 접근(workspaceAccess)을 필요한 만큼만 주세요.
+    response: alert
+    dedup: none
+    tags: [owasp-agentic:ASI05, owasp-llm:LLM06]
+    when: {payload.kind: config.snapshot}
+    match:
+      type: regex
+      fields: ["payload.sandboxes[].mode"]
+      pattern: '^off$'
+
+  # 대화 단위 권한 올리기 (감사 프록시): 설정 파일은 그대로인데 sessions.patch로 한 대화만 권한을 넓힌다. 누가 했는지는 principal.
+  # 게이트웨이가 받아들인 변경(ok=true)만 본다. 거부된 시도는 operator.action으로 기록만 남는다.
+  # 미탐 주의: 감사 프록시를 거치지 않는 변경(게이트웨이 내부, 같은 호스트 CLI)은 안 보인다.
+  - id: openclaw-session-privilege-raised
+    severity: high
+    category: policy_violation
+    title: 대화 단위 권한 올리기
+    message: 누군가 대화 하나의 권한을 넓혔습니다(권한 모드 full, 샌드박스 끔, 셸 승인 끔, elevated 켬 등).
+    recommended_action: 변경한 사람과 이유를 확인하고, 필요 없으면 그 대화의 설정을 되돌리세요.
+    response: alert
+    dedup: none
+    tags: [owasp-agentic:ASI03]
+    when: {payload.kind: operator.action, payload.action: session.privilege, payload.ok: "true"}
+    match:
+      type: regex
+      fields: ["payload.changes[]"]
+      pattern: '^(permissionMode=full|sandboxMode=off|execSecurity=full|execAsk=off|elevatedLevel=(on|full))$'
+

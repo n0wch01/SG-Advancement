@@ -10,9 +10,10 @@ The audit proxy relays every frame unchanged. It parses only control messages:
 
 - client → gateway requests ``plugin.approval.resolve`` / ``exec.approval.resolve`` ``{id, decision}``,
   ``chat.abort`` ``{sessionKey, runId}`` / ``sessions.abort`` ``{key, runId}``, and conversation
-  removal: ``sessions.delete`` ``{key, archivedOnly?, deleteTranscript?}`` and archiving through
-  ``sessions.patch`` ``{key, archived}`` / ``sessions.patchMany`` ``{targets: [{key}], patch: {archived}}``
-  (other patch fields are ignored);
+  removal: ``sessions.delete`` ``{key, archivedOnly?, deleteTranscript?}``, and through
+  ``sessions.patch`` ``{key, ...}`` / ``sessions.patchMany`` ``{targets: [{key}], patch: {...}}`` archiving
+  (``archived``) and per-conversation privilege changes (``permissionMode``, ``sandboxMode``, ``exec*``,
+  ``elevatedLevel``, ``toolOverrides``); other patch fields are ignored;
 - gateway → client approval prompts (``*.approval.requested`` events, ``*.approval.list|get``
   answers) to learn which tool call an approval id belongs to;
 - the gateway's answer to a watched request (accepted or refused).
@@ -79,6 +80,40 @@ def _json(msg: str | bytes) -> dict[str, Any] | None:
 
 def _str(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+# sessions.patch fields that change what a conversation's agent may do (others, like label or unread,
+# are not actions worth auditing). Values are recorded as given; rules decide what "raising" means.
+PRIVILEGE_FIELDS = (
+    "permissionMode",
+    "sandboxMode",
+    "execSecurity",
+    "execAsk",
+    "execHost",
+    "execNode",
+    "elevatedLevel",
+    "toolOverrides",
+)
+
+
+def _patch_actions(method: str, patch: dict[str, Any], key: str | None) -> list[dict[str, Any]]:
+    """Archive and/or privilege changes in one session patch."""
+    out: list[dict[str, Any]] = []
+    if isinstance(patch.get("archived"), bool):
+        action = "session.archive" if patch["archived"] else "session.unarchive"
+        out.append({"action": action, "method": method, "target_session_id": key})
+    changes = []
+    for f in PRIVILEGE_FIELDS:
+        if f not in patch:
+            continue
+        v = patch[f]
+        value = "null" if v is None else ("set" if isinstance(v, dict | list) else str(v))
+        changes.append(f"{f}={value}")
+    if changes:
+        out.append(
+            {"action": "session.privilege", "method": method, "target_session_id": key, "changes": changes}
+        )
+    return out
 
 
 class ApprovalBook:
@@ -174,28 +209,19 @@ class Watch:
                 if isinstance(params.get("deleteTranscript"), bool)
                 else None,
             }
-        elif method == "sessions.patch" and isinstance(params.get("archived"), bool):
-            self.pending[doc["id"]] = {
-                "action": "session.archive" if params["archived"] else "session.unarchive",
-                "method": method,
-                "target_session_id": _str(params.get("key")),
-            }
+        elif method == "sessions.patch":
+            actions = _patch_actions(method, params, _str(params.get("key")))
+            if len(actions) == 1:
+                self.pending[doc["id"]] = actions[0]
+            elif actions:
+                self.pending[doc["id"]] = {"many": actions}
         elif method == "sessions.patchMany":
             patch = params.get("patch") if isinstance(params.get("patch"), dict) else {}
             targets = params.get("targets") if isinstance(params.get("targets"), list) else []
             keys = [_str(t.get("key")) for t in targets if isinstance(t, dict)]
-            if isinstance(patch.get("archived"), bool) and keys:
-                self.pending[doc["id"]] = {
-                    "many": [
-                        {
-                            "action": "session.archive" if patch["archived"] else "session.unarchive",
-                            "method": method,
-                            "target_session_id": k,
-                        }
-                        for k in keys
-                        if k
-                    ]
-                }
+            actions = [a for k in keys if k for a in _patch_actions(method, patch, k)]
+            if actions:
+                self.pending[doc["id"]] = {"many": actions}
 
     def from_gateway(self, msg: str | bytes) -> None:
         if not isinstance(msg, str):

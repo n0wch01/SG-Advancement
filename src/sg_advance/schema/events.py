@@ -226,6 +226,21 @@ class RuntimePin(StrictModel):
     runtime: str = Field(description='Pinned runtime id, or "default" when nothing pins it')
 
 
+class SandboxPolicy(StrictModel):
+    """Where an agent's tools run. ``mode_source: default`` means not configured: the agent's
+    built-in default applies (OpenClaw: ``off``, i.e. directly on the host)."""
+
+    scope: str = Field(description='"defaults" or "agent:<id>"')
+    mode: str | None = Field(default=None, description="openclaw: off | non-main | all (effective value)")
+    mode_source: Literal["set", "default"] | None = None
+    workspace_access: str | None = Field(default=None, description="openclaw: none | ro | rw")
+    scope_kind: str | None = Field(default=None, description="openclaw: session | agent | shared")
+    elevated_default: str | None = Field(
+        default=None,
+        description="openclaw agents.defaults.elevatedDefault: off | on | ask | full (effective)",
+    )
+
+
 class ConfigSnapshot(StrictModel):
     """Security-relevant settings of an agent installation, read from its own config.
 
@@ -243,6 +258,7 @@ class ConfigSnapshot(StrictModel):
     plugins: tuple[PluginDescriptor, ...] = ()
     exec_policies: tuple[ExecPolicy, ...] = ()
     runtimes: tuple[RuntimePin, ...] = ()
+    sandboxes: tuple[SandboxPolicy, ...] = ()
 
 
 class ComponentIntegrity(StrictModel):
@@ -313,7 +329,14 @@ class OperatorAction(StrictModel):
     """
 
     kind: Literal[EventKind.OPERATOR_ACTION] = EventKind.OPERATOR_ACTION
-    action: Literal["approval.resolve", "run.abort", "session.delete", "session.archive", "session.unarchive"]
+    action: Literal[
+        "approval.resolve",
+        "run.abort",
+        "session.delete",
+        "session.archive",
+        "session.unarchive",
+        "session.privilege",
+    ]
     method: str = Field(description="Gateway RPC the person's client sent, e.g. plugin.approval.resolve")
     ok: bool | None = Field(default=None, description="Gateway accepted it; None if no answer was seen")
     error: str | None = Field(default=None, description="Gateway error code when refused")
@@ -331,6 +354,10 @@ class OperatorAction(StrictModel):
         default=None, description="session.delete: only if already archived (what members may do)"
     )
     delete_transcript: bool | None = Field(default=None, description="session.delete: transcript removed too")
+    changes: tuple[str, ...] = Field(
+        default=(),
+        description='session.privilege: "field=value" per permission field set (e.g. permissionMode=full)',
+    )
 
 
 Payload = Annotated[

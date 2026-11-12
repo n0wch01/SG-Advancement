@@ -499,6 +499,14 @@
           },
           "title": "Runtimes",
           "type": "array"
+        },
+        "sandboxes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SandboxPolicy"
+          },
+          "title": "Sandboxes",
+          "type": "array"
         }
       },
       "required": [
@@ -936,7 +944,8 @@
             "run.abort",
             "session.delete",
             "session.archive",
-            "session.unarchive"
+            "session.unarchive",
+            "session.privilege"
           ],
           "title": "Action",
           "type": "string"
@@ -1072,6 +1081,15 @@
           "default": null,
           "description": "session.delete: transcript removed too",
           "title": "Delete Transcript"
+        },
+        "changes": {
+          "default": [],
+          "description": "session.privilege: \"field=value\" per permission field set (e.g. permissionMode=full)",
+          "items": {
+            "type": "string"
+          },
+          "title": "Changes",
+          "type": "array"
         }
       },
       "required": [
@@ -1186,6 +1204,90 @@
         "runtime"
       ],
       "title": "RuntimePin",
+      "type": "object"
+    },
+    "SandboxPolicy": {
+      "additionalProperties": false,
+      "description": "Where an agent's tools run. ``mode_source: default`` means not configured: the agent's\nbuilt-in default applies (OpenClaw: ``off``, i.e. directly on the host).",
+      "properties": {
+        "scope": {
+          "description": "\"defaults\" or \"agent:<id>\"",
+          "title": "Scope",
+          "type": "string"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "openclaw: off | non-main | all (effective value)",
+          "title": "Mode"
+        },
+        "mode_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "set",
+                "default"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mode Source"
+        },
+        "workspace_access": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "openclaw: none | ro | rw",
+          "title": "Workspace Access"
+        },
+        "scope_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "openclaw: session | agent | shared",
+          "title": "Scope Kind"
+        },
+        "elevated_default": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "openclaw agents.defaults.elevatedDefault: off | on | ask | full (effective)",
+          "title": "Elevated Default"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "title": "SandboxPolicy",
       "type": "object"
     },
     "SensorHealth": {
