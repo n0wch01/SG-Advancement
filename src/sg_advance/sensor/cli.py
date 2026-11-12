@@ -6,6 +6,7 @@
     sga-sensor sync                       # pull policy + flush spool
     sga-sensor replay examples/events/claude_code.jsonl
     sga-sensor run --openclaw                  # daemon: watch the local OpenClaw gateway + its config
+    sga-sensor run --no-local-api              # daemon: only report agent installs on this PC
 
 The OpenClaw gateway token comes from OPENCLAW_GATEWAY_TOKEN (never from argv).
 The enrollment token can also come from SGA_ENROLL_TOKEN (keeps it out of shell history
@@ -167,6 +168,11 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
             adapters.append(
                 OpenClawIntegrityAdapter(interval=args.integrity_interval, quarantine=not args.observe_only)
             )
+    if not args.no_discovery:  # agent installs on this endpoint, managed or shadow (M5d)
+        from .adapters.agent_discovery import AgentDiscoveryAdapter
+
+        watched = [args.openclaw_config] if args.openclaw and not args.no_openclaw_config else []
+        adapters.append(AgentDiscoveryAdapter(watched_configs=watched, interval=args.discovery_interval))
     if args.egress_proxy:  # the agent network's only way out, judged by the policy (M5d)
         from .adapters.egress_proxy import EgressProxyAdapter
 
@@ -377,6 +383,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-openclaw-config", action="store_true", help="don't watch the OpenClaw config")
     p.add_argument("--no-openclaw-integrity", action="store_true", help="don't hash installed OpenClaw code")
     p.add_argument("--integrity-interval", type=float, default=300.0, help="seconds between integrity scans")
+    p.add_argument(
+        "--no-discovery", action="store_true", help="don't scan this endpoint for agent installs (shadow AI)"
+    )
+    p.add_argument("--discovery-interval", type=float, default=600.0, help="seconds between install scans")
     p.set_defaults(fn=_cmd_run)
 
     p = sub.add_parser("service", help="run the daemon as a background service (macOS launchd)")

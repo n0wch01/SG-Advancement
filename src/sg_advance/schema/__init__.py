@@ -17,6 +17,7 @@ from .events import (
     ConfigSnapshot,
     EventKind,
     ExecPolicy,
+    InstallSnapshot,
     IntegrityReport,
     InventorySnapshot,
     LlmCall,
@@ -41,6 +42,7 @@ from .findings import Enforcement, Finding, ResponseAction, Severity, ThreatCate
 
 __all__ = [
     "ApprovalResolution",
+    "InstallSnapshot",
     "OperatorAction",
     "SCHEMA_VERSION",
     "AgentEvent",

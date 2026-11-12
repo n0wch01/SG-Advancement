@@ -31,6 +31,7 @@ class EventKind(StrEnum):
     INTEGRITY_REPORT = "integrity.report"
     APPROVAL_RESOLVED = "approval.resolved"
     OPERATOR_ACTION = "operator.action"
+    INSTALL_SNAPSHOT = "install.snapshot"
 
 
 class ToolProviderKind(StrEnum):
@@ -360,6 +361,39 @@ class OperatorAction(StrictModel):
     )
 
 
+class InstallSnapshot(StrictModel):
+    """One agent installation found on the endpoint, managed or not (shadow AI discovery).
+
+    Sent per install when it is first seen, when its state changes, and once more with
+    ``present=false`` when it disappears. Only the product's own traces are read (its binary,
+    state directory, service file, its gateway port on 127.0.0.1); nothing else on the machine."""
+
+    kind: Literal[EventKind.INSTALL_SNAPSHOT] = EventKind.INSTALL_SNAPSHOT
+    product: str = Field(description="e.g. openclaw")
+    instance: str = Field(
+        description="What identifies this install: its state dir, or the code path if never set up"
+    )
+    present: bool = Field(default=True, description="false: the install was seen before and is gone now")
+    changed: tuple[str, ...] = Field(default=(), description="Fields that differ from the previous snapshot")
+    version: str | None = None
+    install_path: str | None = Field(default=None, description="Package directory of the code that runs it")
+    install_source: str | None = Field(
+        default=None, description="npm-global | nvm | pnpm | volta | app | other (from the path)"
+    )
+    config_path: str | None = None
+    configured: bool = Field(default=False, description="A config file exists (the install was set up)")
+    services: tuple[str, ...] = Field(default=(), description="launchd / systemd units that start it")
+    running: bool | None = Field(default=None, description="Its gateway port answers on 127.0.0.1")
+    bind: str | None = Field(default=None, description="openclaw gateway.bind (default loopback)")
+    bind_scope: Literal["loopback", "network"] | None = None
+    guard_plugin: Literal["enabled", "disabled", "missing"] | None = Field(
+        default=None, description="The SG-Advance plugin as the install's config leaves it"
+    )
+    watched: bool = Field(default=False, description="This sensor watches the install's config and gateway")
+    managed: bool = Field(default=False, description="configured, guard plugin enabled and watched")
+    unmanaged_reasons: tuple[str, ...] = ()
+
+
 Payload = Annotated[
     SessionStart
     | SessionEnd
@@ -374,7 +408,8 @@ Payload = Annotated[
     | ConfigSnapshot
     | IntegrityReport
     | ApprovalResolution
-    | OperatorAction,
+    | OperatorAction
+    | InstallSnapshot,
     Field(discriminator="kind"),
 ]
 

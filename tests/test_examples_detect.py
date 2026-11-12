@@ -67,3 +67,10 @@ def test_t18_injection_read_by_a_sub_agent_then_acted_on_by_its_parent() -> None
     assert "cross-agent-injection-propagation" in exfil.rule_ids
     assert "injection-then-sensitive-action" not in exfil.rule_ids  # not one session
     assert exfil.action is ResponseAction.BLOCK
+
+
+def test_shadow_openclaw_install_on_an_employee_pc() -> None:
+    verdicts = replay("openclaw_shadow.jsonl")
+    carol, alice = (set(v.rule_ids) for v in verdicts)
+    assert carol == {"openclaw-unmanaged-install", "openclaw-gateway-network-exposed"}
+    assert alice == set()

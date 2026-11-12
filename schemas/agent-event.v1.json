@@ -648,6 +648,194 @@
       "title": "ExecPolicy",
       "type": "object"
     },
+    "InstallSnapshot": {
+      "additionalProperties": false,
+      "description": "One agent installation found on the endpoint, managed or not (shadow AI discovery).\n\nSent per install when it is first seen, when its state changes, and once more with\n``present=false`` when it disappears. Only the product's own traces are read (its binary,\nstate directory, service file, its gateway port on 127.0.0.1); nothing else on the machine.",
+      "properties": {
+        "kind": {
+          "const": "install.snapshot",
+          "default": "install.snapshot",
+          "title": "Kind",
+          "type": "string"
+        },
+        "product": {
+          "description": "e.g. openclaw",
+          "title": "Product",
+          "type": "string"
+        },
+        "instance": {
+          "description": "What identifies this install: its state dir, or the code path if never set up",
+          "title": "Instance",
+          "type": "string"
+        },
+        "present": {
+          "default": true,
+          "description": "false: the install was seen before and is gone now",
+          "title": "Present",
+          "type": "boolean"
+        },
+        "changed": {
+          "default": [],
+          "description": "Fields that differ from the previous snapshot",
+          "items": {
+            "type": "string"
+          },
+          "title": "Changed",
+          "type": "array"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "install_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Package directory of the code that runs it",
+          "title": "Install Path"
+        },
+        "install_source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "npm-global | nvm | pnpm | volta | app | other (from the path)",
+          "title": "Install Source"
+        },
+        "config_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Config Path"
+        },
+        "configured": {
+          "default": false,
+          "description": "A config file exists (the install was set up)",
+          "title": "Configured",
+          "type": "boolean"
+        },
+        "services": {
+          "default": [],
+          "description": "launchd / systemd units that start it",
+          "items": {
+            "type": "string"
+          },
+          "title": "Services",
+          "type": "array"
+        },
+        "running": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Its gateway port answers on 127.0.0.1",
+          "title": "Running"
+        },
+        "bind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "openclaw gateway.bind (default loopback)",
+          "title": "Bind"
+        },
+        "bind_scope": {
+          "anyOf": [
+            {
+              "enum": [
+                "loopback",
+                "network"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bind Scope"
+        },
+        "guard_plugin": {
+          "anyOf": [
+            {
+              "enum": [
+                "enabled",
+                "disabled",
+                "missing"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The SG-Advance plugin as the install's config leaves it",
+          "title": "Guard Plugin"
+        },
+        "watched": {
+          "default": false,
+          "description": "This sensor watches the install's config and gateway",
+          "title": "Watched",
+          "type": "boolean"
+        },
+        "managed": {
+          "default": false,
+          "description": "configured, guard plugin enabled and watched",
+          "title": "Managed",
+          "type": "boolean"
+        },
+        "unmanaged_reasons": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Unmanaged Reasons",
+          "type": "array"
+        }
+      },
+      "required": [
+        "product",
+        "instance"
+      ],
+      "title": "InstallSnapshot",
+      "type": "object"
+    },
     "IntegrityReport": {
       "additionalProperties": false,
       "description": "Installed agent code vs. known-good digests from the policy. Sent when anything changes.",
@@ -1362,7 +1550,8 @@
         "langgraph_callback",
         "mcp_proxy",
         "llm_proxy",
-        "egress_proxy"
+        "egress_proxy",
+        "agent_discovery"
       ],
       "title": "SensorType",
       "type": "string"
@@ -1975,6 +2164,7 @@
         "mapping": {
           "approval.resolved": "#/$defs/ApprovalResolution",
           "config.snapshot": "#/$defs/ConfigSnapshot",
+          "install.snapshot": "#/$defs/InstallSnapshot",
           "integrity.report": "#/$defs/IntegrityReport",
           "inventory.snapshot": "#/$defs/InventorySnapshot",
           "llm.call": "#/$defs/LlmCall",
@@ -2032,6 +2222,9 @@
         },
         {
           "$ref": "#/$defs/OperatorAction"
+        },
+        {
+          "$ref": "#/$defs/InstallSnapshot"
         }
       ],
       "title": "Payload"

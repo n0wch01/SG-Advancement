@@ -283,7 +283,8 @@
         "langgraph_callback",
         "mcp_proxy",
         "llm_proxy",
-        "egress_proxy"
+        "egress_proxy",
+        "agent_discovery"
       ],
       "title": "SensorType",
       "type": "string"

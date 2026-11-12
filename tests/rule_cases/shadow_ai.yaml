@@ -1,0 +1,68 @@
+# Unmanaged (shadow) agent installs (M5d): install.snapshot events from the sensor's discovery scan.
+# One event per install. "managed" = configured + SG-Advance plugin enabled + this sensor watches its config.
+# Decisions (2026-11-12, recommended defaults, revisit with the user): alert only; managed does not
+# require an approved version yet (the integrity scan covers managed installs); the scan only looks
+# for OpenClaw's own traces (binary, state dir, service file, its gateway port on 127.0.0.1).
+cases:
+  # ── 비관리 설치 ──
+  - name: 개인이 설치·설정한 OpenClaw (플러그인 없음, 센서 감시 없음)
+    agent: openclaw
+    sensor: agent_discovery
+    events:
+      - {kind: install.snapshot, product: openclaw, instance: "/home/carol/.openclaw", configured: true, running: true,
+         bind_scope: loopback, guard_plugin: missing, watched: false, managed: false,
+         unmanaged_reasons: ["guard plugin missing", "no SG-Advance sensor watches this config"]}
+    expect: [openclaw-unmanaged-install]
+    expect_not: [openclaw-gateway-network-exposed]
+
+  - name: 플러그인은 켜져 있지만 센서가 보지 않는 두 번째 프로필
+    agent: openclaw
+    sensor: agent_discovery
+    events:
+      - {kind: install.snapshot, product: openclaw, instance: "/home/carol/.openclaw-dev", configured: true,
+         guard_plugin: enabled, watched: false, managed: false}
+    expect: [openclaw-unmanaged-install]
+
+  - name: 비관리 게이트웨이가 네트워크에 열려 있음 (토큰이 새면 같은 망에서 전권 접속, T20)
+    agent: openclaw
+    sensor: agent_discovery
+    events:
+      - {kind: install.snapshot, product: openclaw, instance: "/home/carol/.openclaw", configured: true, running: true,
+         bind: lan, bind_scope: network, guard_plugin: missing, watched: false, managed: false}
+    expect: [openclaw-unmanaged-install, openclaw-gateway-network-exposed]
+
+  # ── 정상: 관리되는 설치 ──
+  - name: 회사 기준대로 관리되는 개인 PC 설치 (루프백, 플러그인, 센서 감시)
+    agent: openclaw
+    sensor: agent_discovery
+    events:
+      - {kind: install.snapshot, product: openclaw, instance: "/Users/alice/.openclaw", configured: true, running: true,
+         bind_scope: loopback, guard_plugin: enabled, watched: true, managed: true}
+    expect_not: [openclaw-unmanaged-install, openclaw-gateway-network-exposed]
+
+  # 팀 게이트웨이는 신원 프록시 뒤에서 일부러 lan으로 연다. 관리되는 설치라 노출 룰에서 빠진다.
+  - name: 관리되는 팀 게이트웨이의 lan 바인드는 의도된 구성
+    agent: openclaw
+    sensor: agent_discovery
+    events:
+      - {kind: install.snapshot, product: openclaw, instance: "/home/node/.openclaw", configured: true, running: true,
+         bind: lan, bind_scope: network, guard_plugin: enabled, watched: true, managed: true}
+    expect_not: [openclaw-unmanaged-install, openclaw-gateway-network-exposed]
+
+  # ── 정상(미탐 감수): 설치만 되어 있고 설정한 적 없음 ──
+  # 같은 이미지를 쓰는 프록시 컨테이너처럼 코드만 있는 경우. 인벤토리로는 남지만 경보하지 않는다.
+  - name: 코드만 설치되고 설정·실행된 적 없음
+    agent: openclaw
+    sensor: agent_discovery
+    events:
+      - {kind: install.snapshot, product: openclaw, instance: "/app", configured: false, running: false,
+         watched: false, managed: false, unmanaged_reasons: ["not configured"]}
+    expect_not: [openclaw-unmanaged-install, openclaw-gateway-network-exposed]
+
+  - name: 사라진 설치는 경보하지 않는다
+    agent: openclaw
+    sensor: agent_discovery
+    events:
+      - {kind: install.snapshot, product: openclaw, instance: "/home/carol/.openclaw", present: false,
+         configured: true, managed: false}
+    expect_not: [openclaw-unmanaged-install]

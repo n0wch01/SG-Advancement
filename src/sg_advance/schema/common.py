@@ -42,6 +42,7 @@ class SensorType(StrEnum):
     MCP_PROXY = "mcp_proxy"  # sits between any MCP client and server
     LLM_PROXY = "llm_proxy"  # sits between agent and LLM API
     EGRESS_PROXY = "egress_proxy"  # outbound HTTP interception
+    AGENT_DISCOVERY = "agent_discovery"  # endpoint scan for agent installs (managed or shadow)
 
 
 class Endpoint(StrictModel):

@@ -88,6 +88,28 @@ services:
     depends_on: [control-plane]
     restart: unless-stopped
 
+  # Demo employee PC with a personal OpenClaw install (M5d shadow AI): no SG-Advance plugin, its
+  # gateway opened to the office LAN. The company sensor here only runs the install discovery scan.
+  carol-pc:
+    profiles: [shadow]
+    image: sg-advance-team-gateway:local
+    pull_policy: never
+    entrypoint: ["tini", "-s", "--", "/opt/sga/pc-start.sh"]
+    healthcheck:
+      disable: true
+    environment:
+      SGA_SERVER: http://control-plane:8000
+      SGA_ENROLL_TOKEN: ${SGA_PC_ENROLL_TOKEN:-}
+      SGA_DEVICE_ID: carol-pc
+      SGA_DEFAULT_USER: carol@corp.test
+      PC_GATEWAY_BIND: ${PC_GATEWAY_BIND:-lan}
+    volumes:
+      - carol-pc:/home/node
+    networks:
+      corp-net: {}  # the office LAN
+    depends_on: [control-plane]
+    restart: unless-stopped
+
   # Demo identity proxy (stand-in for Cloudflare Access / SSO): one host port per employee.
   team-proxy:
     profiles: [team]
@@ -120,3 +142,4 @@ volumes:
   team-sga: {}
   team-audit: {}
   team-egress: {}
+  carol-pc: {}
