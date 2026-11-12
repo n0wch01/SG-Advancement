@@ -1,6 +1,8 @@
 """Bearer-token auth for the control plane.
 
-- Admin: one shared token from ``SGA_ADMIN_TOKEN`` (console login replaces this in M7).
+- Admin: one shared token from ``SGA_ADMIN_TOKEN``.
+- Dashboard (M7): ``SGA_DASHBOARD_TOKEN``, read-only: the same /v1/admin routes, GET only. The web
+  console logs in with it, so the browser never holds a token that can change policy or enroll devices.
 - Sensor: a per-device token issued at enrollment. Only its sha256 is stored, so a leaked DB
   does not leak usable tokens. Tokens are 256-bit random, so a fast hash is sufficient.
 """
@@ -52,10 +54,25 @@ Token = Annotated[str, Depends(bearer_token)]
 DbSession = Annotated[Session, Depends(get_session)]
 
 
+READ_METHODS = frozenset({"GET", "HEAD"})
+
+
+def _matches(token: str, expected: str | None) -> bool:
+    return bool(expected) and hmac.compare_digest(token.encode(), expected.encode())  # type: ignore[union-attr]
+
+
 def require_admin(request: Request, token: Token) -> None:
-    expected: str = request.app.state.settings.admin_token
-    if not hmac.compare_digest(token.encode(), expected.encode()):
-        raise _unauthorized("invalid admin token")
+    """Admin token for everything; the dashboard token for reads. Sets ``request.state.role``."""
+    settings = request.app.state.settings
+    if _matches(token, settings.admin_token):
+        request.state.role = "admin"
+        return
+    if _matches(token, settings.dashboard_token):
+        if request.method not in READ_METHODS:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "the dashboard token is read-only")
+        request.state.role = "viewer"
+        return
+    raise _unauthorized("invalid admin token")
 
 
 def require_device(token: Token, db: DbSession) -> Device:

@@ -10,8 +10,12 @@ services:
       dockerfile: deploy/control-plane.Dockerfile
     environment:
       SGA_ADMIN_TOKEN: ${SGA_ADMIN_TOKEN:?set SGA_ADMIN_TOKEN in .env}
+      # SGA-Dashboard (M7): read-only login token; the built console (cd dashboard && npm run build).
+      SGA_DASHBOARD_TOKEN: ${SGA_DASHBOARD_TOKEN:-}
+      SGA_DASHBOARD_DIR: /opt/sga-dashboard
     volumes:
       - control-plane-data:/data
+      - ./dashboard/dist:/opt/sga-dashboard:ro
     ports:
       - "127.0.0.1:${SGA_PORT:-8000}:8000"
     networks: [corp-net, team-net]  # team-net: sensors on the isolated agent network report here

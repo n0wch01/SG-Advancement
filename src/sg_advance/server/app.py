@@ -6,6 +6,7 @@ Admin routes live under ``/v1/admin`` and authenticate with the admin token.
 
 from __future__ import annotations
 
+import logging
 import queue
 import secrets
 import threading
@@ -23,7 +24,7 @@ from .. import __version__
 from ..policy import PolicyBundle, key_id, load_or_create_signing_key, public_key_b64
 from ..redact import redact_event, redact_text
 from ..schema import AgentEvent, Finding, Severity
-from . import audit, manifests
+from . import audit, dashboard, manifests
 from .auth import (
     DEVICE_PREFIX,
     ENROLL_PREFIX,
@@ -36,6 +37,8 @@ from .auth import (
 )
 from .db import Database, Device, EnrollmentToken, EventRow, FindingRow, utcnow
 from .settings import Settings
+
+log = logging.getLogger(__name__)
 
 DEVICE_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
 
@@ -391,11 +394,12 @@ def list_findings(
     session_id: str | None = None,
     rule_id: str | None = None,
     category: str | None = None,
+    severity: Severity | None = None,
     min_severity: Severity | None = None,
     limit: Limit = 100,
     offset: Offset = 0,
 ) -> list[dict[str, Any]]:
-    """Newest first. ``min_severity=high`` returns high and critical."""
+    """Newest first. ``severity=high`` returns exactly high; ``min_severity=high`` high and critical."""
     q = select(FindingRow.doc)
     for col, val in (
         (FindingRow.device_id, device_id),
@@ -403,6 +407,7 @@ def list_findings(
         (FindingRow.session_id, session_id),
         (FindingRow.rule_id, rule_id),
         (FindingRow.category, category),
+        (FindingRow.severity, str(severity) if severity else None),
     ):
         if val is not None:
             q = q.where(col == val)
@@ -468,4 +473,41 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.include_router(admin)
     app.include_router(manifests.router)
     app.include_router(audit.router)
+    app.include_router(dashboard.router)
+    _mount_dashboard(app, settings)
     return app
+
+
+# Same origin as the API (no CORS). Only our own files: scripts, styles and API calls from 'self'.
+DASHBOARD_HEADERS = {
+    "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+    "frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+def _mount_dashboard(app: FastAPI, settings: Settings) -> None:
+    """Serve the built SGA-Dashboard (``dashboard/dist``) at /dashboard when configured."""
+    root = settings.dashboard_dir
+    if root is None:
+        return
+    if not (root / "index.html").is_file():
+        # Compose mounts dashboard/dist even before anyone built it: keep the API up, say why.
+        log.warning("SGA_DASHBOARD_DIR=%s has no index.html (npm run build in dashboard/): not served", root)
+        return
+    from fastapi.responses import RedirectResponse
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/dashboard", StaticFiles(directory=root, html=True), name="dashboard")
+
+    @app.get("/", include_in_schema=False)
+    def to_dashboard() -> RedirectResponse:
+        return RedirectResponse("/dashboard/")
+
+    @app.middleware("http")
+    async def dashboard_headers(request: Request, call_next: Any) -> Response:
+        response: Response = await call_next(request)
+        if request.url.path.startswith("/dashboard"):
+            response.headers.update(DASHBOARD_HEADERS)
+        return response

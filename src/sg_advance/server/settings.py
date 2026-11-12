@@ -16,6 +16,10 @@ class Settings:
     db_url: str = DEFAULT_DB_URL
     rules_dir: Path = Path(DEFAULT_RULES_DIR)
     admin_token: str | None = None
+    # SGA-Dashboard (M7): a read-only token for the web console, so the browser never holds the
+    # admin token. GET requests to /v1/admin only. None: the dashboard needs the admin token.
+    dashboard_token: str | None = None
+    dashboard_dir: Path | None = None  # built dashboard (dashboard/dist), served at /dashboard
     signing_key_path: Path = Path(DEFAULT_SIGNING_KEY)
     max_batch: int = 500
     # M5d package verification: npm registry signature + Sigstore provenance → known-good digests.
@@ -29,6 +33,8 @@ class Settings:
             db_url=os.environ.get("SGA_DB_URL", DEFAULT_DB_URL),
             rules_dir=Path(os.environ.get("SGA_RULES_DIR", DEFAULT_RULES_DIR)),
             admin_token=os.environ.get("SGA_ADMIN_TOKEN") or None,
+            dashboard_token=os.environ.get("SGA_DASHBOARD_TOKEN") or None,
+            dashboard_dir=Path(d) if (d := os.environ.get("SGA_DASHBOARD_DIR")) else None,
             signing_key_path=Path(os.environ.get("SGA_SIGNING_KEY", DEFAULT_SIGNING_KEY)),
             max_batch=int(os.environ.get("SGA_MAX_BATCH", "500")),
             release_cooldown_days=float(os.environ.get("SGA_RELEASE_COOLDOWN_DAYS", "3")),
