@@ -41,8 +41,13 @@ rules:
     tags: [owasp-llm:LLM02, scenario:S2]
     dedup: session                   # session | none
     when: {payload.kind: tool.call}  # 사전 필터. 모든 경로가 나열한 값 중 하나여야 통과
+    unless: {labels.openclaw.tool_kind: code_mode_exec}  # 예외. 모든 경로가 나열한 값 중 하나면 건너뜀 (선택)
     match: { type: regex, ... }
 ```
+
+`unless`는 `when`과 형식이 같고 뜻만 반대다. 예: OpenClaw Code Mode의 바깥 `exec`는 모델이 쓴 JavaScript를 `code`와 `command`에
+똑같이 담고, 실제 명령은 안쪽 `exec`가 다시 판정된다. 그래서 승인 룰(`destructive-sql`, `destructive-cloud-command`)은
+바깥 호출을 건너뛰고 안쪽에서 한 번만 승인을 받는다. 차단 룰은 바깥 호출에서도 먼저 막는 편이 안전해서 예외를 두지 않았다.
 
 ### 필드 경로
 
@@ -56,6 +61,8 @@ rules:
 | `payload.plugins[].plugin_id` | 각 플러그인 id |
 | `principal.user_id`, `principal.groups[]` | 사용자, 그룹 |
 | `agent.type`, `source.sensor` | 에이전트 종류, 센서 종류 |
+
+키 이름에 점이 들어 있어도 된다. `labels.openclaw.tool_kind`는 `labels` 안의 `openclaw.tool_kind` 키를 찾는다.
 
 YAML 인라인 리스트 안에 `[]`가 들어간 경로를 쓸 때는 따옴표로 감싸야 한다. 예: `fields: ["payload.tools[].description"]`
 

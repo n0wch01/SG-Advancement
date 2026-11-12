@@ -210,6 +210,19 @@ v4 녹화 프레임은 [openclaw-2026.11.3-tool-run.jsonl](../tests/fixtures/ope
 에이전트 한 번 실행에 qwen3:8b로 약 5분(첫 실행, MacBook Air M3)이 걸렸다.
 `exec.approval.resolved`에는 결정자(`resolvedBy`)가 들어 있어, M7의 사용자 승인 감사에 그대로 쓸 수 있다.
 
+### 대화 원문 최소화
+
+`prompt.user`와 `message.assistant`는 룰에 걸린 것만 원문을 대기열에 넣는다. 나머지는 `withheld: true`와 글자 수(`text_chars`)만 남기고
+`raw`도 뺀다. 탐지는 이미 원문으로 끝났으므로 영향이 없다. `sga-sensor run --keep-chat-text`로 끌 수 있다. 결정 배경과 한계는
+[team-gateway.md](team-gateway.md#데이터-최소화)에 있다.
+
+### 팀 게이트웨이 (M5b)
+
+여러 직원이 쓰는 게이트웨이에서는 툴 호출을 시킨 사람으로 기록한다(`users.list`, 사용자 메시지의 `senderIdentity`, 대화 주인).
+같은 호스트의 센서는 게이트웨이 비밀번호로 접속한다(`OPENCLAW_GATEWAY_PASSWORD` 또는 `--openclaw-password-file`, 0600).
+감사 프록시는 `sga-sensor run --openclaw-audit-proxy HOST:PORT --openclaw-audit-upstream URL --audit-trusted-peer IP`로 띄운다.
+구성과 실환경 결과는 [team-gateway.md](team-gateway.md)에 있다.
+
 ## OpenClaw 플러그인 (실행 전 차단, M5c)
 
 [integrations/openclaw-plugin/](../integrations/openclaw-plugin/). 게이트웨이 안에서 `before_tool_call` hook으로 **모든 툴 호출을 실행 전에** 판정한다.
@@ -248,8 +261,10 @@ OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──
 
 - 데몬은 승인 창을 띄운 호출의 맥락(원래 `tool.call` 이벤트 id, 그 finding id, 걸린 룰, 최고 심각도, 요청 시각)을 기억해 응답에 붙인다.
   데몬이 그 사이 재시작했으면 플러그인이 보낸 사본(룰, 심각도, 요청 시각)을 쓴다.
-- OpenClaw는 **누가 승인 버튼을 눌렀는지** 플러그인에 알려 주지 않는다(`approver`는 비어 있음). 실행을 시작한 요청자
-  (`requester_channel`, `requester_senderid` 라벨)는 남는다. 웹채팅에서는 보통 같은 사람이지만 Slack 등으로 승인을 넘기면 다를 수 있다.
+- OpenClaw는 **누가 승인 버튼을 눌렀는지** 플러그인에 알려 주지 않고, 내부에도 앱 이름(`openclaw-control-ui`)만 저장한다.
+  개인 게이트웨이에서는 `approver`가 비어 있고, 실행을 시작한 요청자(`requester_channel`, `requester_senderid` 라벨)만 남는다.
+  팀 게이트웨이에서는 신원 프록시 뒤의 **감사 프록시**가 승인한 사람을 `operator.action`으로 기록하고, 감사 API가 이를 `approver`로 붙인다
+  ([team-gateway.md](team-gateway.md)).
 
 | 응답 | 룰 (모두 `alert`, 보안팀 사후 감사) |
 |---|---|

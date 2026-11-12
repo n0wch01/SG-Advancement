@@ -22,8 +22,8 @@ AgentEvent
 | kind | 의미 | 주요 필드 |
 |---|---|---|
 | `session.start` / `session.end` | 세션 수명주기 | reason; start에는 `permission_mode`, `interactive`, `parent_process`(실행 방식, 선택) |
-| `prompt.user` | 사용자 입력 | text |
-| `message.assistant` | 모델 응답 | text |
+| `prompt.user` | 사용자 입력 | text, withheld, text_chars (룰에 안 걸리면 text는 비우고 글자 수만) |
+| `message.assistant` | 모델 응답 | text, withheld, text_chars (같음) |
 | `tool.call` | 툴 실행 **직전** (차단 판단 지점) | call_id, tool, provider, arguments |
 | `tool.result` | 툴 실행 결과 | call_id, ok, output_preview, error, duration_ms |
 | `llm.call` | LLM API 호출 | provider, model, tokens, cost_usd |
@@ -31,6 +31,7 @@ AgentEvent
 | `inventory.snapshot` | 사용 가능한 툴·플러그인·MCP 서버 목록 | tools, plugins, mcp_servers |
 | `sensor.health` | 통제 장치 자체의 상태 (툴 호출이 아님) | component(`openclaw_plugin` 등), status(`up \| lost \| recovered`), detail, last_seen |
 | `approval.resolved` | 실행 전 승인 창에 사람이 한 응답 | call_id, tool, decision(`allow-once\|allow-always\|deny\|timeout\|cancelled`), approved, rule_ids, max_severity, request_event_id, finding_ids, requested_at, wait_ms, judged_by, approver |
+| `operator.action` | 사람이 게이트웨이 제어 화면에서 한 행동. principal은 **행동한 사람** (감사 프록시, [team-gateway.md](team-gateway.md)) | action(`approval.resolve\|run.abort\|session.delete\|session.archive\|session.unarchive`), method, ok, error, decision, approval_id, call_id, tool, target_session_id, target_run_id, archived_only, delete_transcript |
 | `integrity.report` | 설치된 에이전트 코드 vs 서명된 배포본 (바뀔 때마다) | product, version, core, plugins[{component, package, version, origin, path, digest, integrity, trust}] |
 | `config.snapshot` | 에이전트 설치의 보안 설정 (허용된 필드만, 바뀔 때마다) | product, path, changed, guard_plugin, plugins, exec_policies[{scope, security, ask, mode, host, elevated}], runtimes[{scope, model, runtime}] |
 
@@ -43,6 +44,11 @@ AgentEvent
 | `sga_source` | `openclaw_plugin` | 게이트웨이 플러그인이 실행 전에 보낸 판정 요청 |
 | `sga_plugin` | `missing` | 플러그인이 있어야 하는 장비에서 플러그인 판정 없이 실행된 툴 → `openclaw-plugin-bypass` |
 | `sga_verdict` | `degraded` | 데몬이 없어 `sga-sensor evaluate`(캐시 정책)로 판정한 결과 |
+| `openclaw.attribution` | `sender` / `session_owner` | 팀 게이트웨이에서 principal을 정한 근거 (run을 보낸 사람 / 대화 주인) |
+| `openclaw.profile_id` | 프로필 id | OpenClaw 게이트웨이의 사람 식별자 |
+| `openclaw.session_owner` | 이메일 | 남의 공유 대화에 쓴 경우 대화 주인 |
+| `openclaw.tool_kind` | `code_mode_exec` | Code Mode 바깥 호출 (인자가 JavaScript) |
+| `openclaw.client_ip` | IP | 감사 프록시가 본 접속 IP |
 
 ### 에이전트별 원시 이벤트 → kind 매핑 (초안)
 
@@ -57,6 +63,7 @@ AgentEvent
 | OpenClaw 플러그인 `requireApproval.onResolution` | `approval.resolved` |
 | OpenClaw 설정 파일 `~/.openclaw/openclaw.json` (센서 `openclaw_config`) | `config.snapshot` |
 | `openclaw plugins list --json` + 설치 폴더 해시 (센서 `openclaw_integrity`) | `integrity.report` |
+| 직원 화면 → 게이트웨이 `*.approval.resolve` / `chat.abort`·`sessions.abort` / `sessions.delete`·`sessions.patch(archived)` (센서 `openclaw_audit_proxy`) | `operator.action` |
 | Claude Code `SessionStart` / `SessionEnd` hook | `session.start` / `session.end` |
 | Claude Code `UserPromptSubmit` hook | `prompt.user` |
 | Claude Code `PreToolUse` / `PostToolUse` hook | `tool.call` / `tool.result` |

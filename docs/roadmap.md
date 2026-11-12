@@ -10,6 +10,8 @@
   한곳에 모인다. 직원 노트북의 개인 설치는 막는 대상이 아니라 **탐지·관리 대상**이다(설치 여부, 회사 기준선 준수 여부).
 - **WS 어댑터는 관측·탐지, 차단은 플러그인** (2026-11-11, 결정 B): v4 게이트웨이는 다른 사람의 실행 중단과 승인 요청 열람을 `operator.admin`에게만 허락한다.
   센서에 admin을 주지 않고, 실행 전 차단은 게이트웨이 안에서 도는 M5c 플러그인이 맡는다.
+- **팀 게이트웨이의 사람 단위 기록과 최소 권한** (2026-11-12): 직원끼리는 대화를 볼 수 없고(`sessions.others: none`) 보안팀 역할만 전체를 본다.
+  대화 원문은 룰에 걸린 것만 중앙에 보낸다. OpenClaw가 승인자를 기록하지 않아 소스를 고치는 대신 신원 프록시 뒤에 감사 프록시를 둔다.
 - **OpenClaw 하네스는 두 겹**이다. 게이트웨이 플러그인(`before_tool_call`)이 모든 툴을 실행 전에 판정하고, WebSocket 어댑터가 독립적으로
   모든 실행을 관측한다. 플러그인이 꺼져도 어댑터에는 보이므로, 판정 기록 없는 실행을 우회로 탐지한다.
 
@@ -51,7 +53,7 @@
 | M3 | Control Plane API | FastAPI + SQLAlchemy(SQLite): 장비 등록(토큰), 이벤트·finding 수집, 정책 v0(`rules/` 묶음 + 해시) 조회, compose 뼈대, 위협 모델 초안(`docs/threat-model.md`) | ✅ |
 | M4 | Sensor core | 어댑터 인터페이스, 정책 pull·캐시(중앙이 끊기면 마지막 정책 사용), 정책 서명(Ed25519) 검증, 전송 큐·재시도, 등록 CLI. 예시 이벤트 replay로 센서 → 중앙 엔드투엔드 | ✅ |
 | M5 | 로컬 데몬 + OpenClaw 어댑터 | `sga-sensor run`(어댑터 실행, 주기적 정책 동기화·전송), SG ingest/respond 이전, 사후 abort 집행, 셸 명령은 exec 승인으로 사전 거절, SG 대비 변경점 문서(`docs/from-sg.md`). **게이트웨이 프로토콜 v4 대응**: 센서 자체 장치 신원 + 페어링 + `deviceToken`, `tool-events` 기능 선언. v4 실환경에서 관측·탐지 확인, 실행 전 차단은 M5c로 넘김(결정 B) | ✅ |
-| M5b | OpenClaw 팀·다중 사용자 | **팀 공용 게이트웨이를 주 데모 환경으로**. 에이전트별 인벤토리(`tools.catalog` agentId), 세션 소유자를 사용자로 귀속(다중 사용자 모드), 하위 에이전트 위임 체인 추적(부모↔자식 세션), 에이전트 간 인젝션 전파 탐지(T18), `openclaw agents team create`로 팀 데모 | |
+| M5b | OpenClaw 팀·다중 사용자 | **팀 공용 게이트웨이를 주 데모 환경으로**. 에이전트별 인벤토리(`tools.catalog` agentId), 세션 소유자를 사용자로 귀속(다중 사용자 모드), 하위 에이전트 위임 체인 추적(부모↔자식 세션), 에이전트 간 인젝션 전파 탐지(T18), `openclaw agents team create`로 팀 데모. 진행([team-gateway.md](team-gateway.md)): compose 팀 게이트웨이(trusted-proxy, 직원별 포트, 보안팀 역할) ✅, 툴 호출·프롬프트를 시킨 사람으로 기록 ✅, 감사 프록시로 승인·중단·대화 보관·삭제를 한 사람 기록(OpenClaw는 승인자를 앱 이름으로만 저장) ✅, 대화 공개 범위 `none`·룰에 걸린 대화만 원문 전송 ✅, Code Mode 승인 중복 제거(룰 `unless`) ✅ (2026-11-12 실환경 확인) | ⏳ |
 | M5c | OpenClaw 플러그인 사전 차단 | TypeScript 플러그인의 `before_tool_call` → 로컬 소켓 → 데몬 판정. 모든 툴에 block·`requireApproval`(사용자 승인)·결과 기록. 데몬 없으면 단계적 처리 + 라벨. 어댑터가 본 실행 중 플러그인 판정이 없는 것을 우회 finding으로. 플러그인 신호 감시(`sensor.health`, 끊김 finding·복구 기록), 상시 운영(LaunchAgent). 실환경에서 OpenClaw·Codex 런타임 차단, 데몬 꺼짐 시 단계적 차단, 끊김·우회·복구 확인 | ✅ |
 | M5d | 실행 격리·외부 통신·기준선 | OpenClaw 샌드박스·권한 모드·exec 정책이 회사 기준선대로인지 점검, 네트워크 프록시를 egress 프록시(허용 도메인)로 연결, 플러그인·스킬 허용 목록과 버전 변경 시 재승인, 직원 PC의 비관리 OpenClaw 설치 탐지, **모든 모델의 런타임 고정과 Codex에 묶인 세션 점검**(T19). 진행: 설정 기준선 감시(`config.snapshot`: 플러그인 상태·exec·런타임, 2026-11-11 실환경 확인) ✅, 플러그인 `bye`로 언로드 즉시 감지 ✅, 설치된 코드 무결성(npm 서명 + Sigstore 출처로 검증한 배포본 해시와 비교, 출시 3일 대기, 변조 시 격리) ✅ | ⏳ |
 | M7 | Console v1 | 장비/사용자 인벤토리, 위협 타임라인, finding 상세(룰 근거, 마스킹된 증거), 사용자 승인 감사 목록(백엔드: `approval.resolved` 기록, 고위험 승인·승인 피로 룰, `GET /v1/admin/approvals` + `sga-server audit approvals` ✅ 2026-11-12) | |

@@ -139,10 +139,13 @@ sga-server manifest pin sg-advance --dir integrations/openclaw-plugin --version 
 - `asked_by`: 승인을 요구한 finding (예: `destructive-sql`)
 - `flagged`: 그 응답이 일으킨 감사 finding (`user-approved-high-risk`, `approval-fatigue`)
 - `requester`, `judged_by`(데몬/캐시/기본값), `wait_ms`
+- `approver`, `approver_source`: 실제로 승인한 사람. 팀 게이트웨이의 감사 프록시가 본 `operator.action`이 있으면 그 사람(`audit_proxy`),
+  없으면 에이전트가 보고한 값(`agent`), 둘 다 없으면 비어 있다. 요청자(`user_id`)와 다를 수 있다(보안팀이 대신 승인)
 
 를 묶어 보여 준다.
 
 ```bash
 sga-server audit approvals              # 승인한 것만
 sga-server audit approvals --all --user alice
+sga-server audit --server http://127.0.0.1:$SGA_PORT approvals   # compose (--server는 approvals 앞에)
 ```
