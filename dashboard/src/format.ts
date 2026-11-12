@@ -138,7 +138,8 @@ export type Route =
   | { page: "finding"; id: string }
   | { page: "approvals"; query: Record<string, string> }
   | { page: "inventory" }
-  | { page: "timeline"; query: Record<string, string> };
+  | { page: "timeline"; query: Record<string, string> }
+  | { page: "policy"; query: Record<string, string> };
 
 export function parseHash(hash: string): Route {
   const [path, qs = ""] = hash.replace(/^#/, "").split("?", 2);
@@ -146,6 +147,7 @@ export function parseHash(hash: string): Route {
   if (parts[0] === "findings" && parts[1]) return { page: "finding", id: decodeURIComponent(parts[1]) };
   if (parts[0] === "findings") return { page: "findings", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "inventory") return { page: "inventory" };
+  if (parts[0] === "policy") return { page: "policy", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "timeline") return { page: "timeline", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "approvals") return { page: "approvals", query: Object.fromEntries(new URLSearchParams(qs)) };
   return { page: "overview" };
@@ -252,3 +254,19 @@ export function sessionTree<T extends { session_id: string; parent_session_id: s
   roots.forEach((r) => walk(r, 0));
   return out;
 }
+
+export const RESPONSES = ["allow", "alert", "require_approval", "block", "abort_session", "quarantine"];
+
+/** Responses a scope may pick: anything for common, the current one or stricter for a group. */
+export function responseChoices(scope: string, current: string): string[] {
+  if (scope === "common") return RESPONSES;
+  const i = RESPONSES.indexOf(current);
+  return RESPONSES.slice(i < 0 ? 0 : i);
+}
+
+export const CHANGE_LABEL: Record<string, string> = {
+  "override.set": "룰 변경",
+  "override.clear": "변경 취소",
+  "group.create": "팀 생성",
+  "device.assign": "장비 배정",
+};

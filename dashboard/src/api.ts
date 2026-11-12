@@ -2,7 +2,19 @@
 // development proxies /v1 through Vite. The token lives in sessionStorage only (gone when the tab
 // closes) and is sent as a bearer header, never in a URL.
 
-import type { Approval, DeviceInventory, Finding, FindingDetail, Role, Summary, Timeline } from "./types";
+import type {
+  Approval,
+  Device,
+  DeviceInventory,
+  Finding,
+  FindingDetail,
+  PolicyChange,
+  PolicyRule,
+  PolicyScope,
+  Role,
+  Summary,
+  Timeline,
+} from "./types";
 
 const KEY = "sga-dashboard-token";
 
@@ -44,9 +56,18 @@ export function queryString(q: Query): string {
 export class Api {
   constructor(private readonly token: string) {}
 
-  private async get<T>(path: string, q: Query = {}): Promise<T> {
-    const res = await fetch(`/v1/admin${path}${queryString(q)}`, {
-      headers: { Authorization: `Bearer ${this.token}` },
+  private get<T>(path: string, q: Query = {}): Promise<T> {
+    return this.call<T>("GET", path + queryString(q));
+  }
+
+  private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const res = await fetch(`/v1/admin${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
       credentials: "omit",
     });
     if (!res.ok) {
@@ -80,6 +101,39 @@ export class Api {
 
   timeline(q: { user_id?: string; session_id?: string; since?: string | null }) {
     return this.get<Timeline>("/timeline", q);
+  }
+
+  policyScopes() {
+    return this.get<{ revision: number; scopes: PolicyScope[] }>("/policy/scopes");
+  }
+
+  policyRules(scope: string) {
+    return this.get<PolicyRule[]>("/policy/rules", { scope });
+  }
+
+  policyChanges(scope?: string) {
+    return this.get<PolicyChange[]>("/policy/changes", { scope, limit: 50 });
+  }
+
+  devices() {
+    return this.get<Device[]>("/devices");
+  }
+
+  // Writes: the server accepts them from the admin token only (the dashboard token is GET-only).
+  setOverride(body: { scope: string; rule_id: string; enabled?: boolean; response?: string; allow?: string[]; by: string; reason: string }) {
+    return this.call<{ revision: number }>("PUT", "/policy/overrides", body);
+  }
+
+  clearOverride(body: { scope: string; rule_id: string; by: string; reason: string }) {
+    return this.call<{ revision: number }>("POST", "/policy/overrides/clear", body);
+  }
+
+  createGroup(body: { name: string; description?: string; by: string; reason: string }) {
+    return this.call<{ revision: number }>("POST", "/policy/groups", body);
+  }
+
+  assignDevice(device: string, body: { group: string | null; by: string; reason: string }) {
+    return this.call<{ revision: number }>("PUT", `/devices/${encodeURIComponent(device)}/group`, body);
   }
 
   inventory() {

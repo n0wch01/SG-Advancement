@@ -168,3 +168,51 @@ export interface Timeline {
   events: AgentEvent[];
   findings: Finding[];
 }
+
+export interface PolicyScope {
+  name: string;
+  description: string | null;
+  devices: number;
+  version: string;
+  overrides: number;
+}
+
+export interface RuleLayer {
+  enabled: boolean;
+  response: string;
+  allow: string[] | null;
+}
+
+export interface PolicyRule {
+  id: string;
+  title: string;
+  severity: Severity;
+  category: string;
+  match_type: string;
+  base: RuleLayer;
+  common_override: Partial<RuleLayer> | null;
+  group_override: Partial<RuleLayer> | null;
+  effective: RuleLayer;
+}
+
+export interface PolicyChange {
+  id: number;
+  ts: string;
+  actor: string;
+  role: string;
+  action: string;
+  scope: string | null;
+  rule_id: string | null;
+  target: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  reason: string;
+}
+
+export interface Device {
+  device_id: string;
+  hostname: string | null;
+  last_seen: string | null;
+  policy_current: boolean;
+  group: string | null;
+}

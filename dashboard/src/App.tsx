@@ -7,6 +7,7 @@ import { FindingDetail } from "./pages/FindingDetail";
 import { Findings } from "./pages/Findings";
 import { Inventory } from "./pages/Inventory";
 import { Overview } from "./pages/Overview";
+import { Policy } from "./pages/Policy";
 import { Timeline } from "./pages/Timeline";
 import type { Role } from "./types";
 
@@ -76,6 +77,9 @@ export function App() {
           <a href="#/inventory" className={route.page === "inventory" ? "on" : ""}>
             인벤토리
           </a>
+          <a href="#/policy" className={route.page === "policy" ? "on" : ""}>
+            정책
+          </a>
         </nav>
         <div className="who">
           {role && <span className={`role role-${role}`}>{role === "viewer" ? "읽기 전용" : "관리자"}</span>}
@@ -86,7 +90,7 @@ export function App() {
       </header>
       {role === "admin" && (
         <p className="banner" role="note">
-          관리자 토큰으로 로그인했습니다. 화면을 볼 때는 읽기 전용 대시보드 토큰(SGA_DASHBOARD_TOKEN)을 쓰세요.
+          관리자 토큰으로 로그인했습니다(정책 편집 가능). 보기만 할 때는 읽기 전용 대시보드 토큰(SGA_DASHBOARD_TOKEN)을 쓰세요.
         </p>
       )}
       <main>
@@ -96,6 +100,7 @@ export function App() {
         {route.page === "approvals" && <Approvals api={api} query={route.query} />}
         {route.page === "inventory" && <Inventory api={api} />}
         {route.page === "timeline" && <Timeline api={api} query={route.query} />}
+        {route.page === "policy" && <Policy api={api} role={role} query={route.query} />}
       </main>
     </div>
   );

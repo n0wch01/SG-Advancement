@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentPosture,
   reasonText,
+  responseChoices,
   sessionTree,
   shortSession,
   timelineHref,
@@ -127,6 +128,12 @@ describe("format", () => {
     expect(shortSession("agent:main:subagent:f65ab953")).toBe("subagent:f65ab953");
     expect(timelineHref({ session_id: "a:b" })).toBe("#/timeline?session_id=a%3Ab");
     expect(parseHash("#/timeline?user_id=x")).toEqual({ page: "timeline", query: { user_id: "x" } });
+  });
+
+  it("offers only stricter responses to a team", () => {
+    expect(responseChoices("common", "block")[0]).toBe("allow");
+    expect(responseChoices("data-team", "require_approval")).toEqual(["require_approval", "block", "abort_session", "quarantine"]);
+    expect(parseHash("#/policy?scope=data-team")).toEqual({ page: "policy", query: { scope: "data-team" } });
   });
 
   it("computes time ranges", () => {

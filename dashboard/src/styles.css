@@ -201,6 +201,25 @@ table.approvals td { min-width: 90px; }
 .tl li.tl-day { display: block; font-weight: 600; font-size: 12px; color: var(--ink-2); padding-top: 14px; border-bottom: 0; }
 .tl-session { color: var(--ink-2); }
 
+.scope-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.scope-tabs a { display: grid; gap: 2px; padding: 8px 14px; border-radius: var(--radius); background: var(--surface); box-shadow: 0 0 0 1px var(--line); color: var(--ink); }
+.scope-tabs a.on { box-shadow: 0 0 0 2px var(--accent); }
+.scope-tabs a:hover { text-decoration: none; }
+.card-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+table.policy tr.changed td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.editor-row td { background: var(--bg); }
+.editor { display: grid; gap: 12px; padding: 4px 0; }
+.editor-fields { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+.editor-fields label { display: grid; gap: 4px; font-size: 12px; color: var(--ink-2); }
+.editor-fields .wide { flex: 1 1 320px; }
+.editor-fields .wide input, .editor-fields .wide textarea { width: 100%; }
+textarea { font: inherit; background: var(--surface); color: inherit; border: 0; box-shadow: inset 0 0 0 1px var(--line); border-radius: 6px; padding: 6px 10px; }
+.allow-pick { border: 0; box-shadow: inset 0 0 0 1px var(--line); border-radius: 6px; padding: 6px 10px; display: grid; gap: 2px; max-height: 200px; overflow: auto; }
+.allow-pick legend { font-size: 12px; color: var(--ink-2); padding: 0 4px; }
+.editor-actions { display: flex; gap: 12px; align-items: center; }
+button.primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 6px; padding: 7px 14px; }
+.changes li { align-items: flex-start; }
+
 .error { color: var(--sev-critical); }
 .empty { padding: 8px 0; }
 
