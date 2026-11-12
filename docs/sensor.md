@@ -476,6 +476,8 @@ sga-sensor run --openclaw          # 데몬이 <home>/sga.sock을 연다 (--sock
 - 개인정보: 전체 프로세스 목록이나 다른 포트는 보지 않는다. 설정 파일에서는 bind·port·플러그인 상태만 읽는다(토큰은 나가지 않는다).
 - 룰([shadow_ai.yaml](../rules/shadow_ai.yaml), 알림만): `openclaw-unmanaged-install`(medium, 설정된 비관리 설치),
   `openclaw-gateway-network-exposed`(high, 비관리 설치가 loopback이 아닌 주소로 실행 중, T20).
+- 결정(2026-11-12, 사용자 확정): 알림만, 관리됨 기준에 버전 승인은 넣지 않음, OpenClaw 흔적만 본다.
+- 알려진 문제(이후 과제): 게이트웨이가 꺼졌다 켜지면 `running`이 바뀌어 같은 비관리 경보가 다시 난다.
 - 한계: 현재 사용자 홈만 본다. 설정한 적 없는 설치(코드만)는 기록만 하고 경보하지 않는다. 다른 버전 사본이 여럿이면 PATH가 실행하는 것의 버전만 적는다.
 
 실환경(2026-11-12, compose `--profile shadow`의 `carol-pc`: 개인 설정 + `bind: lan` + 플러그인 없음):

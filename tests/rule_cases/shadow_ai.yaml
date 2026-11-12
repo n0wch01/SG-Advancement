@@ -1,6 +1,6 @@
 # Unmanaged (shadow) agent installs (M5d): install.snapshot events from the sensor's discovery scan.
 # One event per install. "managed" = configured + SG-Advance plugin enabled + this sensor watches its config.
-# Decisions (2026-11-12, recommended defaults, revisit with the user): alert only; managed does not
+# Decisions (2026-11-12, confirmed by the user: all recommended defaults): alert only; managed does not
 # require an approved version yet (the integrity scan covers managed installs); the scan only looks
 # for OpenClaw's own traces (binary, state dir, service file, its gateway port on 127.0.0.1).
 cases:
