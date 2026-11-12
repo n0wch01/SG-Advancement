@@ -111,6 +111,15 @@ class ControlPlaneClient:
             return None
         return PolicyBundle.model_validate(self._ok(r, 200))
 
+    def get_actions(self) -> list[dict[str, Any]]:
+        """Remote response actions waiting for this device (M11)."""
+        return list(self._ok(self._call("GET", "/v1/actions"), 200))
+
+    def report_action(self, action_id: str, ok: bool, detail: str) -> None:
+        r = self._call("POST", f"/v1/actions/{action_id}/result", {"ok": ok, "detail": detail[:1000]})
+        if r.status != 204:
+            raise ControlPlaneError(r.status, _detail(r))
+
     def post(self, path: str, body: Any) -> dict[str, Any]:
         """Raw POST for the spool; it interprets status codes itself."""
         r = self._call("POST", path, body)

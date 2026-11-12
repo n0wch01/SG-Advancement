@@ -47,6 +47,7 @@ from ...redact import redact_value
 from ...schema import AgentEvent, Enforcement, ResponseAction, SensorType
 from .base import AdapterContext
 from .openclaw_gateway import DEFAULT_URL, DeviceIdentity, GatewayConnection, GatewayError, PairingRequired
+from .openclaw_integrity import cli_disabler
 from .openclaw_people import OpenClawPeople
 from .openclaw_skills import TRUSTED_SET as SKILLS_TRUSTED
 from .openclaw_skills import Digester, SkillDisabler, check_skills, cli_skill_disabler
@@ -576,6 +577,7 @@ class OpenClawAdapter:
         password: str | None = None,
         skill_digest: Digester | None = None,
         skill_disabler: SkillDisabler | None = None,
+        plugin_disabler: Callable[[str], tuple[bool, str]] | None = None,
     ) -> None:
         self.url = url
         self.token = token if token is not None else os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
@@ -597,9 +599,34 @@ class OpenClawAdapter:
         self.connected = asyncio.Event()
         self.skill_digest = skill_digest or dir_digest
         self.skill_disabler = skill_disabler or cli_skill_disabler()
+        self.plugin_disabler = plugin_disabler or cli_disabler()
+        self._conn: GatewayConnection | None = None
+
+    # ── remote response (M11) ───────────────────────────────────────────────
+
+    def _register_actions(self, ctx: AdapterContext) -> None:
+        ctx.actions["abort_session"] = self._abort_action
+        ctx.actions["disable_skill"] = lambda key: asyncio.to_thread(self.skill_disabler, key)
+        ctx.actions["disable_plugin"] = lambda pid: asyncio.to_thread(self.plugin_disabler, pid)
+
+    async def _abort_action(self, session_key: str) -> tuple[bool, str]:
+        """Stop the running turn. A v4 gateway allows it only to the starting client or an admin,
+        and the sensor is neither (decision B): expect a refusal on team gateways, reported as is.
+        The session stays blocked by ``remote-blocked-session`` either way."""
+        conn = self._conn
+        if conn is None:
+            return False, "not connected to the gateway"
+        try:
+            res = await conn.request("sessions.abort", {"key": session_key})
+        except (ConnectionError, TimeoutError) as e:
+            return False, f"sessions.abort failed: {e}"
+        if not res.get("ok"):
+            return False, f"sessions.abort refused: {res.get('error')}"
+        return True, "sessions.abort accepted"
 
     async def run(self, ctx: AdapterContext) -> None:
         mapper = OpenClawMapper(ctx.user_id, ctx.hostname, ctx.people)
+        self._register_actions(ctx)
         first_delay = min(1.0, self.max_backoff)
         delay = first_delay
         while True:
@@ -631,6 +658,7 @@ class OpenClawAdapter:
         if conn.issued_device_token and conn.issued_device_token[0] != identity.device_token:
             identity.with_token(*conn.issued_device_token).save(path)  # later connects use it
             log.info("stored OpenClaw device token for %s…", identity.device_id[:12])
+        self._conn = conn
 
         async def on_event(frame: dict[str, Any]) -> None:
             if self.capture is not None:
@@ -663,6 +691,7 @@ class OpenClawAdapter:
                 except TimeoutError:
                     await self._snapshot(ctx, conn, mapper)
         finally:
+            self._conn = None
             await conn.close()
 
     async def _fetch_results(

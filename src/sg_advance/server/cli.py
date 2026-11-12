@@ -14,6 +14,10 @@
     sga-server policy set data-team destructive-sql --response block --by me --reason "..."
     sga-server policy clear data-team destructive-sql --by me --reason "..."
     sga-server policy log [--scope data-team]
+    sga-server action block-session team-gateway agent:main:… --by me --reason "..."   (M11)
+    sga-server action unblock-session|block-user|unblock-user|abort DEVICE TARGET ...
+    sga-server action disable-plugin|disable-skill DEVICE TARGET ...
+    sga-server action list [--device D]
 
 The manifest commands call the admin API (``--server``, default ``$SGA_SERVER`` or
 http://127.0.0.1:8000) with ``$SGA_ADMIN_TOKEN``; the token is never printed.
@@ -256,8 +260,63 @@ def policy_main(argv: list[str]) -> int:
     return 0
 
 
+ACTION_COMMANDS = {
+    "block-session": "block_session",
+    "unblock-session": "unblock_session",
+    "block-user": "block_user",
+    "unblock-user": "unblock_user",
+    "abort": "abort_session",
+    "disable-plugin": "disable_plugin",
+    "disable-skill": "disable_skill",
+}
+
+
+def action_main(argv: list[str]) -> int:
+    import os
+    import urllib.parse
+
+    ap = argparse.ArgumentParser(prog="sga-server action", description="remote response (M11)")
+    ap.add_argument("--server", default=os.environ.get("SGA_SERVER", "http://127.0.0.1:8000"))
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for name in ACTION_COMMANDS:
+        p = sub.add_parser(name)
+        p.add_argument("device")
+        p.add_argument("target", help="session id, user id, plugin id or skill key")
+        p.add_argument("--finding", help="the finding that prompted it")
+        _who(p)
+    p = sub.add_parser("list", help="queued and finished actions, newest first")
+    p.add_argument("--device")
+    p.add_argument("--limit", type=int, default=30)
+    args = ap.parse_args(argv)
+    if args.cmd == "list":
+        q = {"limit": args.limit} | ({"device_id": args.device} if args.device else {})
+        for a in _api(args.server, "GET", "/v1/admin/actions?" + urllib.parse.urlencode(q)):  # type: ignore[union-attr]
+            print(
+                f"{a['created_at'][:19]} {a['status']:<9} {a['device_id']:<14} {a['action']:<16} "
+                f"{a['target']}"
+                f"  by={a['created_by']}  {a['result_detail'] or ''}"
+            )
+        return 0
+    body = {
+        "device_id": args.device,
+        "action": ACTION_COMMANDS[args.cmd],
+        "target": args.target,
+        "finding_id": args.finding,
+        "by": args.by,
+        "reason": args.reason,
+    }
+    a = _api(args.server, "POST", "/v1/admin/actions", body)
+    print(
+        f"queued {a['action']} {a['target']} on {a['device_id']} ({a['id'][:8]}); "
+        "the sensor picks it up in seconds"
+    )  # type: ignore[index]
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["action"]:
+        return action_main(argv[1:])
     if argv[:1] == ["policy"]:
         return policy_main(argv[1:])
     if argv[:1] == ["manifest"]:

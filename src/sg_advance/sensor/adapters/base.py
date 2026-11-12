@@ -14,6 +14,7 @@ abort after a tool started (or deny a pending shell approval).
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
@@ -26,6 +27,11 @@ if TYPE_CHECKING:
     from ..core import ProcessResult, Sensor
 
 
+# Remote response (M11): action name → async handler(target) → (ok, detail). The core registers
+# block/unblock; adapters register what only they can do (abort a run, disable a plugin).
+ActionHandler = Callable[[str], Awaitable[tuple[bool, str]]]
+
+
 @dataclass
 class AdapterContext:
     sensor: Sensor
@@ -33,6 +39,7 @@ class AdapterContext:
     hostname: str | None = None
     plugins: PluginRegistry = field(default_factory=PluginRegistry)  # in-gateway plugin's judgements
     people: OpenClawPeople = field(default_factory=OpenClawPeople)  # team gateway: session/run → person
+    actions: dict[str, ActionHandler] = field(default_factory=dict)  # remote response handlers (M11)
 
     def evaluate(self, event: AgentEvent) -> ProcessResult:
         return self.sensor.evaluate(event)

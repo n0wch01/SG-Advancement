@@ -3,7 +3,8 @@
 Each file in tests/rule_cases/ lists cases: a short event stream plus the rule ids that must
 (``expect``) and must not (``expect_not``) hit. Events are written as payload dicts; envelope
 fields are filled in by sg_advance.shorthand. Optional per-event keys: ``at`` (seconds from
-start), ``session``, ``user``, ``device``, ``sensor``. Optional per-case keys: ``agent``, ``sensor``.
+start), ``session``, ``user``, ``device``, ``sensor``. Optional per-case keys: ``agent``, ``sensor``,
+``sets`` (sensor-maintained sets for ``allow_trusted`` / ``in_set`` rules, name → values).
 
 When you find a false positive / negative, add it here first, watch it fail, then tune the rule.
 """
@@ -39,7 +40,8 @@ def hit_rule_ids(case: dict[str, Any]) -> set[str]:
     defaults = {k: case[k] for k in ("agent", "sensor") if k in case}
     events = [build_event(s, defaults=defaults, index=i) for i, s in enumerate(case["events"])]
     events.sort(key=lambda e: e.ts)
-    return {rid for v in Engine(RULES).replay(events) for rid in v.rule_ids}
+    sets = {name: set(values) for name, values in (case.get("sets") or {}).items()}
+    return {rid for v in Engine(RULES, sets).replay(events) for rid in v.rule_ids}
 
 
 @pytest.mark.parametrize("case", [c for _, c in CASES], ids=[n for n, _ in CASES])

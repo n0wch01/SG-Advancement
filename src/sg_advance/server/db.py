@@ -199,6 +199,26 @@ class PolicyChange(Base):
     reason: Mapped[str] = mapped_column(String(1000), default="")
 
 
+class RemoteAction(Base):
+    """A response security asked one device to carry out (M11), and what the sensor reported back.
+    The table is the audit trail: who, why, when it was delivered, whether it worked."""
+
+    __tablename__ = "remote_actions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), index=True)
+    action: Mapped[str] = mapped_column(String(40))
+    target: Mapped[str] = mapped_column(String(300))
+    finding_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # what prompted it
+    status: Mapped[str] = mapped_column(String(20), index=True)  # pending | delivered | done | failed
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+    created_by: Mapped[str] = mapped_column(String(200))
+    reason: Mapped[str] = mapped_column(String(1000))
+    delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    result_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    result_detail: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
 def make_engine(url: str) -> Engine:
     if url.startswith("sqlite"):
         path = url.split("///", 1)[-1]

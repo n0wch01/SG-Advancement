@@ -82,6 +82,16 @@ class AllowlistMatch(_Model):
     )
 
 
+class InSetMatch(_Model):
+    """Fires when a value at one of ``fields`` is in a sensor-maintained set named ``set``: e.g. the
+    conversations or people security blocked remotely (M11). Empty outside a sensor, so it never
+    fires in plain replays."""
+
+    type: Literal["in_set"]
+    set: str = Field(min_length=1)
+    fields: tuple[str, ...] = Field(min_length=1)
+
+
 class RateMatch(_Model):
     """Fires once ``threshold`` matching events occur within ``window_seconds`` for one group."""
 
@@ -127,7 +137,7 @@ class SequenceMatch(_Model):
 
 
 Match = Annotated[
-    RegexMatch | AllowlistMatch | RateMatch | RepeatMatch | SequenceMatch,
+    RegexMatch | AllowlistMatch | InSetMatch | RateMatch | RepeatMatch | SequenceMatch,
     Field(discriminator="type"),
 ]
 

@@ -1,0 +1,44 @@
+# Remote response (M11): security blocks a conversation or a person from the dashboard/CLI; the
+# sensor keeps the targets in sets and these rules turn every further tool call into a block.
+# Decision (2026-11-12, recommended): block through the gateway plugin, no admin for the sensor.
+cases:
+  - name: 차단된 대화의 다음 툴 호출
+    agent: openclaw
+    sensor: openclaw_plugin
+    sets: {remote_blocked_sessions: ["agent:main:dashboard:aaa"]}
+    events:
+      - {kind: tool.call, tool: read, arguments: {path: README.md}, session: "agent:main:dashboard:aaa"}
+    expect: [remote-blocked-session]
+
+  - name: 차단된 대화가 위임한 하위 에이전트도 막힌다
+    agent: openclaw
+    sensor: openclaw_plugin
+    sets: {remote_blocked_sessions: ["agent:main:dashboard:aaa"]}
+    events:
+      - {kind: tool.call, tool: web_fetch, arguments: {url: "https://x.test"}, session: "agent:main:subagent:bbb",
+         parent: "agent:main:dashboard:aaa", root: "agent:main:dashboard:aaa"}
+    expect: [remote-blocked-session]
+
+  - name: 차단된 사람의 툴 호출 (어느 대화든)
+    agent: openclaw
+    sensor: openclaw_plugin
+    sets: {remote_blocked_users: ["mallory@corp.test"]}
+    events:
+      - {kind: tool.call, tool: exec, arguments: {command: ls}, user: mallory@corp.test}
+    expect: [remote-blocked-user]
+    expect_not: [remote-blocked-session]
+
+  - name: 다른 대화·다른 사람·툴 호출이 아닌 이벤트는 그대로
+    agent: openclaw
+    sensor: openclaw_plugin
+    sets: {remote_blocked_sessions: ["agent:main:dashboard:aaa"], remote_blocked_users: ["mallory@corp.test"]}
+    events:
+      - {kind: tool.call, tool: read, arguments: {path: a}, session: "agent:main:dashboard:other", user: alice@corp.test}
+      - {kind: prompt.user, text: hello, session: "agent:main:dashboard:aaa", user: mallory@corp.test}
+    expect_not: [remote-blocked-session, remote-blocked-user]
+
+  - name: 집합이 비어 있으면(센서 밖 재생) 걸리지 않는다
+    agent: openclaw
+    events:
+      - {kind: tool.call, tool: read, arguments: {path: a}}
+    expect_not: [remote-blocked-session, remote-blocked-user]

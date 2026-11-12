@@ -25,6 +25,7 @@ from ..schema import AgentEvent, Enforcement, EventKind, Finding, ResponseAction
 from .fields import condition_holds, first, resolve, string_leaves
 from .rules import (
     AllowlistMatch,
+    InSetMatch,
     RateMatch,
     RegexMatch,
     RepeatMatch,
@@ -139,6 +140,22 @@ class _AllowlistMatcher:
             return None
         why = f"{self.spec.field} not in allowlist: {', '.join(redact_text(v) for v in offending)}"
         return _RawHit(",".join(offending), why, (event.event_id,))
+
+
+class _InSetMatcher:
+    def __init__(self, spec: InSetMatch, trusted: TrustedSets | None = None) -> None:
+        self.spec = spec
+        self.trusted = trusted if trusted is not None else {}
+
+    def check(self, event: AgentEvent, doc: dict[str, Any]) -> _RawHit | None:
+        members = self.trusted.get(self.spec.set) or set()
+        if not members:
+            return None
+        for path in self.spec.fields:
+            for v in resolve(doc, path):
+                if isinstance(v, str) and v in members:
+                    return _RawHit(v, f"{path} is in {self.spec.set}: {redact_text(v)}", (event.event_id,))
+        return None
 
 
 class _RateMatcher:
@@ -273,6 +290,8 @@ class Engine:
                 r,
                 _AllowlistMatcher(r.match, self.trusted)
                 if r.match.type == "allowlist"
+                else _InSetMatcher(r.match, self.trusted)
+                if r.match.type == "in_set"
                 else _MATCHERS[r.match.type](r.match),
             )
             for r in ruleset.enabled

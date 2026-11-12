@@ -38,6 +38,7 @@ class DaemonStats:
     flush_errors: int = 0
     last_flush_error: str | None = None
     adapter_errors: dict[str, str] = field(default_factory=dict)
+    remote_actions: int = 0
 
 
 class Daemon:
@@ -55,6 +56,9 @@ class Daemon:
         self.sensor = sensor
         self.adapters = list(adapters)
         self.ctx = ctx
+        from .response import install_core_handlers
+
+        install_core_handlers(ctx)  # remote block/unblock (M11); adapters add their own on run
         self.sync_interval = sync_interval
         self.flush_interval = flush_interval
         self.local_api = local_api
@@ -129,6 +133,17 @@ class Daemon:
                 self.stats.last_flush_error = repr(e)
                 log.exception("flush failed; retrying in %.1fs", self.flush_interval)
 
+    async def _actions_loop(self) -> None:
+        """Remote response (M11): polled on the flush tick, so a block lands within seconds."""
+        from .response import run_pending
+
+        while True:
+            await asyncio.sleep(self.flush_interval)
+            try:
+                self.stats.remote_actions += await run_pending(self.ctx)
+            except Exception:  # noqa: BLE001 - never let remote response take the daemon down
+                log.exception("remote actions failed")
+
     async def _run_adapter(self, adapter: Adapter) -> None:
         try:
             await adapter.run(self.ctx)
@@ -146,6 +161,7 @@ class Daemon:
             asyncio.create_task(self._sync_loop()),
             asyncio.create_task(self._flush_loop()),
             asyncio.create_task(self._health_loop()),
+            asyncio.create_task(self._actions_loop()),
         ]
         tasks += [asyncio.create_task(self._run_adapter(a), name=f"adapter:{a.name}") for a in self.adapters]
         self.ready.set()

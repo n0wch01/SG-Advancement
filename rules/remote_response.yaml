@@ -1,0 +1,35 @@
+# 원격 대응 (M11): 보안팀이 대시보드·CLI에서 대화나 사람을 차단하면, 센서가 그 대상을 집합으로 들고
+# 이 룰이 이후의 툴 호출을 모두 차단으로 바꾼다. 게이트웨이 플러그인이 실행 전에 막는다(센서에 admin 없음, 결정 B 유지).
+# 결정(2026-11-12, 추천안): 플러그인으로 차단·격리, 실행 중단은 시도만(권한이 없으면 실패로 기록).
+# 집합은 센서 밖(룰 재생 등)에서는 비어 있어 걸리지 않는다. 해제하면 집합에서 빠진다.
+version: 1
+rules:
+  # 위임 사슬도 본다: 차단된 대화가 만든 하위 에이전트 대화(parent/root)도 막힌다.
+  - id: remote-blocked-session
+    severity: high
+    category: policy_violation
+    title: 보안팀이 차단한 대화
+    message: 보안팀이 원격으로 차단한 대화(또는 그 대화가 위임한 하위 에이전트)가 툴을 실행하려 합니다.
+    recommended_action: 조사가 끝나면 대시보드나 `sga-server action unblock-session`으로 해제하세요.
+    response: block
+    tags: [response:remote]
+    when: {payload.kind: tool.call}
+    match:
+      type: in_set
+      set: remote_blocked_sessions
+      fields: [agent.session_id, agent.parent_session_id, agent.root_session_id]
+
+  # 오탐 주의: 같은 사람 이름으로 귀속되는 모든 대화가 막힌다(팀 게이트웨이의 사용자 구분 기준).
+  - id: remote-blocked-user
+    severity: high
+    category: policy_violation
+    title: 보안팀이 차단한 사람
+    message: 보안팀이 원격으로 차단한 사람의 에이전트가 툴을 실행하려 합니다.
+    recommended_action: 계정 침해 여부를 확인한 뒤 해제하세요.
+    response: block
+    tags: [response:remote]
+    when: {payload.kind: tool.call}
+    match:
+      type: in_set
+      set: remote_blocked_users
+      fields: [principal.user_id]
