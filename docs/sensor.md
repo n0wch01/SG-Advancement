@@ -363,6 +363,7 @@ sga-sensor service status | uninstall
 | `guard_plugin` | `plugins.enabled`, `plugins.allow/deny`, `plugins.entries.sg-advance.enabled`, 설치·로드 경로 | `openclaw-guard-plugin-disabled` (high): `disabled` 또는 `missing` |
 | `exec_policies[]` | `tools.exec.security/ask/mode/host`, `tools.elevated.enabled`, 에이전트별 `tools` | `openclaw-exec-policy-unsafe` (high): `full` 또는 `ask=off` / `openclaw-elevated-exec-enabled` (medium) |
 | `runtimes[]` | 모델별 `agentRuntime.id` (에이전트 > 기본 에이전트 > 프로바이더 모델 > 프로바이더), 에이전트 `runtime.type: acp` | `openclaw-runtime-unapproved` (medium): `openclaw`, `codex` 외 전부 |
+| `sandboxes[]` | `agents.defaults.sandbox`·에이전트별 `sandbox`(mode, workspaceAccess, scope), `agents.defaults.elevatedDefault`. 설정이 없으면 OpenClaw 기본값(mode `off`, elevatedDefault `on`)을 `mode_source: default`로 채움 | `openclaw-sandbox-off` (medium): 실제로 꺼져 있으면 (기본값 포함) |
 | `plugins[]` | 플러그인 id·버전·켜짐 | (인벤토리용, 룰 없음) |
 
 결정(2026-11-11): 대응은 알림만(설정을 건드리지 않음), exec는 위험한 값만 위반(기본값과 더 엄격한 값은 통과),

@@ -193,6 +193,7 @@ SG-Advance의 코어 무결성 검증(T22)에도 변조로 걸린다.
 | `chat.abort`, `sessions.abort` | `run.abort`: 대상 세션, run |
 | `sessions.patch` / `sessions.patchMany`의 `archived` | `session.archive` / `session.unarchive` (대상마다 한 건) |
 | `sessions.delete` | `session.delete`: 보관된 것만 삭제했는지(`archived_only`), 대화 기록까지 지웠는지 |
+| `sessions.patch` / `sessions.patchMany`의 권한 필드 (`permissionMode`, `sandboxMode`, `exec*`, `elevatedLevel`, `toolOverrides`) | `session.privilege`: `changes`에 `필드=값`. 권한을 넓히는 변경이 받아들여지면 `openclaw-session-privilege-raised`(high) |
 
 - 이벤트의 `principal`은 **행동한 사람**이고, 게이트웨이의 응답(허용, 거부와 오류 코드)도 함께 남긴다. 접속 IP는 라벨 `openclaw.client_ip`에 남긴다.
 - **대화 메시지는 읽지 않는다.** 위 메서드 이름이 들어 있지 않은 메시지는 해석하지 않고 그대로 넘긴다(테스트로 바이트 단위 동일 확인).
@@ -239,7 +240,9 @@ alice가 보관하지 않은 대화를 바로 지우려 하자 화면이 요청�
 
 - **컨테이너 안 무결성**: 공식 이미지는 소스 빌드(`/app`)라 npm 배포본 해시와 비교할 수 없다. 게이트웨이 센서는 `--no-openclaw-integrity`로 돈다.
   이미지 다이제스트와 서명·출처 확인으로 대신하는 것이 후속 과제다.
-- **대화 단위 권한 변경**: `sessions.patch`로 대화별 `execSecurity`, `elevatedLevel`, `permissionMode`, `sandboxMode`를 바꿀 수 있다.
-  설정 기준선 감시(M5d)는 전체 설정 파일만 보므로 대화 단위로 권한을 올리면 놓친다. 감사 프록시에 추가할지 결정이 필요하다.
+- **대화 단위 권한 변경**: 감사 프록시가 `sessions.patch`의 권한 필드를 기록한다(위 표). 감사 프록시를 거치지 않는 변경
+  (게이트웨이 내부, 같은 호스트의 CLI)은 보이지 않는다.
+- **샌드박스**: 데모 팀 게이트웨이는 샌드박스를 설정하지 않아 OpenClaw 기본값 `off`로 돈다(`openclaw-sandbox-off` 경보). 컨테이너 자체가
+  1차 격리지만, 회사 기준으로는 `agents.defaults.sandbox.mode: all`이 맞다. 실제로 켤지는 추후 결정(샌드박스 백엔드가 Docker라 컨테이너 안에서 추가 설정 필요).
 - **Control UI 기본 대화**: 기본 대화 `agent:main:main`은 처음 만든 사람의 것이다. `none`에서는 다른 직원 화면에 "Session not found"가 반복된다.
   기능에는 영향이 없고, 직원은 새 대화에서 작업한다.
