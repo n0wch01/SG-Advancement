@@ -144,9 +144,12 @@ class Rule(_Model):
         description="session = one finding per rule/session/key; the verdict still applies every time",
     )
     when: Condition = Field(default_factory=dict, description="Pre-filter: every path must hold one value")
+    unless: Condition = Field(
+        default_factory=dict, description="Exception: skip the event when every path holds one value"
+    )
     match: Match
 
-    @field_validator("when", mode="before")
+    @field_validator("when", "unless", mode="before")
     @classmethod
     def _coerce_when(cls, v: object) -> object:
         return _coerce_condition(v)

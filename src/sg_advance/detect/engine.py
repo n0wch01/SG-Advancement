@@ -269,6 +269,8 @@ class Engine:
         for rule, matcher in self._compiled:
             if not condition_holds(doc, rule.when):
                 continue
+            if rule.unless and condition_holds(doc, rule.unless):
+                continue
             raw = matcher.check(event, doc)
             if raw is None:
                 continue

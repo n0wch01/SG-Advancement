@@ -27,6 +27,9 @@ rules:
     response: require_approval
     tags: [owasp-llm:LLM06, incident:replit-2025]
     when: {payload.kind: tool.call}
+    # Code Mode outer call: its JavaScript repeats the command, and the inner call that really
+    # runs it is judged on its own. One approval per command (tests/rule_cases/tool_misuse.yaml).
+    unless: {labels.openclaw.tool_kind: code_mode_exec}
     match:
       type: regex
       ignore_case: true
@@ -43,6 +46,9 @@ rules:
     response: require_approval
     tags: [owasp-llm:LLM06, incident:amazon-q-2025]
     when: {payload.kind: tool.call}
+    # Code Mode outer call: its JavaScript repeats the command, and the inner call that really
+    # runs it is judged on its own. One approval per command (tests/rule_cases/tool_misuse.yaml).
+    unless: {labels.openclaw.tool_kind: code_mode_exec}
     match:
       type: regex
       fields: [payload.arguments]

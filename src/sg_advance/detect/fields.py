@@ -8,24 +8,31 @@ from typing import Any
 
 def resolve(doc: Any, path: str) -> list[Any]:
     """Return every value at ``path``. A segment ending in ``[]`` fans out over a list:
-    ``payload.tools[].provider.mcp_server`` yields one value per tool. Missing keys and nulls
-    are dropped, so the result may be empty."""
-    current = [doc]
-    for segment in path.split("."):
-        fan_out = segment.endswith("[]")
-        key = segment[:-2] if fan_out else segment
-        nxt: list[Any] = []
-        for item in current:
-            if not isinstance(item, dict) or key not in item:
+    ``payload.tools[].provider.mcp_server`` yields one value per tool. Keys may contain dots
+    themselves (labels such as ``openclaw.tool_kind``): ``labels.openclaw.tool_kind`` finds them.
+    Missing keys and nulls are dropped, so the result may be empty."""
+    return [v for v in _walk([doc], path.split(".")) if v is not None]
+
+
+def _walk(items: list[Any], segments: list[str]) -> list[Any]:
+    if not segments:
+        return items
+    out: list[Any] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for n in range(1, len(segments) + 1):  # "a", then "a.b", ... for dotted keys
+            segment = ".".join(segments[:n])
+            fan_out = segment.endswith("[]")
+            key = segment[:-2] if fan_out else segment
+            if key not in item:
                 continue
             value = item[key]
             if fan_out:
-                if isinstance(value, list):
-                    nxt.extend(value)
+                out.extend(_walk(value if isinstance(value, list) else [], segments[n:]))
             else:
-                nxt.append(value)
-        current = nxt
-    return [v for v in current if v is not None]
+                out.extend(_walk([value], segments[n:]))
+    return out
 
 
 def first(doc: Any, path: str) -> str:

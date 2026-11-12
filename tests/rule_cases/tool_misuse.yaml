@@ -23,6 +23,44 @@ cases:
       - {kind: tool.call, tool: Bash, arguments: {command: "psql $DB -c 'DELETE FROM companies;'"}}
     expect: [destructive-sql]
 
+  # OpenClaw v4 Code Mode: the outer exec carries the model's JavaScript in both `code` and
+  # `command`; the inner exec it runs carries the real command and is judged again. Asking the
+  # person twice for one command doubles approval fatigue, so the approval rules skip the outer call.
+  - name: Code Mode 바깥 호출은 승인 요청 안 함 (안쪽 실제 명령에서 한 번만)
+    agent: openclaw
+    sensor: openclaw_plugin
+    events:
+      - kind: tool.call
+        tool: exec
+        arguments:
+          code: "return await t({command:'psql -c \"DELETE FROM users;\"'});"
+          command: "return await t({command:'psql -c \"DELETE FROM users;\"'});"
+        labels: {openclaw.tool_kind: code_mode_exec}
+      - kind: tool.call
+        tool: exec
+        arguments:
+          code: "return await t({command:'aws s3 rm s3://prod-backups --recursive'});"
+          command: "return await t({command:'aws s3 rm s3://prod-backups --recursive'});"
+        labels: {openclaw.tool_kind: code_mode_exec}
+    expect_not: [destructive-sql, destructive-cloud-command]
+
+  - name: Code Mode 안쪽 실제 명령은 승인 요청
+    agent: openclaw
+    sensor: openclaw_plugin
+    events:
+      - {kind: tool.call, tool: exec, arguments: {command: "psql -c \"DELETE FROM users;\""}, labels: {openclaw.parent_call_id: c0}}
+    expect: [destructive-sql]
+
+  - name: Code Mode 바깥 호출이라도 차단 룰은 그대로 (먼저 막는 게 안전)
+    agent: openclaw
+    sensor: openclaw_plugin
+    events:
+      - kind: tool.call
+        tool: exec
+        arguments: {code: "return await t({command:'rm -rf ~/projects'});", command: "return await t({command:'rm -rf ~/projects'});"}
+        labels: {openclaw.tool_kind: code_mode_exec}
+    expect: [destructive-shell-command]
+
   - name: 조건 있는 DELETE와 마이그레이션 파일 작성은 정상
     events:
       - {kind: tool.call, tool: execute_sql, arguments: {query: "DELETE FROM sessions WHERE expires_at < now();"}}
