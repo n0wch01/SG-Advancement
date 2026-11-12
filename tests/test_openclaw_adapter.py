@@ -256,6 +256,7 @@ class FakeGateway:
         self.scopes_seen: list[list[str]] = []
         self.subscribed = asyncio.Event()
         self.history: dict[str, list[dict[str, Any]]] = {}  # sessionKey -> transcript (chat.history)
+        self.directory: dict[str, Any] = {}  # method -> payload (users.list / sessions.list on team gateways)
 
     async def handler(self, ws: ServerConnection) -> None:
         challenge = {"nonce": secrets.token_hex(8), "ts": 1_794_000_000_123}
@@ -285,6 +286,9 @@ class FakeGateway:
                     await ws.send(
                         json.dumps({"type": "res", "id": rid, "ok": True, "payload": {"messages": msgs}})
                     )
+                elif method in self.directory:
+                    payload = self.directory[method]
+                    await ws.send(json.dumps({"type": "res", "id": rid, "ok": True, "payload": payload}))
                 elif method == "exec.approval.resolve" or method == "sessions.abort":
                     await ws.send(json.dumps({"type": "res", "id": rid, "ok": True, "payload": {"ok": True}}))
                 else:
@@ -762,3 +766,38 @@ def test_real_v4_run_code_mode_and_duplicate_messages() -> None:
     assert inner.labels["openclaw.parent_call_id"] == outer.payload.call_id
     results = {e.payload.call_id: e for e in events if e.kind.value == "tool.result"}
     assert ".env" in (results[inner.payload.call_id].payload.output_preview or "")
+
+
+async def test_team_gateway_attributes_calls_to_people(gateway, enrolled: Sensor) -> None:
+    """Profiles and session owners are read on connect; a user message names the run's sender."""
+    from test_openclaw_people import BOB, USERS_LIST, actor, tool_start, user_message
+
+    gw, url = gateway
+    gw.directory = {
+        "users.list": USERS_LIST,
+        "sessions.list": {"sessions": [{"key": "agent:main:old", "owner": {"actor": actor(BOB, "bob")}}]},
+    }
+    adapter = OpenClawAdapter(url, "gw-token", enforce=False)
+    task = await run_adapter(adapter, enrolled)
+    try:
+        assert {"users.list", "sessions.list"} <= {m for m, _ in gw.calls}
+        await gw.push(
+            user_message("agent:main:new", "p-alice", "p-alice", "r-a"),
+            tool_start("agent:main:new", "r-a", "c-a"),
+            tool_start("agent:main:old", "r-unseen", "c-b"),
+        )
+
+        def calls() -> dict[str, dict[str, Any]]:
+            import sqlite3
+
+            with sqlite3.connect(enrolled.spool.path) as db:
+                docs = [json.loads(d) for (d,) in db.execute("SELECT doc FROM outbox WHERE kind = 'event'")]
+            return {d["payload"]["call_id"]: d for d in docs if d["payload"]["kind"] == "tool.call"}
+
+        await until(lambda: {"c-a", "c-b"} <= set(calls()))
+        got = calls()
+        assert got["c-a"]["principal"]["user_id"] == "alice@corp.test"
+        assert got["c-b"]["principal"]["user_id"] == "bob@corp.test"
+        assert got["c-b"]["labels"]["openclaw.attribution"] == "session_owner"
+    finally:
+        task.cancel()

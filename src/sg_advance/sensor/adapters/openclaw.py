@@ -44,6 +44,7 @@ from ...redact import redact_value
 from ...schema import AgentEvent, Enforcement, ResponseAction, SensorType
 from .base import AdapterContext
 from .openclaw_gateway import DEFAULT_URL, DeviceIdentity, GatewayConnection, GatewayError, PairingRequired
+from .openclaw_people import OpenClawPeople
 
 log = logging.getLogger(__name__)
 
@@ -87,9 +88,12 @@ class OpenClawMapper:
     """Stateful translation; one instance per gateway connection lifetime (state survives
     reconnects because the adapter keeps the same mapper)."""
 
-    def __init__(self, user_id: str, hostname: str | None = None) -> None:
+    def __init__(
+        self, user_id: str, hostname: str | None = None, people: OpenClawPeople | None = None
+    ) -> None:
         self.user_id = user_id
         self.hostname = hostname
+        self.people = people if people is not None else OpenClawPeople()
         self.plugin_of: dict[str, str] = {}  # tool name -> plugin id (from tools.catalog)
         self.core_tools: set[str] = set()
         self.unknown_tool_seen = False  # adapter re-reads the catalog when this flips
@@ -110,12 +114,13 @@ class OpenClawMapper:
         labels: dict[str, str] | None = None,
     ) -> AgentEvent:
         self._seq += 1
+        who = self.people.attribute(session_key, run_id, self.user_id)
         return AgentEvent.model_validate(
             {
-                "labels": labels or {},
+                "labels": who.labels | (labels or {}),
                 "ts": _ts(ts),
                 "endpoint": {"device_id": "pending", "hostname": self.hostname},  # sensor core stamps the id
-                "principal": {"user_id": self.user_id},
+                "principal": who.principal,
                 "agent": {"type": "openclaw", "session_id": session_key, "run_id": run_id},
                 "source": {"sensor": "openclaw_gateway", "seq": self._seq},
                 "payload": payload,
@@ -197,6 +202,7 @@ class OpenClawMapper:
         p = frame.get("payload")
         if not isinstance(p, dict):
             return []
+        self.people.observe(frame)  # before mapping: a user message names the run's sender
         if name == "session.tool":
             return self._tool(p)
         if name == "session.message":
@@ -424,9 +430,11 @@ class OpenClawAdapter:
         inventory_interval: float = 300.0,
         max_backoff: float = 60.0,
         plugin_grace: float = 3.0,
+        password: str | None = None,
     ) -> None:
         self.url = url
         self.token = token if token is not None else os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
+        self.password = password if password is not None else os.environ.get("OPENCLAW_GATEWAY_PASSWORD", "")
         self.enforce = enforce
         # Default: SGA_HOME/openclaw-device.json, resolved in run() from the sensor's home.
         self.identity_path = identity_path
@@ -444,7 +452,7 @@ class OpenClawAdapter:
         self.connected = asyncio.Event()
 
     async def run(self, ctx: AdapterContext) -> None:
-        mapper = OpenClawMapper(ctx.user_id, ctx.hostname)
+        mapper = OpenClawMapper(ctx.user_id, ctx.hostname, ctx.people)
         first_delay = min(1.0, self.max_backoff)
         delay = first_delay
         while True:
@@ -470,7 +478,9 @@ class OpenClawAdapter:
     async def _session(self, ctx: AdapterContext, mapper: OpenClawMapper) -> None:
         path = self.identity_path or ctx.sensor.home.root / "openclaw-device.json"
         identity = DeviceIdentity.load_or_create(path)
-        conn = await GatewayConnection.open(self.url, self.token, scopes=self.scopes, identity=identity)
+        conn = await GatewayConnection.open(
+            self.url, self.token, scopes=self.scopes, identity=identity, password=self.password or None
+        )
         if conn.issued_device_token and conn.issued_device_token[0] != identity.device_token:
             identity.with_token(*conn.issued_device_token).save(path)  # later connects use it
             log.info("stored OpenClaw device token for %s…", identity.device_id[:12])
@@ -563,11 +573,26 @@ class OpenClawAdapter:
         ctx.record(result, enforcement)
 
     async def _snapshot(self, ctx: AdapterContext, conn: GatewayConnection, mapper: OpenClawMapper) -> None:
+        await self._people(conn, mapper)
         res = await conn.request("tools.catalog", {})
         if res.get("ok") and isinstance(res.get("payload"), dict):
             await self._handle(ctx, conn, mapper.inventory(res["payload"]))
         else:
             log.warning("tools.catalog failed: %s", res.get("error"))
+
+    async def _people(self, conn: GatewayConnection, mapper: OpenClawMapper) -> None:
+        """Profiles (id → email) and existing session owners, for attribution on team gateways.
+        Solo or older gateways may not have these methods; attribution then falls back to --user."""
+        for method, learn in (
+            ("users.list", mapper.people.learn_profiles),
+            ("sessions.list", mapper.people.learn_sessions),
+        ):
+            res = await conn.request(method, {})
+            if res.get("ok"):
+                learn(res.get("payload"))
+            else:
+                log.debug("%s unavailable: %s", method, res.get("error"))
+        mapper.people.save()
 
     async def _handle(self, ctx: AdapterContext, conn: GatewayConnection, event: AgentEvent) -> None:
         if event.kind.value == "inventory.snapshot":

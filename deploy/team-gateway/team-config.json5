@@ -1,0 +1,67 @@
+// Team gateway settings, applied once on first start (`openclaw config patch`).
+// People sign in through the team-proxy, which stamps their identity in x-forwarded-user
+// (stand-in for Cloudflare Access / an SSO proxy). Same-host services (the SG-Advance sensor)
+// use the gateway password from OPENCLAW_GATEWAY_PASSWORD instead.
+{
+  gateway: {
+    mode: "local",
+    bind: "lan",
+    port: 18789,
+    trustedProxies: ["172.28.0.10"], // team-proxy only (compose network team-net)
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "x-forwarded-user",
+        requiredHeaders: ["x-forwarded-proto"],
+        allowUsers: ["alice@corp.test", "bob@corp.test", "carol@corp.test", "secops@corp.test"],
+        deviceAutoApprove: {
+          enabled: true,
+          scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
+        },
+      },
+      identityScopes: {
+        "secops@corp.test": ["operator.admin"],
+      },
+    },
+    controlUi: {
+      // One port per demo employee: different origins keep their browser state apart.
+      allowedOrigins: [
+        "http://localhost:18801",
+        "http://localhost:18802",
+        "http://localhost:18803",
+        "http://localhost:18804",
+      ],
+    },
+    roles: {
+      default: "member",
+      definitions: {
+        member: {
+          sessions: { others: "none" }, // least privilege: share a session explicitly when people need it
+          agents: "*",
+          scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
+        },
+      },
+    },
+  },
+  plugins: {
+    load: { paths: ["/opt/sga/plugin"] },
+    entries: {
+      "sg-advance": {
+        enabled: true,
+        config: {
+          sensorHome: "/home/node/.sg-advance",
+          sensorCli: "/opt/sga/venv/bin/sga-sensor",
+        },
+      },
+    },
+  },
+  // Company baseline (M5d): every model pinned to a runtime the plugin is verified with.
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-6-luna": { agentRuntime: { id: "openclaw" } },
+        "openai/gpt-6-astra": { agentRuntime: { id: "openclaw" } },
+      },
+    },
+  },
+}

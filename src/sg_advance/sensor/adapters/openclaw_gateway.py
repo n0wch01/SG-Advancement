@@ -212,6 +212,7 @@ class GatewayConnection:
         scopes: list[str],
         identity: DeviceIdentity | None = None,
         open_timeout: float = 15.0,
+        password: str | None = None,
     ) -> GatewayConnection:
         """``token`` is the gateway's shared bootstrap token. When it is empty and the identity holds
         a device token from an earlier pairing, that device token is used instead (with the scopes
@@ -226,7 +227,7 @@ class GatewayConnection:
             self = cls(ws)
             self._reader = asyncio.create_task(self._read_loop())
             self._dispatcher = asyncio.create_task(self._dispatch_loop())
-            params = cls._connect_params(token, scopes, identity, challenge)
+            params = cls._connect_params(token, scopes, identity, challenge, password=password)
             res = await self.request("connect", params, timeout=30.0)
         except BaseException:
             await ws.close()
@@ -250,10 +251,20 @@ class GatewayConnection:
 
     @staticmethod
     def _connect_params(
-        token: str | None, scopes: list[str], identity: DeviceIdentity | None, challenge: Challenge
+        token: str | None,
+        scopes: list[str],
+        identity: DeviceIdentity | None,
+        challenge: Challenge,
+        *,
+        password: str | None = None,
     ) -> dict[str, Any]:
+        """``password``: the gateway's shared password. A team gateway in ``trusted-proxy`` mode
+        takes people's identity from proxy headers and lets same-host services (this sensor)
+        authenticate with ``gateway.auth.password`` instead; a token is not allowed there."""
         platform = sys.platform
         auth: dict[str, str] = {}
+        if password:
+            auth["password"] = password
         signature_token = ""
         if token:
             auth["token"] = signature_token = token

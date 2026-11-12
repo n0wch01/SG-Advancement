@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from ...schema import Enforcement
 from ..registry import PluginRegistry
+from .openclaw_people import OpenClawPeople
 
 if TYPE_CHECKING:
     from ...schema import AgentEvent
@@ -31,6 +32,7 @@ class AdapterContext:
     user_id: str  # the employee this endpoint's agents act for
     hostname: str | None = None
     plugins: PluginRegistry = field(default_factory=PluginRegistry)  # in-gateway plugin's judgements
+    people: OpenClawPeople = field(default_factory=OpenClawPeople)  # team gateway: session/run → person
 
     def evaluate(self, event: AgentEvent) -> ProcessResult:
         return self.sensor.evaluate(event)

@@ -36,6 +36,7 @@ from typing import Any
 from ..detect import Verdict
 from ..schema import AgentEvent, Enforcement, ResponseAction, SensorType
 from .adapters.base import AdapterContext
+from .adapters.openclaw_people import OpenClawPeople
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +48,12 @@ _BLOCKING = {ResponseAction.BLOCK, ResponseAction.ABORT_SESSION, ResponseAction.
 
 
 def plugin_event(
-    req: dict[str, Any], *, user_id: str, hostname: str | None, tool_plugins: dict[str, str]
+    req: dict[str, Any],
+    *,
+    user_id: str,
+    hostname: str | None,
+    tool_plugins: dict[str, str],
+    people: OpenClawPeople | None = None,
 ) -> AgentEvent:
     tool = str(req.get("toolName") or "unknown")
     params = req.get("params")
@@ -60,6 +66,7 @@ def plugin_event(
         req,
         user_id=user_id,
         hostname=hostname,
+        people=people,
         payload={
             "kind": "tool.call",
             "call_id": str(req.get("toolCallId") or f"plugin:{time.time_ns()}"),
@@ -82,21 +89,30 @@ def _plugin_labels(req: dict[str, Any]) -> dict[str, str]:
 
 
 def _plugin_envelope(
-    req: dict[str, Any], *, user_id: str, hostname: str | None, payload: dict[str, Any]
+    req: dict[str, Any],
+    *,
+    user_id: str,
+    hostname: str | None,
+    payload: dict[str, Any],
+    people: OpenClawPeople | None = None,
 ) -> AgentEvent:
+    session_key = req.get("sessionKey") if isinstance(req.get("sessionKey"), str) else None
+    run_id = req.get("runId") if isinstance(req.get("runId"), str) else None
+    # The plugin's tool context has no gateway profile; the WebSocket side learned who it is.
+    who = (people or OpenClawPeople()).attribute(session_key, run_id, user_id)
     return AgentEvent.model_validate(
         {
             "ts": datetime.now(UTC),
             "endpoint": {"device_id": "pending", "hostname": hostname},
-            "principal": {"user_id": user_id},
+            "principal": who.principal,
             "agent": {
                 "type": "openclaw",
-                "session_id": str(req.get("sessionKey") or req.get("sessionId") or "unknown"),
-                "run_id": req.get("runId") if isinstance(req.get("runId"), str) else None,
+                "session_id": session_key or str(req.get("sessionId") or "unknown"),
+                "run_id": run_id,
             },
             "source": {"sensor": "openclaw_plugin"},
             "payload": payload,
-            "labels": _plugin_labels(req),
+            "labels": who.labels | _plugin_labels(req),
         }
     )
 
@@ -137,7 +153,11 @@ def judge(
 ) -> dict[str, Any]:
     """Evaluate one plugin request with the sensor's engine and record it."""
     event = plugin_event(
-        req, user_id=ctx.user_id, hostname=ctx.hostname, tool_plugins=ctx.plugins.tool_plugins
+        req,
+        user_id=ctx.user_id,
+        hostname=ctx.hostname,
+        tool_plugins=ctx.plugins.tool_plugins,
+        people=ctx.people,
     )
     if labels:
         event = event.model_copy(update={"labels": event.labels | labels})
@@ -184,6 +204,7 @@ def resolution_event(
         req,
         user_id=ctx.user_id,
         hostname=ctx.hostname,
+        people=ctx.people,
         payload={
             "kind": "approval.resolved",
             "call_id": str(req.get("toolCallId") or "unknown"),
