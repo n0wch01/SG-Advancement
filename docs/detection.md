@@ -74,7 +74,11 @@ YAML 인라인 리스트 안에 `[]`가 들어간 경로를 쓸 때는 따옴표
 | `allowlist` | `field` 값이 `allow` glob 목록 어디에도 해당하지 않음. 값이 없으면 무시 | `field`, `allow`, `ignore_case`(기본 true) | tools_effective_diff, whitelist-violation |
 | `rate` | 한 그룹에서 `window_seconds` 안에 이벤트가 `threshold`개 이상 | `group_by`(기본 device, session, tool) | rate_limit |
 | `repeat` | 한 그룹에서 `same` 값이 같은 이벤트가 `threshold`번 연속 | `group_by`, `same` | loop_detect |
-| `sequence` | 같은 세션에서 `steps`가 순서대로, 모두 `within_seconds` 안에 일어남 | `steps[].when`, `pattern`, `fields`, `name` | event_sequence |
+| `sequence` | 같은 세션에서 `steps`가 순서대로, 모두 `within_seconds` 안에 일어남 | `steps[].when`, `pattern`, `fields`, `name`, `scope`, `distinct_sessions` | event_sequence |
+
+`sequence`의 `scope: delegation`은 세션 대신 **위임 트리**(같은 `agent.root_session_id`, 뿌리 세션 자신 포함)로 묶는다.
+`distinct_sessions: true`면 마지막 단계가 첫 단계와 다른 세션에서 일어나야 발화한다. 하위 에이전트가 읽은 인젝션을 부모가 실행하는 경우(T18)가
+여기에 해당하고, 같은 세션 안의 경우는 세션 단위 룰(`injection-then-sensitive-action`)이 맡아 중복을 피한다.
 
 시간 계산은 이벤트의 `ts`를 기준으로 한다. 그래서 과거 로그를 replay해도 결과가 같다.
 

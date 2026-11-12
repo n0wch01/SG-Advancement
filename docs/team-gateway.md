@@ -110,6 +110,26 @@ docker compose exec team-gateway /opt/sga/venv/bin/python /opt/sga/set-role.py b
 실환경(2026-11-12): secops가 하위 에이전트에게 `pwd`를 맡겼다. 자식 세션의 `exec` 두 건(Code Mode 바깥과 안쪽)이 `secops@corp.test`,
 `delegation`, `spawn_depth: 1`로 기록됐다.
 
+### 위임을 통한 인젝션 전파 (T18)
+
+하위 에이전트는 세션이 따로라서, 세션 단위 S2 시퀀스("인젝션을 읽은 뒤 같은 세션에서 민감 행동")로는 전파가 보이지 않는다.
+
+| 룰 | 언제 | 응답 |
+|---|---|---|
+| `cross-agent-injection-propagation` (critical) | 같은 위임 트리 안에서 한 세션이 인젝션 의심 텍스트를 읽고, **다른 세션**이 10분 안에 민감 파일 접근이나 외부 전송을 시도 | block |
+| `injection-relayed-to-agent` (high) | `sessions_spawn`의 작업 지시나 `sessions_send` 메시지에 인젝션 문구가 실림 (넘기는 순간, 실행 전) | 사람 승인 |
+
+예시: [openclaw_team.jsonl](../examples/events/openclaw_team.jsonl)에서는 하위 에이전트가 오염된 위키 페이지를 읽고, 위임한 총괄 에이전트가 `.env`를 보낸다.
+
+```bash
+uv run sga-detect examples/events/openclaw_team.jsonl
+# … cross-agent-injection-propagation (block)
+#   injected-content(tool.result …) @agent:main:subagent:… → sensitive-action(tool.call … curl …) @agent:main:dashboard:…
+```
+
+한계(FN): 패턴 기반이라 바꿔 쓴 인젝션은 놓친다. 센서가 모르는 위임(게이트웨이 밖, 센서가 꺼져 있던 동안의 오래된 트리)은 묶이지 않는다.
+오탐 후보: 인젝션 샘플 분석을 일부러 맡기는 보안 업무(전달 룰), 같은 트리에서 사람이 시킨 정상 전송이 10분 안에 이어지는 경우.
+
 ### 직원은 하위 에이전트를 쓸 수 없다 (OpenClaw 2026.11.3)
 
 자식 세션이 에이전트 소유라서, 관리자가 아닌 직원에게는 자기가 만든 자식도 **남의 대화**가 되고 공개 범위가 그대로 적용된다.
