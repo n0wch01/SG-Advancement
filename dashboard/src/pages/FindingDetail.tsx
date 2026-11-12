@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { Api } from "../api";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
-import { eventSummary, findingsHref, formatTime, responseText } from "../format";
+import { eventSummary, findingsHref, formatTime, responseText, timelineHref } from "../format";
 import type { AgentEvent, FindingDetail as Detail } from "../types";
 import { useAsync } from "../useAsync";
 
@@ -55,6 +55,9 @@ function DetailBody({ d }: { d: Detail }) {
             <dt>사람</dt>
             <dd>
               <a href={findingsHref({ user_id: f.principal.user_id })}>{f.principal.user_id}</a>
+              <a className="small side" href={timelineHref({ user_id: f.principal.user_id })}>
+                타임라인
+              </a>
             </dd>
             <dt>장비</dt>
             <dd>
@@ -64,6 +67,9 @@ function DetailBody({ d }: { d: Detail }) {
             <dt>에이전트 · 대화</dt>
             <dd className="mono small">
               {f.agent.type} · {f.agent.session_id}
+              <a className="side" href={timelineHref({ session_id: f.agent.root_session_id ?? f.agent.session_id })}>
+                대화 타임라인
+              </a>
               {f.agent.parent_session_id && (
                 <div className="muted">
                   위임: {f.agent.root_session_id ?? f.agent.parent_session_id} → … (깊이 {f.agent.spawn_depth ?? "?"})

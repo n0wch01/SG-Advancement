@@ -137,7 +137,8 @@ export type Route =
   | { page: "findings"; query: Record<string, string> }
   | { page: "finding"; id: string }
   | { page: "approvals"; query: Record<string, string> }
-  | { page: "inventory" };
+  | { page: "inventory" }
+  | { page: "timeline"; query: Record<string, string> };
 
 export function parseHash(hash: string): Route {
   const [path, qs = ""] = hash.replace(/^#/, "").split("?", 2);
@@ -145,6 +146,7 @@ export function parseHash(hash: string): Route {
   if (parts[0] === "findings" && parts[1]) return { page: "finding", id: decodeURIComponent(parts[1]) };
   if (parts[0] === "findings") return { page: "findings", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "inventory") return { page: "inventory" };
+  if (parts[0] === "timeline") return { page: "timeline", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "approvals") return { page: "approvals", query: Object.fromEntries(new URLSearchParams(qs)) };
   return { page: "overview" };
 }
@@ -158,6 +160,10 @@ function href(path: string, query: Record<string, string | undefined>): string {
 
 export function findingsHref(query: Record<string, string | undefined> = {}): string {
   return href("findings", query);
+}
+
+export function timelineHref(query: Record<string, string | undefined> = {}): string {
+  return href("timeline", query);
 }
 
 export function approvalsHref(query: Record<string, string | undefined> = {}): string {
@@ -216,3 +222,33 @@ export function reasonText(reason: string): string {
 }
 
 export const GUARD_LABEL: Record<string, string> = { enabled: "켜짐", disabled: "꺼짐", missing: "없음" };
+
+/** "agent:main:subagent:f65ab953" → "subagent:f65ab953" (the agent prefix repeats everywhere). */
+export function shortSession(id: string): string {
+  const parts = id.split(":");
+  return parts.length > 2 ? parts.slice(-2).join(":") : id;
+}
+
+/** Sessions in tree order (each parent followed by the sessions it delegated to), with depth. */
+export function sessionTree<T extends { session_id: string; parent_session_id: string | null }>(
+  nodes: T[],
+): { node: T; depth: number }[] {
+  const ids = new Set(nodes.map((n) => n.session_id));
+  const kids = new Map<string, T[]>();
+  const roots: T[] = [];
+  for (const n of nodes) {
+    if (n.parent_session_id && ids.has(n.parent_session_id) && n.parent_session_id !== n.session_id) {
+      kids.set(n.parent_session_id, [...(kids.get(n.parent_session_id) ?? []), n]);
+    } else roots.push(n);
+  }
+  const out: { node: T; depth: number }[] = [];
+  const seen = new Set<string>();
+  const walk = (n: T, depth: number) => {
+    if (seen.has(n.session_id)) return;
+    seen.add(n.session_id);
+    out.push({ node: n, depth });
+    for (const k of kids.get(n.session_id) ?? []) walk(k, depth + 1);
+  };
+  roots.forEach((r) => walk(r, 0));
+  return out;
+}

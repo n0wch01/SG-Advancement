@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   agentPosture,
   reasonText,
+  sessionTree,
+  shortSession,
+  timelineHref,
   approvalsHref,
   approverText,
   clip,
@@ -115,6 +118,15 @@ describe("format", () => {
     expect(reasonText("guard plugin missing")).toBe("실행 전 판정 플러그인 없음");
     expect(reasonText("no SG-Advance sensor watches this config")).toBe("SG-Advance 센서가 감시하지 않음");
     expect(reasonText("something new")).toBe("something new");
+  });
+
+  it("orders sessions as a delegation tree", () => {
+    const n = (session_id: string, parent_session_id: string | null) => ({ session_id, parent_session_id });
+    const tree = sessionTree([n("child", "root"), n("other", null), n("root", null), n("grand", "child"), n("orphan", "gone")]);
+    expect(tree.map((t) => `${t.depth}:${t.node.session_id}`)).toEqual(["0:other", "0:root", "1:child", "2:grand", "0:orphan"]);
+    expect(shortSession("agent:main:subagent:f65ab953")).toBe("subagent:f65ab953");
+    expect(timelineHref({ session_id: "a:b" })).toBe("#/timeline?session_id=a%3Ab");
+    expect(parseHash("#/timeline?user_id=x")).toEqual({ page: "timeline", query: { user_id: "x" } });
   });
 
   it("computes time ranges", () => {

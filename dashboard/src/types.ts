@@ -144,3 +144,27 @@ export interface DeviceInventory {
   integrity: Snapshot[];
   open_findings: Partial<Record<Severity, number>>;
 }
+
+export interface SessionNode {
+  session_id: string;
+  device_ids: string[];
+  agent_type: string;
+  parent_session_id: string | null;
+  root_session_id: string | null;
+  spawn_depth: number | null;
+  user_ids: string[];
+  first_ts: string;
+  last_ts: string;
+  events: number;
+  findings: number;
+  max_severity: Severity | null;
+}
+
+export interface Timeline {
+  user_id: string | null;
+  session_id: string | null;
+  truncated: boolean;
+  sessions: SessionNode[];
+  events: AgentEvent[];
+  findings: Finding[];
+}

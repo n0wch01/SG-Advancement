@@ -123,3 +123,27 @@ def test_inventory_keeps_the_latest_snapshot_per_install(cp_view: TestClient, en
     assert [a["payload"]["agent_id"] for a in dev["agents"]] == ["main"]
     assert sum(dev["open_findings"].values()) > 0
     assert cp_view.post("/v1/admin/inventory", headers=VIEWER).status_code in (403, 405)
+
+
+def test_timeline_follows_the_delegation_tree(cp_view: TestClient, enrolled: Sensor) -> None:
+    replay(enrolled, "openclaw_team.jsonl", "claude_code.jsonl")
+    root = "agent:main:dashboard:8a6277eb"
+    t = cp_view.get("/v1/admin/timeline", params={"session_id": root}, headers=VIEWER).json()
+    sessions = {n["session_id"]: n for n in t["sessions"]}
+    assert set(sessions) == {root, "agent:main:subagent:f65ab953"}  # parent + delegated child
+    child = sessions["agent:main:subagent:f65ab953"]
+    assert child["parent_session_id"] == root and child["spawn_depth"] == 1
+    assert child["user_ids"] == ["secops@corp.test"] and child["device_ids"] == ["dev-alice"]
+    kinds = [e["payload"]["kind"] for e in t["events"]]
+    assert "inventory.snapshot" not in kinds and len(kinds) == 5  # snapshots are not activity
+    ts = [e["ts"] for e in t["events"]]
+    assert ts == sorted(ts) and not t["truncated"]
+    rules = {f["rule_id"] for f in t["findings"]}
+    assert "cross-agent-injection-propagation" in rules
+    assert sessions[root]["findings"] >= 1 and sessions[root]["max_severity"] == "critical"
+
+    person = cp_view.get("/v1/admin/timeline", params={"user_id": "secops@corp.test"}, headers=VIEWER).json()
+    assert {e["principal"]["user_id"] for e in person["events"]} == {"secops@corp.test"}
+    small = cp_view.get("/v1/admin/timeline", params={"session_id": root, "limit": 2}, headers=VIEWER).json()
+    assert small["truncated"] and len(small["events"]) == 2
+    assert cp_view.get("/v1/admin/timeline", headers=VIEWER).status_code == 422

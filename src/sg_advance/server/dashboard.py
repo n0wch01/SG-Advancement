@@ -7,6 +7,8 @@
   surrounding events and the other findings of that conversation.
 - ``GET /v1/admin/inventory``: per device, the latest state snapshots the sensors sent: agent installs
   (``install.snapshot``), agents (``inventory.snapshot``), config baseline and code integrity.
+- ``GET /v1/admin/timeline``: one person's activity, or one conversation with every sub-agent
+  conversation delegated from it (T18 delegation tree), as events + findings in time order.
 
 All routes are reads, so the read-only dashboard token can use them (``auth.require_admin``).
 Events and findings are stored already masked by the sensors; nothing here unmasks anything.
@@ -19,7 +21,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from ..schema import Severity
 from .auth import DbSession, require_admin
@@ -301,3 +303,137 @@ def inventory(request: Request, db: DbSession) -> list[DeviceInventory]:
         )
         for d in db.scalars(select(Device).order_by(Device.device_id))
     ]
+
+
+# State snapshots are per device/agent, not something a person did in a conversation.
+NOT_ACTIVITY = (*SNAPSHOT_KINDS, "sensor.health")
+
+
+class SessionNode(BaseModel):
+    session_id: str
+    device_ids: list[str]  # gateway and audit proxy both record a team conversation
+    agent_type: str
+    parent_session_id: str | None
+    root_session_id: str | None
+    spawn_depth: int | None
+    user_ids: list[str]
+    first_ts: datetime
+    last_ts: datetime
+    events: int
+    findings: int
+    max_severity: str | None
+
+
+class Timeline(BaseModel):
+    user_id: str | None
+    session_id: str | None
+    truncated: bool
+    sessions: list[SessionNode]
+    events: list[dict[str, Any]]
+    findings: list[dict[str, Any]]
+
+
+def _lineage(column: Any, key: str) -> Any:
+    return column["agent"][key].as_string()
+
+
+@router.get("/timeline", response_model=Timeline)
+def timeline(
+    db: DbSession,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    since: datetime | None = None,
+    limit: Annotated[int, Query(ge=1, le=2000)] = 500,
+) -> Timeline:
+    """Oldest first. ``session_id``: that conversation and its delegation tree (children found by
+    ``agent.parent_session_id`` / ``root_session_id``). ``user_id``: everything attributed to that person.
+    Both: the person's part of that tree. The newest ``limit`` events are kept (``truncated``)."""
+    if not (user_id or session_id):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "give user_id or session_id")
+    ev_where: list[Any] = [EventRow.kind.not_in(NOT_ACTIVITY)]
+    f_where: list[Any] = []
+    if session_id:
+        # Walk down the delegation tree: children name their parent (and the root) on every event.
+        tree = {session_id}
+        frontier = {session_id}
+        while frontier and len(tree) < 200:
+            kids = set(
+                db.scalars(
+                    select(EventRow.session_id)
+                    .where(
+                        or_(
+                            _lineage(EventRow.doc, "parent_session_id").in_(frontier),
+                            _lineage(EventRow.doc, "root_session_id").in_(frontier),
+                        )
+                    )
+                    .distinct()
+                )
+            )
+            frontier = kids - tree
+            tree |= kids
+        ev_where.append(EventRow.session_id.in_(tree))
+        f_where.append(FindingRow.session_id.in_(tree))
+    if user_id:
+        ev_where.append(EventRow.user_id == user_id)
+        f_where.append(FindingRow.user_id == user_id)
+    if since:
+        ev_where.append(EventRow.ts >= since)
+        f_where.append(FindingRow.ts >= since)
+
+    rows = list(
+        db.scalars(
+            select(EventRow).where(*ev_where).order_by(EventRow.ts.desc(), EventRow.event_id).limit(limit + 1)
+        )
+    )
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    oldest = rows[-1].ts if (truncated and rows) else None
+    if oldest is not None:
+        f_where.append(FindingRow.ts >= oldest)
+    findings = list(
+        db.scalars(select(FindingRow).where(*f_where).order_by(FindingRow.ts, FindingRow.finding_id))
+    )
+
+    nodes: dict[str, dict[str, Any]] = {}
+    for r in reversed(rows):
+        agent = r.doc["agent"]
+        n = nodes.setdefault(
+            r.session_id,
+            {
+                "session_id": r.session_id,
+                "device_ids": [],
+                "agent_type": r.agent_type,
+                "parent_session_id": None,
+                "root_session_id": None,
+                "spawn_depth": None,
+                "user_ids": [],
+                "first_ts": r.ts,
+                "last_ts": r.ts,
+                "events": 0,
+                "findings": 0,
+                "max_severity": None,
+            },
+        )
+        for key in ("parent_session_id", "root_session_id", "spawn_depth"):
+            if agent.get(key) is not None:
+                n[key] = agent[key]
+        if r.user_id not in n["user_ids"]:
+            n["user_ids"].append(r.user_id)
+        if r.device_id not in n["device_ids"]:
+            n["device_ids"].append(r.device_id)
+        n["last_ts"] = r.ts
+        n["events"] += 1
+    for f in findings:
+        n = nodes.get(f.session_id)
+        if n is None:
+            continue
+        n["findings"] += 1
+        n["max_severity"] = _max_severity([x for x in (n["max_severity"], f.severity) if x])
+    return Timeline(
+        user_id=user_id,
+        session_id=session_id,
+        truncated=truncated,
+        sessions=[SessionNode(**n) for n in sorted(nodes.values(), key=lambda n: n["first_ts"])],
+        events=[r.doc for r in reversed(rows)],
+        findings=[f.doc for f in findings],
+    )

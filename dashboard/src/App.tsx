@@ -7,6 +7,7 @@ import { FindingDetail } from "./pages/FindingDetail";
 import { Findings } from "./pages/Findings";
 import { Inventory } from "./pages/Inventory";
 import { Overview } from "./pages/Overview";
+import { Timeline } from "./pages/Timeline";
 import type { Role } from "./types";
 
 function useRoute(): Route {
@@ -66,6 +67,9 @@ export function App() {
           <a href="#/findings" className={route.page === "findings" || route.page === "finding" ? "on" : ""}>
             Finding
           </a>
+          <a href="#/timeline" className={route.page === "timeline" ? "on" : ""}>
+            타임라인
+          </a>
           <a href="#/approvals" className={route.page === "approvals" ? "on" : ""}>
             승인 감사
           </a>
@@ -91,6 +95,7 @@ export function App() {
         {route.page === "finding" && <FindingDetail api={api} id={route.id} />}
         {route.page === "approvals" && <Approvals api={api} query={route.query} />}
         {route.page === "inventory" && <Inventory api={api} />}
+        {route.page === "timeline" && <Timeline api={api} query={route.query} />}
       </main>
     </div>
   );

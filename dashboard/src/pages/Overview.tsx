@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { Api } from "../api";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
-import { SEVERITIES, SEVERITY_LABEL, findingsHref, relativeTime, responseText, sinceFor } from "../format";
+import { SEVERITIES, SEVERITY_LABEL, findingsHref, relativeTime, responseText, sinceFor, timelineHref } from "../format";
 import type { Summary } from "../types";
 import { useAsync } from "../useAsync";
 
@@ -72,6 +72,9 @@ function OverviewBody({ s }: { s: Summary }) {
                   <tr key={u.user_id}>
                     <td>
                       <a href={findingsHref({ user_id: u.user_id })}>{u.user_id}</a>
+                      <a className="small side" href={timelineHref({ user_id: u.user_id })}>
+                        타임라인
+                      </a>
                     </td>
                     <td>
                       <SeverityBadge severity={u.max_severity} />
