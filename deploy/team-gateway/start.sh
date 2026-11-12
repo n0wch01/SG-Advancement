@@ -10,9 +10,11 @@ SGA_HOME="$HOME/.sg-advance"
 mkdir -p "$STATE" "$SGA_HOME"
 chmod 700 "$SGA_HOME"
 
+# The company baseline is re-applied on every start, so the file stays the source of truth
+# (a key changed in the UI is reset here; settings the file doesn't name are left alone).
+echo "[sga] applying team gateway settings"
+$OC config patch --file /opt/sga/team-config.json5
 if [ ! -f "$STATE/.sga-configured" ]; then
-  echo "[sga] applying team gateway settings"
-  $OC config patch --file /opt/sga/team-config.json5
   $OC plugins install --link /opt/sga/plugin --force --accept-capabilities
   touch "$STATE/.sga-configured"
 fi

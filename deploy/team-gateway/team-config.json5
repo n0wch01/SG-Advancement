@@ -40,6 +40,13 @@
           agents: "*",
           scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
         },
+        // Security team: sees every session and every pending approval (operator.admin), so it can
+        // review, approve on someone's behalf, or stop a run. Assigned per person with set-role.py.
+        security: {
+          sessions: { others: "view" },
+          agents: "*",
+          scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions", "operator.admin"],
+        },
       },
     },
   },
