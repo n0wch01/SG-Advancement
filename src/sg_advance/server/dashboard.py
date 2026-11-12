@@ -5,6 +5,8 @@
   devices) and the latest findings, optionally since a point in time.
 - ``GET /v1/admin/findings/{finding_id}``: one finding with its evidence events, the conversation's
   surrounding events and the other findings of that conversation.
+- ``GET /v1/admin/inventory``: per device, the latest state snapshots the sensors sent: agent installs
+  (``install.snapshot``), agents (``inventory.snapshot``), config baseline and code integrity.
 
 All routes are reads, so the read-only dashboard token can use them (``auth.require_admin``).
 Events and findings are stored already masked by the sensors; nothing here unmasks anything.
@@ -222,3 +224,80 @@ def finding_detail(
         session_events=list(reversed(window)),
         session_findings=list(others),
     )
+
+
+SNAPSHOT_KINDS = ("install.snapshot", "inventory.snapshot", "config.snapshot", "integrity.report")
+
+
+class Snapshot(BaseModel):
+    ts: datetime
+    user_id: str
+    session_id: str
+    payload: dict[str, Any]
+
+
+class DeviceInventory(BaseModel):
+    device_id: str
+    hostname: str | None
+    sensor_version: str | None
+    enrolled_at: datetime
+    last_seen: datetime | None
+    policy_current: bool
+    installs: list[Snapshot]
+    agents: list[Snapshot]
+    configs: list[Snapshot]
+    integrity: list[Snapshot]
+    open_findings: dict[str, int]  # findings per severity, last 7 days
+
+
+@router.get("/inventory", response_model=list[DeviceInventory])
+def inventory(request: Request, db: DbSession) -> list[DeviceInventory]:
+    """Latest snapshot per (device, kind, session): one row per install instance, per agent, ..."""
+    latest = (
+        select(EventRow.device_id, EventRow.kind, EventRow.session_id, func.max(EventRow.ts).label("ts"))
+        .where(EventRow.kind.in_(SNAPSHOT_KINDS))
+        .group_by(EventRow.device_id, EventRow.kind, EventRow.session_id)
+        .subquery()
+    )
+    rows = db.scalars(
+        select(EventRow).join(
+            latest,
+            (EventRow.device_id == latest.c.device_id)
+            & (EventRow.kind == latest.c.kind)
+            & (EventRow.session_id == latest.c.session_id)
+            & (EventRow.ts == latest.c.ts),
+        )
+    )
+    per: dict[str, dict[str, dict[str, Snapshot]]] = {}
+    for r in rows:
+        snap = Snapshot(ts=r.ts, user_id=r.user_id, session_id=r.session_id, payload=r.doc["payload"])
+        per.setdefault(r.device_id, {}).setdefault(r.kind, {})[r.session_id] = snap  # ts ties: keep one
+    week = datetime.now(UTC) - timedelta(days=7)
+    sev: dict[str, dict[str, int]] = {}
+    for device, severity, n in db.execute(
+        select(FindingRow.device_id, FindingRow.severity, func.count())
+        .where(FindingRow.ts >= week)
+        .group_by(FindingRow.device_id, FindingRow.severity)
+    ):
+        sev.setdefault(device, {})[severity] = n
+    current = request.app.state.policy.version
+
+    def snaps(device: str, kind: str) -> list[Snapshot]:
+        return sorted(per.get(device, {}).get(kind, {}).values(), key=lambda x: x.session_id)
+
+    return [
+        DeviceInventory(
+            device_id=d.device_id,
+            hostname=d.hostname,
+            sensor_version=d.sensor_version,
+            enrolled_at=d.enrolled_at,
+            last_seen=d.last_seen,
+            policy_current=d.policy_version == current,
+            installs=snaps(d.device_id, "install.snapshot"),
+            agents=snaps(d.device_id, "inventory.snapshot"),
+            configs=snaps(d.device_id, "config.snapshot"),
+            integrity=snaps(d.device_id, "integrity.report"),
+            open_findings=sev.get(d.device_id, {}),
+        )
+        for d in db.scalars(select(Device).order_by(Device.device_id))
+    ]

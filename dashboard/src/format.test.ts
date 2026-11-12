@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { clip, eventSummary, findingsHref, parseHash, relativeTime, responseText, severityRank, sinceFor } from "./format";
+import {
+  agentPosture,
+  reasonText,
+  approvalsHref,
+  approverText,
+  clip,
+  eventSummary,
+  findingsHref,
+  parseHash,
+  relativeTime,
+  responseText,
+  severityRank,
+  sinceFor,
+  waitText,
+} from "./format";
 import type { AgentEvent } from "./types";
 
 function ev(payload: Record<string, unknown>): AgentEvent {
@@ -56,6 +70,51 @@ describe("format", () => {
     });
     expect(parseHash("#/findings/abc123")).toEqual({ page: "finding", id: "abc123" });
     expect(findingsHref({ rule_id: "r1", user_id: undefined })).toBe("#/findings?rule_id=r1");
+  });
+
+  it("routes the approval audit", () => {
+    expect(parseHash("#/approvals?approved=true")).toEqual({ page: "approvals", query: { approved: "true" } });
+    expect(approvalsHref({ approved: "true", user_id: "" })).toBe("#/approvals?approved=true");
+  });
+
+  it("says who approved and how we know", () => {
+    expect(approverText({ approver: "secops@corp.test", approver_source: "audit_proxy", user_id: "alice@corp.test" })).toEqual({
+      who: "secops@corp.test",
+      how: "감사 프록시로 확인",
+      other: true,
+    });
+    expect(approverText({ approver: null, approver_source: null, user_id: "a" }).who).toBe("기록 없음");
+    expect(approverText({ approver: "a", approver_source: "agent", user_id: "a" }).other).toBe(false);
+    expect(waitText(850)).toBe("850ms");
+    expect(waitText(75_000)).toBe("1분 15초");
+  });
+
+  it("summarizes an agent's posture", () => {
+    const p = agentPosture({
+      tools: [{}, {}],
+      skills: [
+        { name: "github", source: "openclaw-bundled" },
+        { name: "deploy-notes", source: "openclaw-workspace", integrity: "verified" },
+        { name: "new", source: "openclaw-managed", integrity: "unknown" },
+        { name: "bad", source: "openclaw-workspace", integrity: "mismatch" },
+      ],
+      model_runtimes: [{ source: "model" }, { source: "implicit" }],
+      sessions: [{ binding: "current" }, { binding: "stale" }, { binding: "unpinned" }],
+    });
+    expect(p).toEqual({
+      tools: 2,
+      skills: 4,
+      unverifiedSkills: ["new"],
+      tamperedSkills: ["bad"],
+      unpinnedModels: 1,
+      sessions: 3,
+      staleSessions: 1,
+    });
+    expect(parseHash("#/inventory")).toEqual({ page: "inventory" });
+    expect(agentPosture({ tools: [] })).toMatchObject({ unpinnedModels: null, sessions: null });
+    expect(reasonText("guard plugin missing")).toBe("실행 전 판정 플러그인 없음");
+    expect(reasonText("no SG-Advance sensor watches this config")).toBe("SG-Advance 센서가 감시하지 않음");
+    expect(reasonText("something new")).toBe("something new");
   });
 
   it("computes time ranges", () => {

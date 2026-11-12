@@ -106,24 +106,62 @@ export function eventSummary(e: AgentEvent): string {
   }
 }
 
+export const DECISION_LABEL: Record<string, string> = {
+  "allow-once": "이번만 허용",
+  "allow-always": "항상 허용",
+  deny: "거절",
+  timeout: "시간 초과",
+  cancelled: "취소",
+};
+
+/** Who pressed approve, and how sure we are about it (team gateway: the audit proxy saw it). */
+export function approverText(a: { approver: string | null; approver_source: string | null; user_id: string }): {
+  who: string;
+  how: string;
+  other: boolean;
+} {
+  if (!a.approver) return { who: "기록 없음", how: "감사 프록시를 거치지 않은 응답", other: false };
+  const how = a.approver_source === "audit_proxy" ? "감사 프록시로 확인" : "에이전트가 보고";
+  return { who: a.approver, how, other: a.approver !== a.user_id };
+}
+
+export function waitText(ms: number | null): string {
+  if (ms === null || ms === undefined) return "-";
+  if (ms < 1000) return `${ms}ms`;
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s}초` : `${Math.floor(s / 60)}분 ${s % 60}초`;
+}
+
 export type Route =
   | { page: "overview" }
   | { page: "findings"; query: Record<string, string> }
-  | { page: "finding"; id: string };
+  | { page: "finding"; id: string }
+  | { page: "approvals"; query: Record<string, string> }
+  | { page: "inventory" };
 
 export function parseHash(hash: string): Route {
   const [path, qs = ""] = hash.replace(/^#/, "").split("?", 2);
   const parts = path.split("/").filter(Boolean);
   if (parts[0] === "findings" && parts[1]) return { page: "finding", id: decodeURIComponent(parts[1]) };
   if (parts[0] === "findings") return { page: "findings", query: Object.fromEntries(new URLSearchParams(qs)) };
+  if (parts[0] === "inventory") return { page: "inventory" };
+  if (parts[0] === "approvals") return { page: "approvals", query: Object.fromEntries(new URLSearchParams(qs)) };
   return { page: "overview" };
 }
 
-export function findingsHref(query: Record<string, string | undefined> = {}): string {
+function href(path: string, query: Record<string, string | undefined>): string {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(query)) if (v) p.set(k, v);
   const s = p.toString();
-  return `#/findings${s ? `?${s}` : ""}`;
+  return `#/${path}${s ? `?${s}` : ""}`;
+}
+
+export function findingsHref(query: Record<string, string | undefined> = {}): string {
+  return href("findings", query);
+}
+
+export function approvalsHref(query: Record<string, string | undefined> = {}): string {
+  return href("approvals", query);
 }
 
 export function sinceFor(range: string, now: Date = new Date()): string | null {
@@ -131,3 +169,50 @@ export function sinceFor(range: string, now: Date = new Date()): string | null {
   const h = hours[range];
   return h ? new Date(now.getTime() - h * 3600_000).toISOString() : null;
 }
+
+type Row = Record<string, unknown>;
+
+function rows(v: unknown): Row[] {
+  return Array.isArray(v) ? (v.filter((x) => x && typeof x === "object") as Row[]) : [];
+}
+
+/** The parts of an agent inventory snapshot security looks at first. */
+export function agentPosture(p: Row): {
+  tools: number;
+  skills: number;
+  unverifiedSkills: string[];
+  tamperedSkills: string[];
+  unpinnedModels: number | null;
+  sessions: number | null;
+  staleSessions: number;
+} {
+  const skills = rows(p.skills);
+  const local = skills.filter((s) => s.source !== "openclaw-bundled" && s.source !== "openclaw-extra");
+  const sessions = rows(p.sessions);
+  const models = rows(p.model_runtimes);
+  return {
+    tools: rows(p.tools).length,
+    skills: skills.length,
+    unverifiedSkills: local.filter((s) => s.integrity !== "verified" && s.integrity !== "mismatch").map((s) => String(s.name)),
+    tamperedSkills: skills.filter((s) => s.integrity === "mismatch").map((s) => String(s.name)),
+    // null: the sensor did not report it (gateway without models.list / sessions.list), not "all fine"
+    unpinnedModels: models.length ? models.filter((m) => m.source === "implicit").length : null,
+    sessions: Array.isArray(p.sessions) && (sessions.length || models.length) ? sessions.length : null,
+    staleSessions: sessions.filter((s) => s.binding === "stale").length,
+  };
+}
+
+const REASON_LABEL: Record<string, string> = {
+  "not configured": "설정된 적 없음",
+  "config unreadable": "설정 파일을 읽을 수 없음",
+  "no SG-Advance sensor watches this config": "SG-Advance 센서가 감시하지 않음",
+};
+
+/** Sensor-side unmanaged reasons (English, stable strings) in Korean. */
+export function reasonText(reason: string): string {
+  const guard = /^guard plugin (\w+)$/.exec(reason);
+  if (guard) return `실행 전 판정 플러그인 ${GUARD_LABEL[guard[1]] ?? guard[1]}`;
+  return REASON_LABEL[reason] ?? reason;
+}
+
+export const GUARD_LABEL: Record<string, string> = { enabled: "켜짐", disabled: "꺼짐", missing: "없음" };

@@ -2,7 +2,7 @@
 // development proxies /v1 through Vite. The token lives in sessionStorage only (gone when the tab
 // closes) and is sent as a bearer header, never in a URL.
 
-import type { Finding, FindingDetail, Role, Summary } from "./types";
+import type { Approval, DeviceInventory, Finding, FindingDetail, Role, Summary } from "./types";
 
 const KEY = "sga-dashboard-token";
 
@@ -72,6 +72,14 @@ export class Api {
 
   findings(q: { severity?: string; min_severity?: string; rule_id?: string; user_id?: string; limit?: number; offset?: number }) {
     return this.get<Finding[]>("/findings", q);
+  }
+
+  approvals(q: { approved?: string; decision?: string; user_id?: string; since?: string | null; limit?: number; offset?: number }) {
+    return this.get<Approval[]>("/approvals", q);
+  }
+
+  inventory() {
+    return this.get<DeviceInventory[]>("/inventory");
   }
 
   finding(id: string) {

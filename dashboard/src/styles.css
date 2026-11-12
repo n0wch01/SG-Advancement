@@ -17,6 +17,8 @@
   --sev-info: #b7b6ae;
   --alert-bg: #fdecec;
   --banner-bg: #fff5d6;
+  --good: #0ca30c;
+  --good-ink: #006300;
   --radius: 8px;
   --font: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -36,6 +38,7 @@
     --sev-info: #5d5c57;
     --alert-bg: #3a1d1d;
     --banner-bg: #3a3218;
+    --good-ink: #0ca30c;
   }
 }
 :root[data-theme="dark"] {
@@ -52,6 +55,7 @@
   --sev-info: #5d5c57;
   --alert-bg: #3a1d1d;
   --banner-bg: #3a3218;
+  --good-ink: #0ca30c;
 }
 
 * { box-sizing: border-box; }
@@ -156,6 +160,27 @@ button:disabled { opacity: 0.6; cursor: default; }
 .event-head { display: flex; gap: 12px; align-items: baseline; width: 100%; text-align: left; background: transparent; border: 0; padding: 8px 12px; flex-wrap: wrap; }
 .event-head .muted { margin-left: auto; }
 .json { margin: 0; padding: 12px; background: var(--bg); font: 12px/1.45 var(--mono); overflow-x: auto; max-height: 360px; }
+
+.tag.warn { box-shadow: inset 0 0 0 1px var(--sev-high); margin-left: 6px; font-family: var(--font); }
+.decision { font-weight: 600; font-size: 12px; }
+.decision.ok::before { content: "✓ "; }
+.decision.no::before { content: "✕ "; }
+.decision.no { color: var(--muted); }
+tr.flagged td { background: var(--alert-bg); }
+table.approvals td { min-width: 90px; }
+.args { max-width: 320px; overflow-wrap: anywhere; }
+.filters .segmented { align-self: center; }
+
+.chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; box-shadow: inset 0 0 0 1px var(--line); }
+.chip-good { box-shadow: inset 0 0 0 1px var(--good); color: var(--good-ink); }
+.chip-bad { box-shadow: inset 0 0 0 1px var(--sev-critical); color: var(--sev-critical); background: var(--alert-bg); }
+.chip-warn { box-shadow: inset 0 0 0 1px var(--sev-high); }
+.chip-neutral { color: var(--muted); }
+.device-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.device-head h2 { margin: 0; }
+.device-meta { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; color: var(--ink-2); }
+.device h3 { margin-top: 18px; margin-bottom: 6px; }
+.device .facts { margin-bottom: 8px; }
 
 .error { color: var(--sev-critical); }
 .empty { padding: 8px 0; }

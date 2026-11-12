@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Api, ApiError, loadToken, saveToken } from "./api";
 import { parseHash, type Route } from "./format";
+import { Approvals } from "./pages/Approvals";
 import { FindingDetail } from "./pages/FindingDetail";
 import { Findings } from "./pages/Findings";
+import { Inventory } from "./pages/Inventory";
 import { Overview } from "./pages/Overview";
 import type { Role } from "./types";
 
@@ -61,8 +63,14 @@ export function App() {
           <a href="#/" className={route.page === "overview" ? "on" : ""}>
             개요
           </a>
-          <a href="#/findings" className={route.page !== "overview" ? "on" : ""}>
+          <a href="#/findings" className={route.page === "findings" || route.page === "finding" ? "on" : ""}>
             Finding
+          </a>
+          <a href="#/approvals" className={route.page === "approvals" ? "on" : ""}>
+            승인 감사
+          </a>
+          <a href="#/inventory" className={route.page === "inventory" ? "on" : ""}>
+            인벤토리
           </a>
         </nav>
         <div className="who">
@@ -81,6 +89,8 @@ export function App() {
         {route.page === "overview" && <Overview api={api} />}
         {route.page === "findings" && <Findings api={api} query={route.query} />}
         {route.page === "finding" && <FindingDetail api={api} id={route.id} />}
+        {route.page === "approvals" && <Approvals api={api} query={route.query} />}
+        {route.page === "inventory" && <Inventory api={api} />}
       </main>
     </div>
   );

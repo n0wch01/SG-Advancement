@@ -104,3 +104,22 @@ def test_built_dashboard_is_served_with_strict_headers(cp: TestClient, tmp_path)
     with TestClient(create_app(dataclasses.replace(settings, dashboard_dir=tmp_path / "missing"))) as c:
         assert c.get("/dashboard/").status_code == 404  # not built yet: the API still runs
         assert c.get("/healthz").status_code == 200
+
+
+def test_inventory_keeps_the_latest_snapshot_per_install(cp_view: TestClient, enrolled: Sensor) -> None:
+    replay(enrolled, "openclaw_shadow.jsonl", "openclaw_team.jsonl")
+    # carol's install changes later: plugin added. Only the newer state should be listed.
+    later = next(ReplayAdapter([ROOT / "examples/events/openclaw_shadow.jsonl"]).events())
+    p = later.payload.model_copy(update={"guard_plugin": "enabled", "changed": ("guard_plugin",)})
+    newer = {"ts": later.ts + timedelta(minutes=5), "payload": p, "event_id": "x1"}
+    enrolled.process(later.model_copy(update=newer))
+    assert enrolled.flush().ok
+    [dev] = cp_view.get("/v1/admin/inventory", headers=VIEWER).json()
+    assert dev["device_id"] == "dev-alice" and dev["policy_current"] is True
+    installs = {i["payload"]["instance"]: i for i in dev["installs"]}
+    assert set(installs) == {"/home/carol/.openclaw", "/Users/alice/.openclaw"}
+    assert installs["/home/carol/.openclaw"]["payload"]["guard_plugin"] == "enabled"
+    assert installs["/home/carol/.openclaw"]["user_id"] == "carol@corp.test"
+    assert [a["payload"]["agent_id"] for a in dev["agents"]] == ["main"]
+    assert sum(dev["open_findings"].values()) > 0
+    assert cp_view.post("/v1/admin/inventory", headers=VIEWER).status_code in (403, 405)

@@ -94,3 +94,53 @@ export interface FindingDetail {
   session_events: AgentEvent[];
   session_findings: Finding[];
 }
+
+export interface FindingRef {
+  finding_id: string;
+  rule_id: string;
+  severity: Severity;
+  title: string;
+}
+
+export interface Approval {
+  event_id: string;
+  ts: string;
+  device_id: string;
+  user_id: string;
+  session_id: string;
+  call_id: string;
+  tool: string;
+  decision: string;
+  approved: boolean;
+  judged_by: string;
+  rule_ids: string[];
+  max_severity: Severity | null;
+  wait_ms: number | null;
+  requester: Record<string, string>;
+  approver: string | null;
+  approver_source: "audit_proxy" | "agent" | null;
+  held_call: { event_id: string; ts: string; tool: string; arguments: Record<string, unknown> } | null;
+  asked_by: FindingRef[];
+  flagged: FindingRef[];
+}
+
+export interface Snapshot {
+  ts: string;
+  user_id: string;
+  session_id: string;
+  payload: Record<string, unknown>;
+}
+
+export interface DeviceInventory {
+  device_id: string;
+  hostname: string | null;
+  sensor_version: string | null;
+  enrolled_at: string;
+  last_seen: string | null;
+  policy_current: boolean;
+  installs: Snapshot[];
+  agents: Snapshot[];
+  configs: Snapshot[];
+  integrity: Snapshot[];
+  open_findings: Partial<Record<Severity, number>>;
+}
