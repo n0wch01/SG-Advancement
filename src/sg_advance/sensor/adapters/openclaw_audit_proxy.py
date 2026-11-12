@@ -8,8 +8,11 @@ identity proxy, so a hop placed right after it knows the person behind every Web
 
 The audit proxy relays every frame unchanged. It parses only control messages:
 
-- client → gateway requests ``plugin.approval.resolve`` / ``exec.approval.resolve`` ``{id, decision}``
-  and ``chat.abort`` ``{sessionKey, runId}`` / ``sessions.abort`` ``{key, runId}``;
+- client → gateway requests ``plugin.approval.resolve`` / ``exec.approval.resolve`` ``{id, decision}``,
+  ``chat.abort`` ``{sessionKey, runId}`` / ``sessions.abort`` ``{key, runId}``, and conversation
+  removal: ``sessions.delete`` ``{key, archivedOnly?, deleteTranscript?}`` and archiving through
+  ``sessions.patch`` ``{key, archived}`` / ``sessions.patchMany`` ``{targets: [{key}], patch: {archived}}``
+  (other patch fields are ignored);
 - gateway → client approval prompts (``*.approval.requested`` events, ``*.approval.list|get``
   answers) to learn which tool call an approval id belongs to;
 - the gateway's answer to a watched request (accepted or refused).
@@ -43,9 +46,10 @@ log = logging.getLogger(__name__)
 
 RESOLVE_METHODS = {"plugin.approval.resolve": "plugin", "exec.approval.resolve": "exec"}
 ABORT_METHODS = {"chat.abort", "sessions.abort"}
+SESSION_METHODS = {"sessions.delete", "sessions.patch", "sessions.patchMany"}
 LOOKUP_METHODS = {"plugin.approval.list", "plugin.approval.get", "exec.approval.list", "exec.approval.get"}
 PROMPT_EVENTS = {"plugin.approval.requested": "plugin", "exec.approval.requested": "exec"}
-_MARKERS = (*RESOLVE_METHODS, *ABORT_METHODS, *LOOKUP_METHODS)
+_MARKERS = (*RESOLVE_METHODS, *ABORT_METHODS, *LOOKUP_METHODS, *SESSION_METHODS)
 # Not forwarded upstream: hop-by-hop and handshake headers the client library sets itself.
 _DROP_HEADERS = {
     "host",
@@ -160,6 +164,38 @@ class Watch:
                 "target_session_id": _str(params.get("sessionKey")) or _str(params.get("key")),
                 "target_run_id": _str(params.get("runId")),
             }
+        elif method == "sessions.delete":
+            self.pending[doc["id"]] = {
+                "action": "session.delete",
+                "method": method,
+                "target_session_id": _str(params.get("key")),
+                "archived_only": params.get("archivedOnly") is True,
+                "delete_transcript": params.get("deleteTranscript")
+                if isinstance(params.get("deleteTranscript"), bool)
+                else None,
+            }
+        elif method == "sessions.patch" and isinstance(params.get("archived"), bool):
+            self.pending[doc["id"]] = {
+                "action": "session.archive" if params["archived"] else "session.unarchive",
+                "method": method,
+                "target_session_id": _str(params.get("key")),
+            }
+        elif method == "sessions.patchMany":
+            patch = params.get("patch") if isinstance(params.get("patch"), dict) else {}
+            targets = params.get("targets") if isinstance(params.get("targets"), list) else []
+            keys = [_str(t.get("key")) for t in targets if isinstance(t, dict)]
+            if isinstance(patch.get("archived"), bool) and keys:
+                self.pending[doc["id"]] = {
+                    "many": [
+                        {
+                            "action": "session.archive" if patch["archived"] else "session.unarchive",
+                            "method": method,
+                            "target_session_id": k,
+                        }
+                        for k in keys
+                        if k
+                    ]
+                }
 
     def from_gateway(self, msg: str | bytes) -> None:
         if not isinstance(msg, str):
@@ -175,7 +211,20 @@ class Watch:
             elif rid in self.pending:
                 action = self.pending.pop(rid)
                 err = doc.get("error") if isinstance(doc.get("error"), dict) else {}
-                self.emit(self, action | {"ok": bool(doc.get("ok")), "error": _str(err.get("code"))})
+                result = {"ok": bool(doc.get("ok")), "error": _str(err.get("code"))}
+                if "many" not in action:
+                    self.emit(self, action | result)
+                    return
+                # patchMany answers per target: {outcomes: [{ok, key, error?}]}
+                payload = doc.get("payload") if isinstance(doc.get("payload"), dict) else {}
+                outcomes = {o.get("key"): o for o in payload.get("outcomes") or [] if isinstance(o, dict)}
+                for one in action["many"]:
+                    o = outcomes.get(one["target_session_id"])
+                    if o is None:
+                        self.emit(self, one | result)
+                    else:
+                        o_err = o.get("error") if isinstance(o.get("error"), dict) else {}
+                        self.emit(self, one | {"ok": bool(o.get("ok")), "error": _str(o_err.get("code"))})
         elif ".approval.requested" in msg:
             doc = _json(msg)
             if doc and doc.get("event") in PROMPT_EVENTS:
@@ -183,7 +232,8 @@ class Watch:
 
     def closed(self) -> None:
         for action in self.pending.values():  # sent, but the gateway never answered on this socket
-            self.emit(self, action | {"ok": None})
+            for one in action.get("many", [action]):
+                self.emit(self, one | {"ok": None})
         self.pending.clear()
 
 

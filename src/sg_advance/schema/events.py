@@ -273,15 +273,15 @@ class ApprovalResolution(StrictModel):
 
 class OperatorAction(StrictModel):
     """A person acting on the gateway's control surface: answering an approval prompt, stopping a
-    run. Recorded by the audit proxy between the identity proxy and the gateway, so ``principal``
-    is the person who acted (from SSO), not the one whose agent ran. OpenClaw itself only stores
-    the client app as the resolver.
+    run, archiving or deleting a conversation. Recorded by the audit proxy between the identity
+    proxy and the gateway, so ``principal`` is the person who acted (from SSO), not the one whose
+    agent ran. OpenClaw itself only stores the client app as the resolver.
 
     Only control messages are read; conversations pass through untouched.
     """
 
     kind: Literal[EventKind.OPERATOR_ACTION] = EventKind.OPERATOR_ACTION
-    action: Literal["approval.resolve", "run.abort"]
+    action: Literal["approval.resolve", "run.abort", "session.delete", "session.archive", "session.unarchive"]
     method: str = Field(description="Gateway RPC the person's client sent, e.g. plugin.approval.resolve")
     ok: bool | None = Field(default=None, description="Gateway accepted it; None if no answer was seen")
     error: str | None = Field(default=None, description="Gateway error code when refused")
@@ -295,6 +295,10 @@ class OperatorAction(StrictModel):
         default=None, description="Session of the approval or the stopped run"
     )
     target_run_id: str | None = None
+    archived_only: bool | None = Field(
+        default=None, description="session.delete: only if already archived (what members may do)"
+    )
+    delete_transcript: bool | None = Field(default=None, description="session.delete: transcript removed too")
 
 
 Payload = Annotated[

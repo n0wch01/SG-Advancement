@@ -823,7 +823,7 @@
     },
     "OperatorAction": {
       "additionalProperties": false,
-      "description": "A person acting on the gateway's control surface: answering an approval prompt, stopping a\nrun. Recorded by the audit proxy between the identity proxy and the gateway, so ``principal``\nis the person who acted (from SSO), not the one whose agent ran. OpenClaw itself only stores\nthe client app as the resolver.\n\nOnly control messages are read; conversations pass through untouched.",
+      "description": "A person acting on the gateway's control surface: answering an approval prompt, stopping a\nrun, archiving or deleting a conversation. Recorded by the audit proxy between the identity\nproxy and the gateway, so ``principal`` is the person who acted (from SSO), not the one whose\nagent ran. OpenClaw itself only stores the client app as the resolver.\n\nOnly control messages are read; conversations pass through untouched.",
       "properties": {
         "kind": {
           "const": "operator.action",
@@ -834,7 +834,10 @@
         "action": {
           "enum": [
             "approval.resolve",
-            "run.abort"
+            "run.abort",
+            "session.delete",
+            "session.archive",
+            "session.unarchive"
           ],
           "title": "Action",
           "type": "string"
@@ -944,6 +947,32 @@
           ],
           "default": null,
           "title": "Target Run Id"
+        },
+        "archived_only": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "session.delete: only if already archived (what members may do)",
+          "title": "Archived Only"
+        },
+        "delete_transcript": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "session.delete: transcript removed too",
+          "title": "Delete Transcript"
         }
       },
       "required": [

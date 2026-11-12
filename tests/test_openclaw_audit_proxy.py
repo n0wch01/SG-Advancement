@@ -59,6 +59,20 @@ class FakeGateway:
                 await ws.send(json.dumps({"type": "res", "id": rid, "ok": True, "payload": [record]}))
             elif method == "exec.approval.resolve":
                 await ws.send(json.dumps({"type": "res", "id": rid, "ok": True, "payload": {"ok": True}}))
+            elif method == "sessions.delete":
+                if req["params"].get("archivedOnly"):
+                    await ws.send(json.dumps({"type": "res", "id": rid, "ok": True, "payload": {"ok": True}}))
+                else:
+                    err = {"code": "FORBIDDEN", "message": "missing scope: operator.admin"}
+                    await ws.send(json.dumps({"type": "res", "id": rid, "ok": False, "error": err}))
+            elif method == "sessions.patchMany":
+                outcomes = [
+                    {"ok": True, "key": "s-a"},
+                    {"ok": False, "key": "s-b", "error": {"code": "FORBIDDEN", "message": "not yours"}},
+                ]
+                await ws.send(
+                    json.dumps({"type": "res", "id": rid, "ok": True, "payload": {"outcomes": outcomes}})
+                )
             elif method == "chat.abort":
                 err = {"code": "INVALID_REQUEST", "message": "unauthorized"}
                 await ws.send(json.dumps({"type": "res", "id": rid, "ok": False, "error": err}))
@@ -201,3 +215,64 @@ async def test_only_the_identity_proxy_may_connect(gateway, enrolled: Sensor) ->
                 pass
     finally:
         task.cancel()
+
+
+async def test_archiving_and_deleting_conversations(gateway, enrolled: Sensor) -> None:
+    """Members may only delete archived sessions (OpenClaw policy); every attempt is recorded."""
+    _, upstream = gateway
+    _, task, url = await start(enrolled, upstream)
+    reqs = [
+        {"type": "req", "id": "q1", "method": "sessions.patch", "params": {"key": "s-1", "archived": True}},
+        {"type": "req", "id": "q2", "method": "sessions.patch", "params": {"key": "s-1", "label": "x"}},
+        {
+            "type": "req",
+            "id": "q3",
+            "method": "sessions.delete",
+            "params": {"key": "s-1", "archivedOnly": True},
+        },
+        {
+            "type": "req",
+            "id": "q4",
+            "method": "sessions.delete",
+            "params": {"key": "s-2", "deleteTranscript": True},
+        },
+        {
+            "type": "req",
+            "id": "q5",
+            "method": "sessions.patchMany",
+            "params": {"targets": [{"key": "s-a"}, {"key": "s-b"}], "patch": {"archived": True}},
+        },
+    ]
+    try:
+        async with connect(url, additional_headers=IDENTITY) as ws:  # type: ignore[arg-type]
+            await ws.recv()
+            for req in reqs:
+                await ws.send(json.dumps(req))
+                await ws.recv()
+        await until(lambda: len(actions(enrolled)) == 5)
+    finally:
+        task.cancel()
+    got = sorted(
+        (
+            a["payload"]["action"],
+            a["payload"]["target_session_id"],
+            a["payload"]["ok"],
+            a["payload"].get("error"),
+        )
+        for a in actions(enrolled)
+    )
+    assert got == [
+        ("session.archive", "s-1", True, None),  # the label-only patch (q2) is not an action
+        ("session.archive", "s-a", True, None),
+        ("session.archive", "s-b", False, "FORBIDDEN"),
+        ("session.delete", "s-1", True, None),
+        ("session.delete", "s-2", False, "FORBIDDEN"),  # direct delete needs operator.admin
+    ]
+    deletes = {
+        a["payload"]["target_session_id"]: a["payload"]
+        for a in actions(enrolled)
+        if a["payload"]["action"] == "session.delete"
+    }
+    assert deletes["s-1"]["archived_only"] is True
+    assert deletes["s-2"]["archived_only"] is False and deletes["s-2"]["delete_transcript"] is True
+    assert all(a["principal"]["user_id"] == "secops@corp.test" for a in actions(enrolled))
