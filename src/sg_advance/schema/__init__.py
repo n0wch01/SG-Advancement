@@ -21,6 +21,7 @@ from .events import (
     InventorySnapshot,
     LlmCall,
     NetEgress,
+    OperatorAction,
     Payload,
     PluginDescriptor,
     RuntimePin,
@@ -38,6 +39,7 @@ from .findings import Enforcement, Finding, ResponseAction, Severity, ThreatCate
 
 __all__ = [
     "ApprovalResolution",
+    "OperatorAction",
     "SCHEMA_VERSION",
     "AgentEvent",
     "AgentRef",

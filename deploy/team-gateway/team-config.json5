@@ -7,7 +7,8 @@
     mode: "local",
     bind: "lan",
     port: 18789,
-    trustedProxies: ["172.28.0.10"], // team-proxy only (compose network team-net)
+    // team-proxy (HTTP) and team-audit (WebSockets, after team-proxy) on compose network team-net
+    trustedProxies: ["172.28.0.10", "172.28.0.11"],
     auth: {
       mode: "trusted-proxy",
       trustedProxy: {

@@ -72,3 +72,38 @@ def test_approval_fatigue_is_flagged(enrolled: Sensor, cp: TestClient) -> None:
         any(f["rule_id"] == "approval-fatigue" for f in r["flagged"]) for r in rows
     )  # ... citing all 5
     assert sum(f["rule_id"] == "user-approved-high-risk" for r in rows for f in r["flagged"]) == 5
+
+
+def test_audit_proxy_names_who_actually_approved(enrolled: Sensor, cp: TestClient) -> None:
+    """Team gateway: alice's agent asked, secops pressed allow (seen by the audit proxy)."""
+    from datetime import UTC, datetime
+
+    from sg_advance.schema import AgentEvent
+
+    ctx = AdapterContext(enrolled, user_id="alice", hostname="gw")
+    judge(ctx, call("c1", "psql -c 'DELETE FROM users;'"))
+    pressed = AgentEvent.model_validate(
+        {
+            "ts": datetime.now(UTC),
+            "endpoint": {"device_id": "pending"},
+            "principal": {"user_id": "secops@corp.test"},
+            "agent": {"type": "openclaw", "session_id": "agent:main:main"},
+            "source": {"sensor": "openclaw_audit_proxy"},
+            "payload": {
+                "kind": "operator.action",
+                "action": "approval.resolve",
+                "method": "plugin.approval.resolve",
+                "decision": "allow-once",
+                "ok": True,
+                "approval_id": "ap1",
+                "call_id": "c1",
+            },
+        }
+    )
+    enrolled.process(pressed)
+    record_resolution(ctx, answer("c1", "allow-once"))
+    assert enrolled.flush().ok
+
+    [row] = approvals(cp)
+    assert row["user_id"] == "alice"  # whose agent wanted to run it
+    assert row["approver"] == "secops@corp.test" and row["approver_source"] == "audit_proxy"

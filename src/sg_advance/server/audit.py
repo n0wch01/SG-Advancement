@@ -4,14 +4,16 @@ Policy decision (2026-11-11): users approve risky actions themselves; security a
 acts on anything odd. This view joins each ``approval.resolved`` event with
 
 - the held ``tool.call`` (tool, redacted arguments) and the findings that asked for approval,
-- the audit findings it raised (``user-approved-high-risk``, ``approval-fatigue``).
+- the audit findings it raised (``user-approved-high-risk``, ``approval-fatigue``),
+- who actually pressed the button: the audit proxy's ``operator.action`` for the same tool call
+  (team gateway, M5b). Without it ``approver`` is whatever the agent reported, usually nothing.
 
 The console (M7) renders this endpoint; ``sga-server audit approvals`` prints it.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
@@ -23,6 +25,7 @@ from .db import EventRow, FindingRow
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 AUDIT_RULES = ("user-approved-high-risk", "approval-fatigue")
+_ACTION_SLACK = timedelta(hours=1)  # the person's answer is recorded before the plugin's own event
 
 
 class _Model(BaseModel):
@@ -59,6 +62,7 @@ class ApprovalOut(_Model):
     wait_ms: int | None
     requester: dict[str, str]  # channel / sender id that started the run
     approver: str | None
+    approver_source: str | None  # "audit_proxy" (identity-proxy header) or "agent" (self-reported)
     held_call: HeldCall | None
     asked_by: list[FindingRef]  # findings that put the call on hold
     flagged: list[FindingRef]  # audit findings raised by this answer
@@ -112,9 +116,26 @@ def list_approvals(
         for eid in f.doc.get("evidence_event_ids", []):
             flags.setdefault(eid, []).append(_ref(f.doc))
 
+    # Who answered: the audit proxy saw the person's own client send the decision.
+    call_ids = {d["payload"]["call_id"] for d in docs}
+    oldest = min(datetime.fromisoformat(str(d["ts"]).replace("Z", "+00:00")) for d in docs)
+    actions: dict[tuple[str, str], str] = {}
+    action_q = select(EventRow).where(
+        EventRow.kind == "operator.action", EventRow.ts >= oldest - _ACTION_SLACK
+    )
+    for a in db.scalars(action_q.order_by(EventRow.ts)):
+        ap = a.doc["payload"]
+        if (
+            ap.get("action") == "approval.resolve"
+            and ap.get("call_id") in call_ids
+            and ap.get("ok") is not False
+        ):
+            actions[(ap["call_id"], ap.get("decision") or "")] = a.doc["principal"]["user_id"]
+
     out = []
     for d in docs:
         p = d["payload"]
+        operator = actions.get((p["call_id"], p["decision"]))
         h = held.get(p.get("request_event_id") or "")
         out.append(
             ApprovalOut(
@@ -136,7 +157,8 @@ def list_approvals(
                     for k, v in d.get("labels", {}).items()
                     if k.startswith("requester_")
                 },
-                approver=p.get("approver"),
+                approver=operator or p.get("approver"),
+                approver_source="audit_proxy" if operator else ("agent" if p.get("approver") else None),
                 held_call=HeldCall(
                     event_id=h["event_id"],
                     ts=h["ts"],

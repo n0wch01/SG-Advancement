@@ -167,6 +167,19 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
             adapters.append(
                 OpenClawIntegrityAdapter(interval=args.integrity_interval, quarantine=not args.observe_only)
             )
+    if args.openclaw_audit_proxy:  # team gateway: who approved / stopped what (M5b)
+        if not args.audit_trusted_peer:
+            print(
+                "--openclaw-audit-proxy needs --audit-trusted-peer (the identity proxy's IP)", file=sys.stderr
+            )
+            return 2
+        from .adapters.openclaw_audit_proxy import OpenClawAuditProxyAdapter
+
+        adapters.append(
+            OpenClawAuditProxyAdapter(
+                args.openclaw_audit_proxy, args.openclaw_audit_upstream, args.audit_trusted_peer
+            )
+        )
     if args.replay:
         adapters.append(ReplayAdapter(args.replay, delay=args.replay_delay))
     if not adapters and args.no_local_api:
@@ -303,6 +316,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--log-level", default="info")
     p.add_argument("--socket", type=Path, help="local verdict API socket (default: <home>/sga.sock)")
     p.add_argument("--no-local-api", action="store_true", help="don't serve verdicts to gateway plugins")
+    p.add_argument(
+        "--openclaw-audit-proxy",
+        metavar="HOST:PORT",
+        help="relay identity-proxy WebSockets to the gateway, recording approvals and aborts per person",
+    )
+    p.add_argument("--openclaw-audit-upstream", default="ws://127.0.0.1:18789", metavar="URL")
+    p.add_argument(
+        "--audit-trusted-peer",
+        action="append",
+        default=[],
+        metavar="IP",
+        help="identity proxy address allowed to connect (repeatable)",
+    )
     p.add_argument(
         "--keep-chat-text",
         action="store_true",

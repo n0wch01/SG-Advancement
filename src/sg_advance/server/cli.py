@@ -124,7 +124,8 @@ def audit_main(argv: list[str]) -> int:
         print(
             f"{r['ts'][:19]}  {r['user_id']:<12} {r['decision']:<11} {r['tool']:<10} "
             f"sev={r['max_severity'] or '-':<8} wait={wait:<5} via={r['judged_by']:<8} "
-            f"rules={','.join(r['rule_ids']) or '-'}  {('FLAG ' + flags) if flags else ''}"
+            f"rules={','.join(r['rule_ids']) or '-'}  by={r.get('approver') or '?'}"
+            f"  {('FLAG ' + flags) if flags else ''}"
         )
         if args_text:
             print(f"    {args_text}")

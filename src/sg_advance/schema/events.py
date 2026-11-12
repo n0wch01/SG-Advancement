@@ -30,6 +30,7 @@ class EventKind(StrEnum):
     CONFIG_SNAPSHOT = "config.snapshot"
     INTEGRITY_REPORT = "integrity.report"
     APPROVAL_RESOLVED = "approval.resolved"
+    OPERATOR_ACTION = "operator.action"
 
 
 class ToolProviderKind(StrEnum):
@@ -270,6 +271,32 @@ class ApprovalResolution(StrictModel):
     approver: str | None = None
 
 
+class OperatorAction(StrictModel):
+    """A person acting on the gateway's control surface: answering an approval prompt, stopping a
+    run. Recorded by the audit proxy between the identity proxy and the gateway, so ``principal``
+    is the person who acted (from SSO), not the one whose agent ran. OpenClaw itself only stores
+    the client app as the resolver.
+
+    Only control messages are read; conversations pass through untouched.
+    """
+
+    kind: Literal[EventKind.OPERATOR_ACTION] = EventKind.OPERATOR_ACTION
+    action: Literal["approval.resolve", "run.abort"]
+    method: str = Field(description="Gateway RPC the person's client sent, e.g. plugin.approval.resolve")
+    ok: bool | None = Field(default=None, description="Gateway accepted it; None if no answer was seen")
+    error: str | None = Field(default=None, description="Gateway error code when refused")
+    decision: str | None = Field(default=None, description="approval.resolve: allow-once, deny, ...")
+    approval_id: str | None = None
+    call_id: str | None = Field(
+        default=None, description="Tool call the approval was for, when the gateway said"
+    )
+    tool: str | None = None
+    target_session_id: str | None = Field(
+        default=None, description="Session of the approval or the stopped run"
+    )
+    target_run_id: str | None = None
+
+
 Payload = Annotated[
     SessionStart
     | SessionEnd
@@ -283,7 +310,8 @@ Payload = Annotated[
     | SensorHealth
     | ConfigSnapshot
     | IntegrityReport
-    | ApprovalResolution,
+    | ApprovalResolution
+    | OperatorAction,
     Field(discriminator="kind"),
 ]
 

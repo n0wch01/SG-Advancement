@@ -821,6 +821,138 @@
       "title": "NetEgress",
       "type": "object"
     },
+    "OperatorAction": {
+      "additionalProperties": false,
+      "description": "A person acting on the gateway's control surface: answering an approval prompt, stopping a\nrun. Recorded by the audit proxy between the identity proxy and the gateway, so ``principal``\nis the person who acted (from SSO), not the one whose agent ran. OpenClaw itself only stores\nthe client app as the resolver.\n\nOnly control messages are read; conversations pass through untouched.",
+      "properties": {
+        "kind": {
+          "const": "operator.action",
+          "default": "operator.action",
+          "title": "Kind",
+          "type": "string"
+        },
+        "action": {
+          "enum": [
+            "approval.resolve",
+            "run.abort"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "method": {
+          "description": "Gateway RPC the person's client sent, e.g. plugin.approval.resolve",
+          "title": "Method",
+          "type": "string"
+        },
+        "ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Gateway accepted it; None if no answer was seen",
+          "title": "Ok"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Gateway error code when refused",
+          "title": "Error"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "approval.resolve: allow-once, deny, ...",
+          "title": "Decision"
+        },
+        "approval_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approval Id"
+        },
+        "call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool call the approval was for, when the gateway said",
+          "title": "Call Id"
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool"
+        },
+        "target_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Session of the approval or the stopped run",
+          "title": "Target Session Id"
+        },
+        "target_run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Run Id"
+        }
+      },
+      "required": [
+        "action",
+        "method"
+      ],
+      "title": "OperatorAction",
+      "type": "object"
+    },
     "PluginDescriptor": {
       "additionalProperties": false,
       "properties": {
@@ -993,6 +1125,7 @@
         "openclaw_plugin",
         "openclaw_config",
         "openclaw_integrity",
+        "openclaw_audit_proxy",
         "claude_code_hook",
         "gemini_cli_hook",
         "codex_cli_hook",
@@ -1465,6 +1598,7 @@
           "llm.call": "#/$defs/LlmCall",
           "message.assistant": "#/$defs/AssistantMessage",
           "net.egress": "#/$defs/NetEgress",
+          "operator.action": "#/$defs/OperatorAction",
           "prompt.user": "#/$defs/UserPrompt",
           "sensor.health": "#/$defs/SensorHealth",
           "session.end": "#/$defs/SessionEnd",
@@ -1513,6 +1647,9 @@
         },
         {
           "$ref": "#/$defs/ApprovalResolution"
+        },
+        {
+          "$ref": "#/$defs/OperatorAction"
         }
       ],
       "title": "Payload"

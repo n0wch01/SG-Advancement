@@ -21,6 +21,7 @@ services:
   # Not published to the host: people reach it only through team-proxy, which stamps identity.
   team-gateway:
     profiles: [team]
+    image: sg-advance-team-gateway:local  # also used by team-audit
     build:
       context: .
       dockerfile: deploy/team-gateway/Dockerfile
@@ -38,6 +39,27 @@ services:
     depends_on: [control-plane]
     restart: unless-stopped
 
+  # SG-Advance audit proxy: WebSockets from team-proxy pass through here, so approvals and aborts
+  # are recorded with the person (OpenClaw itself stores only the client app as the resolver).
+  team-audit:
+    profiles: [team]
+    image: sg-advance-team-gateway:local
+    pull_policy: never
+    entrypoint: ["tini", "-s", "--", "/opt/sga/audit-start.sh"]
+    healthcheck:
+      disable: true  # the image's check probes the gateway port, which this container doesn't serve
+    environment:
+      SGA_SERVER: http://control-plane:8000
+      SGA_ENROLL_TOKEN: ${SGA_AUDIT_ENROLL_TOKEN:-}
+    volumes:
+      - team-audit:/home/node/.sg-advance
+    networks:
+      corp-net: {}
+      team-net:
+        ipv4_address: 172.28.0.11
+    depends_on: [team-gateway]
+    restart: unless-stopped
+
   # Demo identity proxy (stand-in for Cloudflare Access / SSO): one host port per employee.
   team-proxy:
     profiles: [team]
@@ -50,7 +72,7 @@ services:
     networks:
       team-net:
         ipv4_address: 172.28.0.10
-    depends_on: [team-gateway]
+    depends_on: [team-gateway, team-audit]
     restart: unless-stopped
 
 networks:
@@ -65,3 +87,4 @@ volumes:
   control-plane-data: {}
   team-openclaw: {}
   team-sga: {}
+  team-audit: {}
