@@ -94,12 +94,22 @@ class UserPrompt(StrictModel):
     kind: Literal[EventKind.PROMPT_USER] = EventKind.PROMPT_USER
     text: str
     truncated: bool = False
+    withheld: bool = Field(
+        default=False,
+        description="Text left on the endpoint: no rule hit, so only its length is sent (data minimization)",
+    )
+    text_chars: int | None = Field(default=None, ge=0, description="Length of the original text")
 
 
 class AssistantMessage(StrictModel):
     kind: Literal[EventKind.MESSAGE_ASSISTANT] = EventKind.MESSAGE_ASSISTANT
     text: str
     truncated: bool = False
+    withheld: bool = Field(
+        default=False,
+        description="Text left on the endpoint: no rule hit, so only its length is sent (data minimization)",
+    )
+    text_chars: int | None = Field(default=None, ge=0, description="Length of the original text")
 
 
 class ToolCall(StrictModel):

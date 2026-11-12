@@ -109,9 +109,19 @@ def _cmd_replay(home: SensorHome, args: argparse.Namespace) -> int:
 def _openclaw_token(home: SensorHome, token_file: Path | None) -> str:
     """Gateway token: OPENCLAW_GATEWAY_TOKEN, else a 0600 file (default <home>/openclaw-token).
     A file keeps the secret out of launchd plists and shell history."""
-    if os.environ.get("OPENCLAW_GATEWAY_TOKEN"):
-        return os.environ["OPENCLAW_GATEWAY_TOKEN"]
-    path = token_file or home.root / "openclaw-token"
+    return _gateway_secret(home, token_file, "OPENCLAW_GATEWAY_TOKEN", "openclaw-token")
+
+
+def _openclaw_password(home: SensorHome, password_file: Path | None) -> str:
+    """Gateway password (team gateways in trusted-proxy mode): OPENCLAW_GATEWAY_PASSWORD, else a
+    0600 file (default <home>/openclaw-password)."""
+    return _gateway_secret(home, password_file, "OPENCLAW_GATEWAY_PASSWORD", "openclaw-password")
+
+
+def _gateway_secret(home: SensorHome, file: Path | None, env: str, default_name: str) -> str:
+    if os.environ.get(env):
+        return os.environ[env]
+    path = file or home.root / default_name
     if path.exists():
         if path.stat().st_mode & 0o077:
             raise SensorError(f"{path} must not be readable by others (chmod 600)")
@@ -127,6 +137,7 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
         level=args.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     sensor = Sensor(home)
+    sensor.keep_chat_text = args.keep_chat_text
     adapters: list = []
     if args.openclaw:
         try:
@@ -140,6 +151,7 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
             OpenClawAdapter(
                 args.openclaw,
                 token=_openclaw_token(home, args.openclaw_token_file),
+                password=_openclaw_password(home, args.openclaw_password_file),
                 enforce=not args.observe_only,
                 gate_exec=args.gate_exec,
                 capture=args.capture,
@@ -163,7 +175,12 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
     from .registry import PluginRegistry
 
     plugins = PluginRegistry(state_path=home.root / "plugin-state.json")  # survives restarts
-    ctx = AdapterContext(sensor, user_id=args.user, hostname=socket.gethostname(), plugins=plugins)
+    from .adapters.openclaw_people import OpenClawPeople
+
+    people = OpenClawPeople(state_path=home.root / "openclaw-people.json")  # team gateway attribution
+    ctx = AdapterContext(
+        sensor, user_id=args.user, hostname=socket.gethostname(), plugins=plugins, people=people
+    )
     local_api = None
     if not args.no_local_api:
         from .plugin_api import LocalApiServer
@@ -287,9 +304,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--socket", type=Path, help="local verdict API socket (default: <home>/sga.sock)")
     p.add_argument("--no-local-api", action="store_true", help="don't serve verdicts to gateway plugins")
     p.add_argument(
+        "--keep-chat-text",
+        action="store_true",
+        help="send every prompt/reply text to the control plane (default: only those a rule hit)",
+    )
+    p.add_argument(
         "--openclaw-token-file",
         type=Path,
         help="gateway token file, mode 0600 (default: <home>/openclaw-token)",
+    )
+    p.add_argument(
+        "--openclaw-password-file",
+        type=Path,
+        help="gateway password file for trusted-proxy team gateways (0600, default <home>/openclaw-password)",
     )
     p.add_argument(
         "--openclaw-config",

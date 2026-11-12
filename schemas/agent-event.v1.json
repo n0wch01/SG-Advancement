@@ -237,6 +237,26 @@
           "default": false,
           "title": "Truncated",
           "type": "boolean"
+        },
+        "withheld": {
+          "default": false,
+          "description": "Text left on the endpoint: no rule hit, so only its length is sent (data minimization)",
+          "title": "Withheld",
+          "type": "boolean"
+        },
+        "text_chars": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Length of the original text",
+          "title": "Text Chars"
         }
       },
       "required": [
@@ -1362,6 +1382,26 @@
           "default": false,
           "title": "Truncated",
           "type": "boolean"
+        },
+        "withheld": {
+          "default": false,
+          "description": "Text left on the endpoint: no rule hit, so only its length is sent (data minimization)",
+          "title": "Withheld",
+          "type": "boolean"
+        },
+        "text_chars": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Length of the original text",
+          "title": "Text Chars"
         }
       },
       "required": [

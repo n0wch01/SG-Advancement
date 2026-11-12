@@ -98,6 +98,19 @@ class ProcessResult:
     event: AgentEvent  # the stamped event the rules saw
 
 
+_CHAT_KINDS = ("prompt.user", "message.assistant")
+
+
+def withhold_chat_text(event: AgentEvent) -> AgentEvent:
+    """Drop the text of a prompt/reply, keeping that it happened and how long it was."""
+    p = event.payload
+    if p.kind.value not in _CHAT_KINDS or p.withheld:  # type: ignore[union-attr]
+        return event
+    text = p.text  # type: ignore[union-attr]
+    payload = p.model_copy(update={"text": "", "withheld": True, "text_chars": len(text)})
+    return event.model_copy(update={"payload": payload, "raw": None})
+
+
 class Sensor:
     def __init__(self, home: SensorHome, transport: Transport | None = None) -> None:
         creds = home.load_credentials()
@@ -114,6 +127,9 @@ class Sensor:
         # signed, approved package). Rules opt in with ``allow_trusted``. Persisted so a restart
         # doesn't flag known-good plugins before the first integrity scan finishes.
         self.trusted: dict[str, set[str]] = self._load_trusted()
+        # Prompts and replies are employees' conversations: only those a rule hit leave the endpoint
+        # with their text (detection already saw the full text locally). ``--keep-chat-text`` opts out.
+        self.keep_chat_text = False
 
     # ── trusted sets ─────────────────────────────────────────────────────────
 
@@ -205,7 +221,10 @@ class Sensor:
         if enforcement is not None:
             findings = [f.model_copy(update={"response": enforcement}) for f in findings]
             result.verdict.findings = findings
-        self.spool.add([redact_event(result.event), *findings], event_priority(result.event, result.verdict))
+        event = redact_event(result.event)
+        if not self.keep_chat_text and not result.verdict.hits:
+            event = withhold_chat_text(event)
+        self.spool.add([event, *findings], event_priority(result.event, result.verdict))
 
     def process(self, event: AgentEvent) -> ProcessResult:
         """evaluate + record, for observation-only callers (replay)."""
