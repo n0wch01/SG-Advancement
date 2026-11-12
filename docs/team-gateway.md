@@ -5,6 +5,7 @@ SG-Advance가 이 환경에서 하는 일은 네 가지다.
 
 - 직원별 **사용자 구분**: 툴 호출, 결과, 프롬프트를 그 일을 시킨 사람의 이름으로 기록한다.
 - **승인자 기록**: 누가 승인 버튼을 눌렀는지, 누가 실행을 중단했는지, 누가 대화를 보관·삭제했는지 남긴다.
+- **위임 사슬**: 하위 에이전트가 한 일을 위임한 사람에게 연결하고, 부모·뿌리 세션과 깊이를 남긴다.
 - **최소 권한**: 직원은 서로의 대화를 볼 수 없다. 보안팀만 전체를 본다.
 - **데이터 최소화**: 대화 원문은 룰에 걸린 것만 관제 서버로 보낸다.
 
@@ -67,6 +68,7 @@ OpenClaw는 이메일로 역할을 미리 정하는 설정이 없고(GitHub 로�
 
 ```bash
 docker compose exec team-gateway /opt/sga/venv/bin/python /opt/sga/set-role.py secops@corp.test security
+docker compose exec team-gateway /opt/sga/venv/bin/python /opt/sga/set-role.py bob@corp.test default   # 배정 해제
 ```
 
 `identityScopes`로 관리자 권한을 줘도 **역할의 권한 상한이 먼저 적용된다**. 처음에는 secops가 `member` 상한에 걸려 관리자 권한이 잘려 나갔고,
@@ -84,7 +86,7 @@ docker compose exec team-gateway /opt/sga/venv/bin/python /opt/sga/set-role.py s
 | 사용자 `session.message`의 `__openclaw` | `senderIdentity`(프로필 id), `idempotencyKey: "<runId>:user"` → **그 run을 시킨 사람** |
 | 세션 정보(`sessions.list`, `sessions.changed`) | `owner.actor` → 대화 주인 |
 
-- 판단 순서는 **run을 보낸 사람 → 대화 주인 → 센서 기본 사용자(`--user`)**다. 개인 게이트웨이에서는 결과가 예전과 같다.
+- 판단 순서는 **run을 보낸 사람 → 위임 사슬 → 대화 주인 → 센서 기본 사용자(`--user`)**다. 개인 게이트웨이에서는 결과가 예전과 같다.
 - `principal.user_id`는 이메일이고, 이메일을 모르면 `openclaw-profile:<id>`로 남긴다. 역할은 `principal.groups`(`openclaw-role:member`)에 들어간다.
 - 라벨 `openclaw.attribution`(`sender` / `session_owner`)으로 근거를 남긴다. 남의 공유 대화에 쓴 경우에는 `openclaw.session_owner`도 함께 남긴다.
 - **사람이 시키지 않은 실행**(하트비트, 크론, 재시작 복구)은 대화 주인으로 기록하고 `session_owner` 라벨로 구분한다(결정 A).
@@ -92,6 +94,38 @@ docker compose exec team-gateway /opt/sga/venv/bin/python /opt/sga/set-role.py s
 - 사람 목록은 `~/.sg-advance/openclaw-people.json`(0600)에 저장한다. 재시작 직후 WS가 다시 붙기 전(실측 약 2초)에도 플러그인 판정에 사람이 붙는다.
 
 실환경(2026-11-12): alice와 bob이 각자 새 대화에서 셸 명령을 시켰고, 툴 호출·결과·프롬프트가 각각 `alice@corp.test`, `bob@corp.test`로 기록됐다.
+
+## 위임 사슬 (하위 에이전트)
+
+에이전트는 `sessions_spawn` 툴로 하위 에이전트를 만든다. 자식 세션은 **사람이 아니라 에이전트 소유**다
+(`createdActor {type: agent}`, `createdVia: "spawn"`, `spawnedBy`·`parentSessionKey`, `spawnDepth`). 그래서 소유자만 보면
+자식이 한 일이 아무에게도 연결되지 않는다(처음 실환경에서는 `team-gateway`로 기록됐다).
+
+- 부모 run 안의 `sessions_spawn` 결과(`childSessionKey`)로 **자식 세션 → 위임한 run**을 기억한다. 자식의 툴 호출은 그 run을 보낸 사람이다.
+  결과를 놓쳤으면 부모 세션의 기록을 따라 올라간다(손자 세션도 맨 위 사람까지). 근거 라벨은 `openclaw.attribution: delegation`이다.
+- 모든 이벤트의 `agent`에 `parent_session_id`, `root_session_id`, `spawn_depth`를 붙이고, 자식 세션 시작은 `session.start reason: spawned`로 남긴다.
+- 사람이 연 새 대화에도 `parentSessionKey`(에이전트의 기본 대화)가 붙지만 `createdVia: operator`라서 위임으로 보지 않는다.
+- 위임 관계는 사람 목록 파일에 함께 저장해 센서가 재시작해도 이어진다. 순환이 생겨도 멈추지 않는다(최대 16단계).
+
+실환경(2026-11-12): secops가 하위 에이전트에게 `pwd`를 맡겼다. 자식 세션의 `exec` 두 건(Code Mode 바깥과 안쪽)이 `secops@corp.test`,
+`delegation`, `spawn_depth: 1`로 기록됐다.
+
+### 직원은 하위 에이전트를 쓸 수 없다 (OpenClaw 2026.11.3)
+
+자식 세션이 에이전트 소유라서, 관리자가 아닌 직원에게는 자기가 만든 자식도 **남의 대화**가 되고 공개 범위가 그대로 적용된다.
+
+| 직원 역할의 `sessions.others` | 결과 (실험, 2026-11-12) |
+|---|---|
+| `none` (운영 설정) | 실패: `Session "agent:main:subagent:…" was not found` (alice) |
+| `view` (bob에게만 임시 역할로 시험 후 되돌림) | 실패: `session is shared for this connection` |
+| `write` 또는 `operator.admin` | 성공 (secops) |
+
+위임한 세션(`controlOwnerSessionKey`)을 근거로 접근을 허용하지 않는 것은 OpenClaw 쪽 빈틈으로 보인다.
+직원에게 모든 대화의 쓰기 권한을 줄 수는 없으므로 **결정(2026-11-12): `none`을 유지하고 직원은 위임을 쓰지 않는다.**
+위임 기능과 에이전트 간 인젝션 전파(T18) 데모는 보안팀 계정으로 한다.
+
+운영 지침: 하위 에이전트가 꼭 필요한 팀은 **게이트웨이를 따로 둔다.** OpenClaw는 게이트웨이 하나를 신뢰 경계 하나로 보므로,
+팀원끼리 대화를 공유해도 되는 팀만 별도 게이트웨이에서 `write`를 쓴다. 데모 환경에는 만들지 않았다.
 
 ## 감사 프록시: 누가 승인하고, 중단하고, 지웠나
 
@@ -135,6 +169,7 @@ alice가 보관하지 않은 대화를 바로 지우려 하자 화면이 요청�
 | 대화 바로 삭제 | `operator.admin` | `resolveSessionsDeleteRequiredScope` |
 | 보관된 대화 삭제 | `operator.write` (보관 → 삭제) | 같은 함수, `archivedOnly: true` |
 | 남의 대화 보기 | 역할의 `sessions.others` (`none`/`suggest`/`view`/`write`) | 데모는 `member: none`, `security: view` |
+| 하위 에이전트 만들기 | `operator.admin` 또는 `sessions.others: write` (자식이 에이전트 소유라서) | 위 실험 |
 
 대화 삭제는 사고 조사에서 보면 증거 삭제다. 그래서 OpenClaw 기본값(직원은 보관을 거쳐야 함)을 그대로 두고 모든 시도를 기록한다.
 

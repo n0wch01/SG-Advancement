@@ -10,7 +10,8 @@ AgentEvent
 ├ schema_version "1", event_id, ts(UTC aware), received_ts(중앙이 기록)
 ├ endpoint   { device_id, hostname, os, ip }          ← 어디서
 ├ principal  { user_id, display_name, groups }        ← 누구를 대신해
-├ agent      { type, session_id, run_id, model, cwd } ← 어떤 에이전트가
+├ agent      { type, session_id, run_id, model, cwd,  ← 어떤 에이전트가
+│              parent_session_id, root_session_id, spawn_depth }  ← 하위 에이전트면 누가 위임했나
 ├ source     { sensor, sensor_version, seq }          ← 어떻게 관측했나
 ├ payload    (kind로 구분되는 union)
 ├ labels     { scenario: "S1", ... }
@@ -44,7 +45,7 @@ AgentEvent
 | `sga_source` | `openclaw_plugin` | 게이트웨이 플러그인이 실행 전에 보낸 판정 요청 |
 | `sga_plugin` | `missing` | 플러그인이 있어야 하는 장비에서 플러그인 판정 없이 실행된 툴 → `openclaw-plugin-bypass` |
 | `sga_verdict` | `degraded` | 데몬이 없어 `sga-sensor evaluate`(캐시 정책)로 판정한 결과 |
-| `openclaw.attribution` | `sender` / `session_owner` | 팀 게이트웨이에서 principal을 정한 근거 (run을 보낸 사람 / 대화 주인) |
+| `openclaw.attribution` | `sender` / `delegation` / `session_owner` | 팀 게이트웨이에서 principal을 정한 근거 (run을 보낸 사람 / 위임 사슬의 맨 위 사람 / 대화 주인) |
 | `openclaw.profile_id` | 프로필 id | OpenClaw 게이트웨이의 사람 식별자 |
 | `openclaw.session_owner` | 이메일 | 남의 공유 대화에 쓴 경우 대화 주인 |
 | `openclaw.tool_kind` | `code_mode_exec` | Code Mode 바깥 호출 (인자가 JavaScript) |
