@@ -161,7 +161,8 @@ uv run sga-detect examples/events/openclaw_team.jsonl
 
 | 룰 | 내용 | 응답 |
 |---|---|---|
-| `openclaw-skill-unapproved` (high) | `openclaw-bundled`(이미지 기본)과 `openclaw-extra`(설치된 플러그인의 스킬) 밖의 스킬: ClawHub 설치(`openclaw-managed`), 작업 공간(`openclaw-workspace`) | 알림 |
+| `openclaw-skill-unapproved` (high) | `openclaw-bundled`(이미지 기본)과 `openclaw-extra`(설치된 플러그인의 스킬) 밖의 스킬: ClawHub 설치(`openclaw-managed`), 작업 공간(`openclaw-workspace`). 보안팀이 해시로 승인한 스킬은 제외 | 알림 |
+| `openclaw-skill-tampered` (critical) | 승인된 스킬의 파일이 승인 당시와 다름 ([sensor.md](sensor.md#스킬-무결성)) | 격리 (스킬 비활성화) |
 | `mcp-tool-description-poisoning` | 툴뿐 아니라 스킬 설명의 숨은 지시도 검사 | 격리 |
 | `openclaw-agent-permission-full` (medium) | 에이전트 기본 권한 모드가 `full` (`read-only` < `guarded` < `workspace` < `full`). 결정 A(2026-11-12): 경보만, 실제로 낮출지는 추후 | 알림 |
 

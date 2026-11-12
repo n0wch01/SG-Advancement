@@ -435,6 +435,22 @@ sga-sensor run --openclaw          # 데몬이 <home>/sga.sock을 연다 (--sock
 - unix 소켓 경로는 104바이트(macOS)를 넘을 수 없다. 센서 폴더가 깊으면 `--socket`과 플러그인 `socketPath`를 짧은 경로로 맞춘다.
 - 테스트: `node --test integrations/openclaw-plugin/policy.test.ts`(Node ≥ 22.18), Python 쪽은 `tests/test_plugin_api.py`(실제 TypeScript 코드가 실제 데몬 소켓에 묻는 테스트 포함).
 
+
+### 스킬 무결성
+
+스킬(`SKILL.md` + 스크립트)도 플러그인과 같은 공급망 경로다(ClawHavoc, 2026). WS 어댑터가 에이전트별 인벤토리를 만들 때
+기본 제공(`openclaw-bundled`)이 아닌 스킬 폴더를 해시하고(`integrity.dir_digest`), 정책의 스킬 매니페스트(`sga-server manifest skill`)와 비교한다.
+
+| 결과 (`skills[].integrity`) | 뜻 | 효과 |
+|---|---|---|
+| `verified` | 보안팀이 승인한 해시와 같음 | `openclaw_skills` 신뢰 집합 → `openclaw-skill-unapproved`에서 빠짐 |
+| `unknown` | 아무도 승인하지 않음 | 출처가 managed·workspace면 `openclaw-skill-unapproved` |
+| `mismatch` | 승인된 스킬의 파일이 바뀜 | `openclaw-skill-tampered`(critical) → `openclaw config set skills.entries.<key>.enabled false`로 격리 |
+| 없음 | 기본 제공 스킬(본체 무결성이 맡음), 또는 게이트웨이가 다른 호스트라 파일을 못 읽음 | 이름 기준 허용만 |
+
+실환경(2026-11-12, 팀 게이트웨이): `research`의 작업 공간 스킬 `deploy-notes`가 `unknown` → 내용 검토 후 `--current`로 승인 → `verified`, 미허가 finding 사라짐
+→ `SKILL.md`에 한 줄 추가 → `mismatch`, `openclaw-skill-tampered` + 자동 비활성화(`enforced: true, skills disabled: deploy-notes`) → 되돌려 다시 켬.
+
 ## 어댑터 계약
 
 [adapters/base.py](../src/sg_advance/sensor/adapters/base.py)

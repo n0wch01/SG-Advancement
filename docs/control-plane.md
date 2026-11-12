@@ -121,7 +121,13 @@ sga-server manifest list
 sga-server manifest add openclaw@2026.11.3 [--approve] [--by 이름]   # 지금 검증
 sga-server manifest approve|revoke openclaw@2026.11.3 --by 이름
 sga-server manifest pin sg-advance --dir integrations/openclaw-plugin --version 0.1.0   # npm에 없는 사내 플러그인
+sga-server manifest skill openclaw-workspace:deploy-notes --current --by 이름   # 스킬: 센서가 보고한 해시를 검토 후 승인
+sga-server manifest skill openclaw-managed:pdf-tools --dir ./pdf-tools          # 또는 검토한 폴더 / --digest
+sga-server manifest revoke skill:openclaw-workspace:deploy-notes@6ffaf3bee0a4   # 스킬 승인 철회 (spec은 승인 결과에 나옴)
 ```
+
+- **스킬**(`POST /v1/admin/manifests/skill`): 스킬은 배포자 서명이 없는 경우가 많아(작업 공간 스킬, ClawHub) 보안팀이 내용을 검토하고
+  **정확한 파일 해시**를 승인한다. spec은 `skill:<출처:이름>@<해시 앞 12자리>`이고, 스킬이 바뀌면 새 해시라 다시 승인해야 한다.
 
 - 센서가 처음 보는 버전을 보고하면 서버가 **백그라운드에서 자동 검증**한다(작업자 하나가 순서대로, 패키지 하나에 수십~수백 MB).
   신뢰하는 배포자가 없는 이름(`openclaw-tools` 같은 유사 이름 포함)은 내려받지 않는다.
