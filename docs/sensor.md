@@ -412,6 +412,11 @@ OpenClaw가 런타임을 고른다(공식 OpenAI 모델은 Codex). 그래서 WS 
   이것을 `stale`로 봤다(오탐) → 고정되지 않은 모델은 `unpinned`로 바꿈.
 - Sol을 잠시 `codex`로 고정(`config patch`, 재시작 없이 적용) → alice의 대화는 `openclaw`에 묶인 채 남음 → `openclaw-session-runtime-stale`. 확인 후 되돌림.
 
+조치(2026-11-12, 사용자 결정 A): 팀 게이트웨이 설정에 모델 허용 목록 `agents.defaults.modelPolicy.allow`(고정한 두 모델)를 넣었다.
+모델 선택 화면과 직접 선택 모두 게이트웨이가 막고, 프로바이더에 새 모델이 생겨도 목록에 나오지 않는다. `models.list` 기본 보기도 허용 목록을
+따르므로 센서가 보는 고를 수 있는 모델이 2개가 되고 `openclaw-model-runtime-unpinned`가 사라졌다. 허용 목록 밖 모델로 바꿔 둔 예전 대화는 `unknown`으로 남는다.
+허용 목록에 모델을 더할 때는 그 모델의 런타임 고정도 같이 넣는다(빠뜨리면 unpinned 룰이 알린다).
+
 ## 설치된 코드 무결성 (M5d)
 
 `sga-sensor run --openclaw`은 5분마다, 그리고 정책의 매니페스트가 바뀔 때마다 OpenClaw가 실제로 로드한 코드를 검사한다

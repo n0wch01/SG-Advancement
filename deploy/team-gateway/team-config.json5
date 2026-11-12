@@ -67,8 +67,12 @@
   // enforces the outbound policy (so letting the proxy resolve DNS is safe).
   tools: { web: { fetch: { useTrustedEnvProxy: true } } },
   // Company baseline (M5d): every model pinned to a runtime the plugin is verified with.
+  // T19 (2026-11-12, option A): only those pinned models can be picked. Without an allowlist the picker
+  // shows the provider's whole catalog, new models appear on their own, and unpinned ones run on Codex.
+  // Adding a model here means pinning its runtime below too (openclaw-model-runtime-unpinned alerts otherwise).
   agents: {
     defaults: {
+      modelPolicy: { allow: ["openai/gpt-6-luna", "openai/gpt-6-astra"] },
       models: {
         "openai/gpt-6-luna": { agentRuntime: { id: "openclaw" } },
         "openai/gpt-6-astra": { agentRuntime: { id: "openclaw" } },

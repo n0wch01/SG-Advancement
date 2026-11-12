@@ -259,6 +259,7 @@ alice가 보관하지 않은 대화를 바로 지우려 하자 화면이 요청�
 | 남의 대화 보기 | 역할의 `sessions.others` (`none`/`suggest`/`view`/`write`) | 데모는 `member: none`, `security: view` |
 | 하위 에이전트 만들기 | `operator.admin` 또는 `sessions.others: write` (자식이 에이전트 소유라서) | 위 실험 |
 | 대화 실행 권한 `full` 고르기 | 관리자만 (직원 화면에서는 잠김). 단 **고르지 않으면 에이전트 기본값**을 따르고 기본값이 `full`이면 그대로 전체 액세스 | Control UI 실행 권한 메뉴, 2026-11-12 |
+| 모델 고르기 | 모두, 단 `agents.defaults.modelPolicy.allow`에 있는 모델만 (데모: 런타임을 고정한 `gpt-6-luna`, `gpt-6-astra`) | 허용 목록이 없으면 프로바이더 목록 전체가 보이고, 고정 안 된 모델은 Codex로 돈다(T19). 2026-11-12 A안 |
 
 대화 삭제는 사고 조사에서 보면 증거 삭제다. 그래서 OpenClaw 기본값(직원은 보관을 거쳐야 함)을 그대로 두고 모든 시도를 기록한다.
 
