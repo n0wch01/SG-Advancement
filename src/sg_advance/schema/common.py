@@ -68,6 +68,11 @@ class AgentRef(StrictModel):
     session_id: str = Field(min_length=1, description="Agent-native session/conversation id")
     version: str | None = None
     run_id: str | None = Field(default=None, description="One agent turn/run inside the session, if known")
+    parent_session_id: str | None = Field(
+        default=None, description="Session that delegated to this one (sub-agent spawn), if any"
+    )
+    root_session_id: str | None = Field(default=None, description="Top of the delegation chain")
+    spawn_depth: int | None = Field(default=None, ge=0, description="Delegation hops from the root")
     model: str | None = None
     cwd: str | None = None
 

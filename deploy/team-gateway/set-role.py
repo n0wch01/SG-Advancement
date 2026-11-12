@@ -4,6 +4,7 @@ OpenClaw maps people to roles only by explicit assignment (or GitHub login), and
 exists only after their first sign-in. So: sign in once through the proxy, then run
 
     docker compose exec team-gateway /opt/sga/venv/bin/python /opt/sga/set-role.py secops@corp.test security
+    ... set-role.py bob@corp.test default     # back to gateway.roles.default
 
 Connects as a same-host operator with the gateway password (admin scope is needed to assign roles).
 """
@@ -43,7 +44,9 @@ async def main(email: str, role: str) -> int:
         if not match:
             print(f"no profile for {email}: sign in once through the team proxy first", file=sys.stderr)
             return 1
-        res = await conn.request("users.setRole", {"profileId": match[0]["id"], "role": role})
+        # "default" clears the explicit assignment: the person falls back to gateway.roles.default.
+        assigned = None if role == "default" else role
+        res = await conn.request("users.setRole", {"profileId": match[0]["id"], "role": assigned})
         if not res.get("ok"):
             print(f"users.setRole failed: {res.get('error')}", file=sys.stderr)
             return 1

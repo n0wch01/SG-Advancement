@@ -6,6 +6,7 @@ trusted-proxy auth): ids are made up, field names and nesting are as captured.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from sg_advance.sensor.adapters.openclaw import OpenClawMapper
@@ -183,3 +184,129 @@ def test_directory_survives_a_sensor_restart(tmp_path) -> None:
     path.write_text("{not json")
     assert OpenClawPeople(state_path=path).attribute(MAIN, None, "d").principal == {"user_id": "d"}
 
+
+# ── delegation (sub-agents) ─────────────────────────────────────────────────
+# Shapes from a live capture: secops asked the agent to spawn a sub-agent that ran `pwd`.
+
+PARENT = "agent:main:dashboard:8a62"
+CHILD = "agent:main:subagent:f65a"
+AGENT_ACTOR = {"type": "agent", "id": "main"}
+
+
+def child_created(child: str = CHILD, parent: str = PARENT, depth: int = 1) -> dict[str, Any]:
+    return {
+        "type": "event",
+        "event": "sessions.changed",
+        "payload": {
+            "sessionKey": child,
+            "reason": "create",
+            "createdVia": "spawn",
+            "spawnedBy": parent,
+            "parentSessionKey": parent,
+            "spawnDepth": depth,
+            "controlOwnerSessionKey": parent,
+            "createdActor": AGENT_ACTOR,
+            "owner": {"actor": AGENT_ACTOR},
+        },
+    }
+
+
+def spawn_result(parent: str, run: str, child: str) -> dict[str, Any]:
+    text = json.dumps({"status": "accepted", "childSessionKey": child, "runId": "r-child"})
+    return {
+        "type": "event",
+        "event": "session.tool",
+        "payload": {
+            "runId": run,
+            "sessionKey": parent,
+            "data": {
+                "phase": "result",
+                "name": "sessions_spawn",
+                "toolCallId": "c-spawn",
+                "result": {"content": [{"type": "text", "text": text}]},
+            },
+        },
+    }
+
+
+SECOPS = "p-secops"
+USERS_WITH_SECOPS = {
+    "profiles": [
+        *USERS_LIST["profiles"],
+        {"id": SECOPS, "displayName": "secops", "emails": ["secops@corp.test"], "effectiveRole": "security"},
+    ]
+}
+
+
+def test_sub_agent_work_goes_back_to_the_person_who_delegated() -> None:
+    m = OpenClawMapper("team-gateway")
+    m.people.learn_profiles(USERS_WITH_SECOPS)
+    m.map_frame(user_message(PARENT, SECOPS, SECOPS, "r-parent"))
+    m.map_frame(spawn_result(PARENT, "r-parent", CHILD))
+    m.map_frame(child_created())
+    evs = m.map_frame(tool_start(CHILD, "r-child", "c-pwd", "pwd"))
+    start, call = evs
+    assert start.payload.reason == "spawned"
+    assert call.principal.user_id == "secops@corp.test"
+    assert call.labels["openclaw.attribution"] == "delegation"
+    assert (call.agent.parent_session_id, call.agent.root_session_id, call.agent.spawn_depth) == (
+        PARENT,
+        PARENT,
+        1,
+    )
+
+
+def test_delegation_chain_of_two_hops_finds_the_root_person() -> None:
+    m = OpenClawMapper("team-gateway")
+    m.people.learn_profiles(USERS_LIST)
+    m.map_frame(user_message(DASH, ALICE, ALICE, "r-a"))
+    m.map_frame(child_created(CHILD, DASH, 1))
+    grandchild = "agent:main:subagent:gc"
+    m.map_frame(child_created(grandchild, CHILD, 2))  # no spawn result seen: falls back to the parent
+    call = m.map_frame(tool_start(grandchild, "r-gc", "c-gc"))[-1]
+    assert call.principal.user_id == "alice@corp.test"
+    assert call.labels["openclaw.attribution"] == "delegation"
+    assert (call.agent.parent_session_id, call.agent.root_session_id, call.agent.spawn_depth) == (
+        CHILD,
+        DASH,
+        2,
+    )
+
+
+def test_ui_sessions_with_a_parent_key_are_not_delegation() -> None:
+    """A conversation a person opens has parentSessionKey=agent:main:main but createdVia=operator."""
+    people = OpenClawPeople()
+    people.observe(
+        {
+            "event": "sessions.changed",
+            "payload": {
+                "sessionKey": DASH,
+                "createdVia": "operator",
+                "parentSessionKey": MAIN,
+                "spawnDepth": 0,
+            },
+        }
+    )
+    assert people.lineage(DASH) == {}
+
+
+def test_lineage_loops_never_hang() -> None:
+    people = OpenClawPeople()
+    people.parent.update({"a": "b", "b": "a"})
+    assert people.lineage("a")["root_session_id"] in ("a", "b")
+    assert people.attribute("a", None, "default").principal == {"user_id": "default"}
+
+
+def test_plugin_judged_sub_agent_calls_carry_the_chain(tmp_path) -> None:
+    path = tmp_path / "people.json"
+    people = OpenClawPeople(state_path=path)
+    people.learn_profiles(USERS_LIST)
+    people.observe(user_message(DASH, BOB, BOB, "r-b"))
+    people.observe(spawn_result(DASH, "r-b", CHILD))
+    people.observe(child_created(CHILD, DASH, 1))
+    people.save()
+    restarted = OpenClawPeople(state_path=path)  # runs are not persisted; the chain and owners are
+    req = {"sessionKey": CHILD, "runId": "r-child", "toolCallId": "c1", "toolName": "exec", "params": {}}
+    ev = plugin_event(req, user_id="team-gateway", hostname="gw", tool_plugins={}, people=people)
+    assert ev.principal.user_id == "bob@corp.test" and ev.agent.parent_session_id == DASH
+    assert restarted.lineage(CHILD)["parent_session_id"] == DASH

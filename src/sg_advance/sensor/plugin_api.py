@@ -99,7 +99,8 @@ def _plugin_envelope(
     session_key = req.get("sessionKey") if isinstance(req.get("sessionKey"), str) else None
     run_id = req.get("runId") if isinstance(req.get("runId"), str) else None
     # The plugin's tool context has no gateway profile; the WebSocket side learned who it is.
-    who = (people or OpenClawPeople()).attribute(session_key, run_id, user_id)
+    people = people or OpenClawPeople()
+    who = people.attribute(session_key, run_id, user_id)
     return AgentEvent.model_validate(
         {
             "ts": datetime.now(UTC),
@@ -109,6 +110,7 @@ def _plugin_envelope(
                 "type": "openclaw",
                 "session_id": session_key or str(req.get("sessionId") or "unknown"),
                 "run_id": run_id,
+                **people.lineage(session_key),
             },
             "source": {"sensor": "openclaw_plugin"},
             "payload": payload,

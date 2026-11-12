@@ -38,6 +38,46 @@
           "description": "One agent turn/run inside the session, if known",
           "title": "Run Id"
         },
+        "parent_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Session that delegated to this one (sub-agent spawn), if any",
+          "title": "Parent Session Id"
+        },
+        "root_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Top of the delegation chain",
+          "title": "Root Session Id"
+        },
+        "spawn_depth": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Delegation hops from the root",
+          "title": "Spawn Depth"
+        },
         "model": {
           "anyOf": [
             {

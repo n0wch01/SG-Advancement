@@ -13,7 +13,13 @@ The plugin's tool context does not carry it, so the sensor stitches it from the 
 - session payloads (``sessions.list`` rows, ``sessions.changed``, ``session.message``) →
   ``owner.actor {type: human, identity: {type: profile, id}, label}``: who owns the session.
 
-Attribution order for an event: the run's sender, then the session owner, then the sensor's
+Sub-agents (M5b delegation): ``sessions_spawn`` creates a child session owned by the *agent*
+(``createdActor {type: agent}``, ``createdVia: "spawn"``, ``spawnedBy``/``parentSessionKey``,
+``spawnDepth``). The spawning ``sessions_spawn`` result names the child (``childSessionKey``) inside the
+parent's run, so the child's work goes back to whoever sent that run.
+
+Attribution order for an event: the run's sender, then the delegation chain (the run that spawned
+this session, else the parent session's attribution), then a human session owner, then the sensor's
 default user (``--user``; on a solo gateway that is the only person, so nothing changes there).
 
 Profiles and session owners are kept in ``state_path`` (owner-only file): after a sensor restart
@@ -35,6 +41,7 @@ log = logging.getLogger(__name__)
 
 PROFILE_PREFIX = "openclaw-profile:"
 _CAP = 10_000  # bounded memory on long-running gateways
+_MAX_DEPTH = 16  # delegation hops followed (OpenClaw caps spawn depth far lower)
 
 
 @dataclass(frozen=True)
@@ -83,6 +90,9 @@ class OpenClawPeople:
         self.merged: dict[str, str] = {}  # merged profile id -> surviving id
         self.run_sender: OrderedDict[str, str] = OrderedDict()  # runId -> profile id
         self.session_owner: OrderedDict[str, str] = OrderedDict()  # sessionKey -> profile id
+        self.parent: OrderedDict[str, str] = OrderedDict()  # spawned sessionKey -> spawning sessionKey
+        self.depth: dict[str, int] = {}  # spawned sessionKey -> spawnDepth
+        self.origin_run: OrderedDict[str, str] = OrderedDict()  # spawned sessionKey -> parent runId
         self.state_path = state_path
         self._load()
 
@@ -98,6 +108,11 @@ class OpenClawPeople:
             self.merged.update(doc.get("merged") or {})
             for key, pid in (doc.get("session_owner") or {}).items():
                 _bounded_set(self.session_owner, key, pid)
+            for key, parent in (doc.get("parent") or {}).items():
+                _bounded_set(self.parent, key, parent)
+            self.depth.update({k: int(v) for k, v in (doc.get("depth") or {}).items()})
+            for key, run in (doc.get("origin_run") or {}).items():
+                _bounded_set(self.origin_run, key, run)
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as e:
             log.warning("ignoring unreadable %s: %s", self.state_path, e)
 
@@ -108,6 +123,9 @@ class OpenClawPeople:
             "people": [asdict(p) for p in self.people.values()],
             "merged": self.merged,
             "session_owner": dict(self.session_owner),
+            "parent": dict(self.parent),
+            "depth": {k: v for k, v in self.depth.items() if k in self.parent},
+            "origin_run": dict(self.origin_run),
         }
         try:
             write_private(self.state_path, json.dumps(doc, ensure_ascii=False))
@@ -157,6 +175,19 @@ class OpenClawPeople:
                 self._learn_session(s["key"], s)
 
     def _learn_session(self, key: str, s: dict[str, Any]) -> None:
+        # Real delegation only: sessions people open from the UI also carry a parentSessionKey
+        # (the agent's main session), but they are created by an operator, not spawned.
+        spawned_by = s.get("spawnedBy") if isinstance(s.get("spawnedBy"), str) else None
+        if (
+            spawned_by is None
+            and s.get("createdVia") == "spawn"
+            and isinstance(s.get("parentSessionKey"), str)
+        ):
+            spawned_by = s["parentSessionKey"]
+        if spawned_by and spawned_by != key:
+            _bounded_set(self.parent, key, spawned_by)
+            if isinstance(s.get("spawnDepth"), int):
+                self.depth[key] = s["spawnDepth"]
         owner = s.get("owner")
         found = _profile_of(owner.get("actor") if isinstance(owner, dict) else None) or _profile_of(
             s.get("createdActor")
@@ -182,6 +213,33 @@ class OpenClawPeople:
             self._learn_session(key, p)
         if name == "session.message":
             self._learn_sender(p)
+        if name == "session.tool":
+            self._learn_spawn(p)
+
+    def _learn_spawn(self, p: dict[str, Any]) -> None:
+        """``sessions_spawn`` result in the parent's run: ``{childSessionKey, runId, status}``."""
+        data = p.get("data") if isinstance(p.get("data"), dict) else {}
+        if data.get("name") != "sessions_spawn" or data.get("phase") != "result":
+            return
+        result = data.get("result") if isinstance(data.get("result"), dict) else {}
+        details = result.get("details") if isinstance(result.get("details"), dict) else {}
+        child = details.get("childSessionKey")
+        if not isinstance(child, str):
+            for part in result.get("content") or []:
+                text = part.get("text") if isinstance(part, dict) else None
+                try:
+                    doc = json.loads(text) if isinstance(text, str) else None
+                except ValueError:
+                    doc = None
+                if isinstance(doc, dict) and isinstance(doc.get("childSessionKey"), str):
+                    child = doc["childSessionKey"]
+                    break
+        key, run = p.get("sessionKey"), p.get("runId")
+        if not isinstance(child, str) or not isinstance(key, str) or child == key:
+            return
+        self.parent.setdefault(child, key)
+        if isinstance(run, str):
+            _bounded_set(self.origin_run, child, run)
 
     def _learn_sender(self, p: dict[str, Any]) -> None:
         msg = p.get("message")
@@ -202,12 +260,41 @@ class OpenClawPeople:
 
     # ── asking ───────────────────────────────────────────────────────────────
 
+    def lineage(self, session_key: str | None) -> dict[str, Any]:
+        """``{parent_session_id, root_session_id, spawn_depth}`` for a spawned session, else ``{}``."""
+        if not isinstance(session_key, str) or session_key not in self.parent:
+            return {}
+        chain = [session_key]
+        while chain[-1] in self.parent and len(chain) <= _MAX_DEPTH:
+            nxt = self.parent[chain[-1]]
+            if nxt in chain:  # never loop on a malformed chain
+                break
+            chain.append(nxt)
+        return {
+            "parent_session_id": self.parent[session_key],
+            "root_session_id": chain[-1],
+            "spawn_depth": self.depth.get(session_key, len(chain) - 1),
+        }
+
+    def _who(self, session_key: str | None, run_id: str | None, hops: int = 0) -> tuple[str, str] | None:
+        """(profile id, how) for a session/run, following delegation up to the human."""
+        if isinstance(run_id, str) and run_id in self.run_sender:
+            return self.run_sender[run_id], "sender"
+        if not isinstance(session_key, str):
+            return None
+        parent = self.parent.get(session_key)
+        if parent and hops < _MAX_DEPTH:
+            up = self._who(parent, self.origin_run.get(session_key), hops + 1)
+            if up:
+                return up[0], "delegation"
+        owner = self.session_owner.get(session_key)
+        return (owner, "session_owner") if owner else None
+
     def attribute(self, session_key: str | None, run_id: str | None, default_user: str) -> Attribution:
-        sender = self.run_sender.get(run_id) if isinstance(run_id, str) else None
-        owner = self.session_owner.get(session_key) if isinstance(session_key, str) else None
-        pid, how = (sender, "sender") if sender else (owner, "session_owner")
-        if not pid:
+        found = self._who(session_key, run_id)
+        if not found:
             return Attribution({"user_id": default_user})
+        pid, how = found
         person = self.people.get(self._canon(pid)) or Person(self._canon(pid))
         principal: dict[str, Any] = {"user_id": person.user_id}
         if person.name:
@@ -215,7 +302,8 @@ class OpenClawPeople:
         if person.role:
             principal["groups"] = (f"openclaw-role:{person.role}",)
         labels = {"openclaw.attribution": how, "openclaw.profile_id": person.profile_id}
-        if sender and owner and self._canon(owner) != person.profile_id:
+        owner = self.session_owner.get(session_key) if isinstance(session_key, str) else None
+        if how == "sender" and owner and self._canon(owner) != person.profile_id:
             # Someone wrote into a session another person owns (shared session): keep both.
             o = self.people.get(self._canon(owner)) or Person(self._canon(owner))
             labels["openclaw.session_owner"] = o.user_id

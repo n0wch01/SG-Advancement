@@ -121,7 +121,12 @@ class OpenClawMapper:
                 "ts": _ts(ts),
                 "endpoint": {"device_id": "pending", "hostname": self.hostname},  # sensor core stamps the id
                 "principal": who.principal,
-                "agent": {"type": "openclaw", "session_id": session_key, "run_id": run_id},
+                "agent": {
+                    "type": "openclaw",
+                    "session_id": session_key,
+                    "run_id": run_id,
+                    **self.people.lineage(session_key),  # sub-agent: who delegated to it
+                },
                 "source": {"sensor": "openclaw_gateway", "seq": self._seq},
                 "payload": payload,
             }
@@ -140,6 +145,8 @@ class OpenClawMapper:
         if key in self.seen_sessions:
             return []
         self.seen_sessions.add(key)
+        if self.people.lineage(key):
+            reason = "spawned"
         return [self._event(key, {"kind": "session.start", "reason": reason}, ts, run_id)]
 
     # ── inventory ────────────────────────────────────────────────────────────
