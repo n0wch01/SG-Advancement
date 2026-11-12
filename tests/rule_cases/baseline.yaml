@@ -172,3 +172,65 @@ cases:
       - {kind: operator.action, action: session.privilege, method: sessions.patch, ok: false, error: FORBIDDEN, session: s3, changes: ["permissionMode=full"]}
     expect_not: [openclaw-session-privilege-raised]
 
+
+  # ── T19: 게이트웨이가 실제로 쓰는 런타임 (inventory.snapshot의 model_runtimes·sessions, M5d) ──
+  # 설정 파일 기준선은 설정에 적힌 모델만 본다. 화면에서 고를 수 있는 나머지 모델은 models.list로만 보인다.
+  - name: 고정하지 않은 모델은 OpenClaw가 런타임을 고른다 (공식 OpenAI 모델은 Codex)
+    agent: openclaw
+    sensor: openclaw_gateway
+    events:
+      - kind: inventory.snapshot
+        agent_id: main
+        model_runtimes:
+          - {model: openai/gpt-6-luna, runtime: openclaw, source: model}
+          - {model: openai/gpt-6.1-sol, runtime: codex, source: implicit}
+    expect: [openclaw-model-runtime-unpinned]
+    expect_not: [openclaw-session-runtime-stale, openclaw-session-runtime-unapproved]
+
+  - name: 모든 모델이 고정된 게이트웨이
+    agent: openclaw
+    sensor: openclaw_gateway
+    events:
+      - kind: inventory.snapshot
+        agent_id: main
+        model_runtimes:
+          - {model: openai/gpt-6-luna, runtime: openclaw, source: model}
+          - {model: openai/gpt-6.1-sol, runtime: codex, source: model}
+    expect_not: [openclaw-model-runtime-unpinned]
+
+  # 런타임 고정은 대화가 시작될 때 묶인다. 설정을 바꿔도 이미 Codex 스레드에 묶인 대화는 Codex로 남는다(2026-11-11 실환경).
+  - name: 설정을 바꾼 뒤에도 예전 런타임에 묶여 남은 대화
+    agent: openclaw
+    sensor: openclaw_gateway
+    events:
+      - kind: inventory.snapshot
+        agent_id: main
+        sessions:
+          - {session_key: "agent:main:dashboard:aaa", model: openai/gpt-6.1-sol, runtime: codex, expected_runtime: openclaw, binding: stale}
+          - {session_key: "agent:main:dashboard:bbb", model: openai/gpt-6-luna, runtime: openclaw, expected_runtime: openclaw, binding: current}
+    expect: [openclaw-session-runtime-stale]
+    expect_not: [openclaw-session-runtime-unapproved]
+
+  - name: 허용되지 않은 런타임에 묶인 대화 (CLI 백엔드는 플러그인 판정을 거치지 않을 수 있다)
+    agent: openclaw
+    sensor: openclaw_gateway
+    events:
+      - kind: inventory.snapshot
+        agent_id: main
+        sessions:
+          - {session_key: "agent:main:dashboard:ccc", model: anthropic/claude-x, runtime: claude-cli, expected_runtime: claude-cli, binding: current}
+    expect: [openclaw-session-runtime-unapproved]
+    expect_not: [openclaw-session-runtime-stale]
+
+  - name: 기대 런타임을 모르거나(목록에 없는 모델) 고정되지 않은 모델의 대화, 현재 설정대로인 대화는 정상
+    agent: openclaw
+    sensor: openclaw_gateway
+    events:
+      - kind: inventory.snapshot
+        agent_id: main
+        sessions:
+          - {session_key: "agent:main:main", model: openai/gpt-6-luna, runtime: openclaw, expected_runtime: openclaw, binding: current}
+          - {session_key: "agent:main:cron:x", model: openai/old-model, runtime: codex, binding: unknown}
+          # 고정되지 않은 모델(Sol)로 바꾼 대화가 만들어질 때의 openclaw를 유지: 따를 회사 설정이 없다(모델 쪽은 unpinned 룰이 본다).
+          - {session_key: "agent:main:dashboard:y", model: openai/gpt-6.1-sol, runtime: openclaw, expected_runtime: codex, binding: unpinned}
+    expect_not: [openclaw-session-runtime-stale, openclaw-session-runtime-unapproved]

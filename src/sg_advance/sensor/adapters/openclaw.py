@@ -116,6 +116,78 @@ def _result_text(result: Any) -> str:
         return str(result)
 
 
+MAX_SESSIONS = 200  # per agent and snapshot; the most recently updated conversations
+
+
+def _runtime_of(row: dict[str, Any]) -> tuple[str | None, str | None]:
+    rt = row.get("agentRuntime")
+    if not isinstance(rt, dict):
+        return None, None
+    rid, src = rt.get("id"), rt.get("source")
+    return (rid if isinstance(rid, str) else None), (src if isinstance(src, str) else None)
+
+
+def _model_runtimes(models: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """``models.list`` → [{model: provider/id, runtime, source}] for models people can pick."""
+    out = []
+    for m in (models or {}).get("models") or []:
+        if not (isinstance(m, dict) and isinstance(m.get("id"), str)) or m.get("available") is False:
+            continue
+        model = f"{m['provider']}/{m['id']}" if isinstance(m.get("provider"), str) else m["id"]
+        runtime, source = _runtime_of(m)
+        out.append({"model": model, "runtime": runtime, "source": source})
+    return out
+
+
+def _session_bindings(
+    sessions: list[dict[str, Any]], agent_id: str, runtimes: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Live conversations of ``agent_id`` with the runtime they report vs. what their model gets now.
+
+    OpenClaw reports the runtime the conversation's *next turn* will use (2026.11.3
+    ``resolveCurrentSessionAgentRuntimeMetadata``): a runtime stored on the conversation (source
+    ``session``, e.g. a Codex thread) or set for it (``session-key``) wins over the config. So a
+    conversation started before a pin changed keeps its old runtime: ``stale``, when its model is
+    pinned to something else now. Unpinned models have no setting to follow: ``unpinned``."""
+    expected = {r["model"]: r for r in runtimes}
+    rows = [
+        s
+        for s in sessions
+        if isinstance(s.get("key"), str) and s.get("agentId", agent_id) == agent_id and not s.get("archived")
+    ]
+    rows.sort(
+        key=lambda s: s.get("updatedAt") if isinstance(s.get("updatedAt"), (int, float)) else 0, reverse=True
+    )
+    out = []
+    for s in rows[:MAX_SESSIONS]:
+        model = s.get("model") if isinstance(s.get("model"), str) else None
+        if model and isinstance(s.get("modelProvider"), str) and "/" not in model:
+            model = f"{s['modelProvider']}/{model}"
+        runtime, source = _runtime_of(s)
+        listed = expected.get(model) if model else None
+        want = listed["runtime"] if listed else None
+        if not (runtime and want):
+            binding = "unknown"
+        elif listed and listed.get("source") == "implicit":
+            binding = "unpinned"  # nobody chose a runtime for this model: no company setting to follow
+        else:
+            binding = "current" if runtime == want else "stale"
+        row: dict[str, Any] = {
+            "session_key": s["key"],
+            "model": model,
+            "runtime": runtime,
+            "runtime_source": source,
+            "expected_runtime": want,
+            "binding": binding,
+        }
+        if isinstance(s.get("runtimeSelectionLocked"), bool):
+            row["locked"] = s["runtimeSelectionLocked"]
+        if isinstance(s.get("hasActiveRun"), bool):
+            row["active"] = s["hasActiveRun"]
+        out.append(row)
+    return out
+
+
 class OpenClawMapper:
     """Stateful translation; one instance per gateway connection lifetime (state survives
     reconnects because the adapter keeps the same mapper)."""
@@ -189,9 +261,13 @@ class OpenClawMapper:
         agent: dict[str, Any] | None = None,
         skills: dict[str, Any] | None = None,
         check_skills: Callable[[list[dict[str, Any]]], None] | None = None,
+        models: dict[str, Any] | None = None,
+        sessions: list[dict[str, Any]] | None = None,
     ) -> AgentEvent:
         """One agent's inventory: ``tools.catalog`` (+ ``agents.list`` row, ``skills.status``).
-        ``check_skills`` fills digest/integrity/trust on the skill rows (openclaw_skills)."""
+        ``check_skills`` fills digest/integrity/trust on the skill rows (openclaw_skills).
+        ``models`` (``models.list``) and ``sessions`` (``sessions.list`` rows) add the runtime view
+        (T19): what each selectable model runs with, and what each live conversation is bound to."""
         tools, plugins = [], {}
         for group in catalog.get("groups") or []:
             for t in group.get("tools") or []:
@@ -227,6 +303,11 @@ class OpenClawMapper:
             payload["runtime"] = runtime["id"]
         if isinstance(agent.get("defaultPermissionMode"), str):
             payload["permission_mode"] = agent["defaultPermissionMode"]
+        runtimes = _model_runtimes(models)
+        if runtimes:
+            payload["model_runtimes"] = runtimes
+        if sessions is not None:
+            payload["sessions"] = _session_bindings(sessions, agent_id, runtimes)
         return self._event(f"inventory:{agent_id}", payload)
 
     # ── exec approvals ───────────────────────────────────────────────────────
@@ -641,7 +722,7 @@ class OpenClawAdapter:
     async def _snapshot(self, ctx: AdapterContext, conn: GatewayConnection, mapper: OpenClawMapper) -> None:
         """Per-agent inventory (M5b): every agent on the gateway has its own tools, skills, model.
         Gateways without ``agents.list`` get the single default catalog, as before."""
-        await self._people(conn, mapper)
+        sessions = await self._people(conn, mapper)
         res = await conn.request("agents.list", {})
         rows = (res.get("payload") or {}).get("agents") if res.get("ok") else None
         agents = [a for a in rows if isinstance(a, dict) and isinstance(a.get("id"), str)] if rows else []
@@ -653,8 +734,14 @@ class OpenClawAdapter:
                 continue
             skills = await conn.request("skills.status", params) if agent else {}
             status = skills.get("payload") if skills.get("ok") else None
+            models = await conn.request("models.list", params)
             event = mapper.inventory(
-                res["payload"], agent, status, lambda rows: self._check_skills(ctx, rows)
+                res["payload"],
+                agent,
+                status,
+                lambda rows: self._check_skills(ctx, rows),
+                models=models.get("payload") if models.get("ok") else None,
+                sessions=sessions,
             )
             await self._handle(ctx, conn, event)
 
@@ -668,9 +755,11 @@ class OpenClawAdapter:
         mine = {r["ref"] for r in rows if r.get("ref")}
         ctx.sensor.set_trusted(SKILLS_TRUSTED, (current - mine) | trusted)
 
-    async def _people(self, conn: GatewayConnection, mapper: OpenClawMapper) -> None:
+    async def _people(self, conn: GatewayConnection, mapper: OpenClawMapper) -> list[dict[str, Any]] | None:
         """Profiles (id → email) and existing session owners, for attribution on team gateways.
-        Solo or older gateways may not have these methods; attribution then falls back to --user."""
+        Solo or older gateways may not have these methods; attribution then falls back to --user.
+        Returns the ``sessions.list`` rows (runtime bindings for the inventory), None if refused."""
+        sessions: list[dict[str, Any]] | None = None
         for method, learn in (
             ("users.list", mapper.people.learn_profiles),
             ("sessions.list", mapper.people.learn_sessions),
@@ -678,9 +767,13 @@ class OpenClawAdapter:
             res = await conn.request(method, {})
             if res.get("ok"):
                 learn(res.get("payload"))
+                rows = (res.get("payload") or {}).get("sessions") if method == "sessions.list" else None
+                if isinstance(rows, list):
+                    sessions = [r for r in rows if isinstance(r, dict)]
             else:
                 log.debug("%s unavailable: %s", method, res.get("error"))
         mapper.people.save()
+        return sessions
 
     async def _handle(self, ctx: AdapterContext, conn: GatewayConnection, event: AgentEvent) -> None:
         if event.kind.value == "inventory.snapshot":

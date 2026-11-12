@@ -980,6 +980,24 @@
           },
           "title": "Mcp Servers",
           "type": "array"
+        },
+        "model_runtimes": {
+          "default": [],
+          "description": "Selectable models and the runtime each runs with (gateway view)",
+          "items": {
+            "$ref": "#/$defs/ModelRuntime"
+          },
+          "title": "Model Runtimes",
+          "type": "array"
+        },
+        "sessions": {
+          "default": [],
+          "description": "Live (unarchived) conversations of this agent and their runtime binding",
+          "items": {
+            "$ref": "#/$defs/SessionBinding"
+          },
+          "title": "Sessions",
+          "type": "array"
         }
       },
       "title": "InventorySnapshot",
@@ -1061,6 +1079,48 @@
         "model"
       ],
       "title": "LlmCall",
+      "type": "object"
+    },
+    "ModelRuntime": {
+      "additionalProperties": false,
+      "description": "The runtime a selectable model would run with on the gateway right now (``models.list``).",
+      "properties": {
+        "model": {
+          "description": "provider/id",
+          "title": "Model",
+          "type": "string"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "openclaw agentRuntime.id, e.g. openclaw / codex",
+          "title": "Runtime"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where the runtime came from: model (pinned) / implicit (OpenClaw chose) / ...",
+          "title": "Source"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "ModelRuntime",
       "type": "object"
     },
     "NetEgress": {
@@ -1555,6 +1615,110 @@
       ],
       "title": "SensorType",
       "type": "string"
+    },
+    "SessionBinding": {
+      "additionalProperties": false,
+      "description": "The runtime one live conversation is bound to, compared with what its model would get now (T19).",
+      "properties": {
+        "session_key": {
+          "title": "Session Key",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "provider/id the conversation uses",
+          "title": "Model"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Runtime the conversation reports (agentRuntime.id)",
+          "title": "Runtime"
+        },
+        "runtime_source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Source"
+        },
+        "locked": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "openclaw runtimeSelectionLocked",
+          "title": "Locked"
+        },
+        "expected_runtime": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Runtime its model resolves to now (models.list); None if not listed",
+          "title": "Expected Runtime"
+        },
+        "binding": {
+          "default": "unknown",
+          "description": "current: same as its model's pinned runtime; stale: bound to another runtime than the pin (config changed after it started); unpinned: its model has no pin; unknown: model not listed",
+          "enum": [
+            "current",
+            "stale",
+            "unpinned",
+            "unknown"
+          ],
+          "title": "Binding",
+          "type": "string"
+        },
+        "active": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A run is in progress",
+          "title": "Active"
+        }
+      },
+      "required": [
+        "session_key"
+      ],
+      "title": "SessionBinding",
+      "type": "object"
     },
     "SessionEnd": {
       "additionalProperties": false,

@@ -181,6 +181,38 @@ class SkillDescriptor(StrictModel):
     )
 
 
+class ModelRuntime(StrictModel):
+    """The runtime a selectable model would run with on the gateway right now (``models.list``)."""
+
+    model: str = Field(description="provider/id")
+    runtime: str | None = Field(default=None, description="openclaw agentRuntime.id, e.g. openclaw / codex")
+    source: str | None = Field(
+        default=None,
+        description="Where the runtime came from: model (pinned) / implicit (OpenClaw chose) / ...",
+    )
+
+
+class SessionBinding(StrictModel):
+    """The runtime one live conversation is bound to, compared with what its model would get now (T19)."""
+
+    session_key: str
+    model: str | None = Field(default=None, description="provider/id the conversation uses")
+    runtime: str | None = Field(
+        default=None, description="Runtime the conversation reports (agentRuntime.id)"
+    )
+    runtime_source: str | None = None
+    locked: bool | None = Field(default=None, description="openclaw runtimeSelectionLocked")
+    expected_runtime: str | None = Field(
+        default=None, description="Runtime its model resolves to now (models.list); None if not listed"
+    )
+    binding: Literal["current", "stale", "unpinned", "unknown"] = Field(
+        default="unknown",
+        description="current: same as its model's pinned runtime; stale: bound to another runtime than the "
+        "pin (config changed after it started); unpinned: its model has no pin; unknown: model not listed",
+    )
+    active: bool | None = Field(default=None, description="A run is in progress")
+
+
 class InventorySnapshot(StrictModel):
     """What one agent can use. Multi-agent gateways send one snapshot per agent (``agent_id``)."""
 
@@ -193,6 +225,12 @@ class InventorySnapshot(StrictModel):
     plugins: tuple[PluginDescriptor, ...] = ()
     skills: tuple[SkillDescriptor, ...] = ()
     mcp_servers: tuple[str, ...] = ()
+    model_runtimes: tuple[ModelRuntime, ...] = Field(
+        default=(), description="Selectable models and the runtime each runs with (gateway view)"
+    )
+    sessions: tuple[SessionBinding, ...] = Field(
+        default=(), description="Live (unarchived) conversations of this agent and their runtime binding"
+    )
 
 
 class SensorHealth(StrictModel):
