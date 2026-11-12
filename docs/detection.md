@@ -49,6 +49,17 @@ rules:
 똑같이 담고, 실제 명령은 안쪽 `exec`가 다시 판정된다. 그래서 승인 룰(`destructive-sql`, `destructive-cloud-command`)은
 바깥 호출을 건너뛰고 안쪽에서 한 번만 승인을 받는다. 차단 룰은 바깥 호출에서도 먼저 막는 편이 안전해서 예외를 두지 않았다.
 
+### 캠페인 태그 (M11)
+
+`tags`에 `campaign`을 넣으면 그 룰의 Finding은 매칭된 값을 `labels.indicator`로 남긴다. regex는 매칭된 구절,
+allowlist는 허용 목록 밖의 값, in_set은 집합에 든 값이다. 값은 소문자로 바꾸고 공백을 하나로 줄이며 마스킹한다.
+값이 여러 개면 줄바꿈으로 나눈다. 관제 서버는 같은 룰 + 같은 지표가 24시간 안에 서로 다른 사람 3명 이상에게서 나오면
+캠페인 Finding을 만든다([response.md](response.md#캠페인-탐지)). rate·repeat·sequence 룰은 지표가 없다.
+
+태그는 "여러 사람에게 같은 값이 나오면 공통 출처가 있다"는 룰에만 단다(인젝션 문구, 미허가 호스트, 플러그인, MCP URL, 스킬).
+파괴적 SQL처럼 여럿이 같은 값을 쓰는 게 평범한 룰에는 달지 않는다. 케이스는 `indicators: {룰: 값}`으로 지표까지 고정한다
+(`tests/rule_cases/campaign.yaml`).
+
 ### 필드 경로
 
 `AgentEvent`의 JSON 형태를 점(`.`)으로 구분한 경로로 가리킨다. 리스트를 펼칠 때는 `[]`를 붙인다.
