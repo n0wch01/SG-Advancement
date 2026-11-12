@@ -29,7 +29,7 @@ AgentEvent
 | `tool.result` | 툴 실행 결과 | call_id, ok, output_preview, error, duration_ms |
 | `llm.call` | LLM API 호출 | provider, model, tokens, cost_usd |
 | `net.egress` | 외부 네트워크 요청 | method, url, host, bytes_out, destination |
-| `inventory.snapshot` | 사용 가능한 툴·플러그인·MCP 서버 목록 | tools, plugins, mcp_servers |
+| `inventory.snapshot` | 에이전트 하나가 쓸 수 있는 것 (다중 에이전트 게이트웨이는 에이전트마다) | agent_id, model, runtime, permission_mode, tools, plugins, skills[{name, source, ref, enabled, eligible, model_visible, description}], mcp_servers |
 | `sensor.health` | 통제 장치 자체의 상태 (툴 호출이 아님) | component(`openclaw_plugin` 등), status(`up \| lost \| recovered`), detail, last_seen |
 | `approval.resolved` | 실행 전 승인 창에 사람이 한 응답 | call_id, tool, decision(`allow-once\|allow-always\|deny\|timeout\|cancelled`), approved, rule_ids, max_severity, request_event_id, finding_ids, requested_at, wait_ms, judged_by, approver |
 | `operator.action` | 사람이 게이트웨이 제어 화면에서 한 행동. principal은 **행동한 사람** (감사 프록시, [team-gateway.md](team-gateway.md)) | action(`approval.resolve\|run.abort\|session.delete\|session.archive\|session.unarchive`), method, ok, error, decision, approval_id, call_id, tool, target_session_id, target_run_id, archived_only, delete_transcript |

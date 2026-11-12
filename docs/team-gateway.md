@@ -6,6 +6,7 @@ SG-Advance가 이 환경에서 하는 일은 네 가지다.
 - 직원별 **사용자 구분**: 툴 호출, 결과, 프롬프트를 그 일을 시킨 사람의 이름으로 기록한다.
 - **승인자 기록**: 누가 승인 버튼을 눌렀는지, 누가 실행을 중단했는지, 누가 대화를 보관·삭제했는지 남긴다.
 - **위임 사슬**: 하위 에이전트가 한 일을 위임한 사람에게 연결하고, 부모·뿌리 세션과 깊이를 남긴다.
+- **에이전트별 인벤토리**: 에이전트마다 모델, 런타임, 기본 권한 모드, 툴, 스킬을 기록하고 미허가 스킬과 넓은 권한을 알린다.
 - **최소 권한**: 직원은 서로의 대화를 볼 수 없다. 보안팀만 전체를 본다.
 - **데이터 최소화**: 대화 원문은 룰에 걸린 것만 관제 서버로 보낸다.
 
@@ -146,6 +147,35 @@ uv run sga-detect examples/events/openclaw_team.jsonl
 
 운영 지침: 하위 에이전트가 꼭 필요한 팀은 **게이트웨이를 따로 둔다.** OpenClaw는 게이트웨이 하나를 신뢰 경계 하나로 보므로,
 팀원끼리 대화를 공유해도 되는 팀만 별도 게이트웨이에서 `write`를 쓴다. 데모 환경에는 만들지 않았다.
+
+## 에이전트별 인벤토리
+
+게이트웨이 하나에 에이전트가 여럿일 수 있다(에이전트마다 작업 공간, 모델, 스킬이 다르다). 센서는 `agents.list`를 읽고
+에이전트마다 `tools.catalog {agentId}`와 `skills.status {agentId}`를 물어 `inventory.snapshot`을 따로 보낸다(세션 `inventory:<agentId>`).
+
+| 필드 | 출처 |
+|---|---|
+| `agent_id`, `model`, `runtime`, `permission_mode` | `agents.list` (`model.primary`, `agentRuntime.id`, `defaultPermissionMode`) |
+| `tools`, `plugins` | `tools.catalog` |
+| `skills[]` (`name`, `source`, `ref`, `enabled`, `eligible`, `model_visible`, `description`) | `skills.status` |
+
+| 룰 | 내용 | 응답 |
+|---|---|---|
+| `openclaw-skill-unapproved` (high) | `openclaw-bundled`(이미지 기본)과 `openclaw-extra`(설치된 플러그인의 스킬) 밖의 스킬: ClawHub 설치(`openclaw-managed`), 작업 공간(`openclaw-workspace`) | 알림 |
+| `mcp-tool-description-poisoning` | 툴뿐 아니라 스킬 설명의 숨은 지시도 검사 | 격리 |
+| `openclaw-agent-permission-full` (medium) | 에이전트 기본 권한 모드가 `full` (`read-only` < `guarded` < `workspace` < `full`). 결정 A(2026-11-12): 경보만, 실제로 낮출지는 추후 | 알림 |
+
+데모 에이전트 추가(관리자 RPC `agents.create`, 실환경 2026-11-12):
+
+```bash
+# research 에이전트 (모델 gpt-6-luna, 작업 공간 ~/.openclaw/workspace-research)
+#   agents.create {name: research, model: openai/gpt-6-luna}
+# 미허가 스킬 시험용: 작업 공간 skills/<이름>/SKILL.md (아무 명령도 실행하지 않는 설명 파일)
+```
+
+실환경 결과: `main`과 `research` 각각 인벤토리가 나왔다(툴 76개, 스킬 51개·52개). `research`의 작업 공간 스킬 `deploy-notes`만
+`openclaw-skill-unapproved`로 걸렸고, 두 에이전트 모두 `permission_mode: full`이라 `openclaw-agent-permission-full`이 났다.
+에이전트와 스킬은 게이트웨이 볼륨(`team-openclaw`)에 남으므로, 볼륨을 새로 만들면 다시 추가해야 한다.
 
 ## 감사 프록시: 누가 승인하고, 중단하고, 지웠나
 
