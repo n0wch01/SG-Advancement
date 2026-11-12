@@ -5,6 +5,7 @@
     sga-server manifest add openclaw@2026.11.3 [--approve] [--by NAME]
     sga-server manifest approve|revoke openclaw@2026.11.3 [--by NAME]
     sga-server manifest pin sg-advance --dir integrations/openclaw-plugin --version 0.1.0
+    sga-server manifest skill openclaw-workspace:deploy-notes --current   # after reviewing the skill
     sga-server audit approvals [--user U] [--all] [--limit N]   # what users approved (C)
 
 The manifest commands call the admin API (``--server``, default ``$SGA_SERVER`` or
@@ -71,8 +72,23 @@ def manifest_main(argv: list[str]) -> int:
     p.add_argument("--dir", type=Path, required=True, help="the plugin directory as installed")
     p.add_argument("--version", default="local")
     p.add_argument("--by")
+    p = sub.add_parser("skill", help="approve one agent skill's exact files (by digest)")
+    p.add_argument("ref", help="source:name from the inventory, e.g. openclaw-managed:pdf-tools")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--dir", type=Path, help="the skill directory you reviewed")
+    g.add_argument("--digest", help="digest you reviewed")
+    g.add_argument("--current", action="store_true", help="the digest sensors last reported")
+    p.add_argument("--by")
     args = ap.parse_args(argv)
 
+    if args.action == "skill":
+        from ..integrity import dir_digest
+
+        body = {"ref": args.ref, "by": args.by, "current": args.current}
+        if args.dir or args.digest:
+            body["digest"] = dir_digest(args.dir) if args.dir else args.digest
+        print(_fmt(_api(args.server, "POST", "/v1/admin/manifests/skill", body)))  # type: ignore[arg-type]
+        return 0
     if args.action == "list":
         rows = _api(args.server, "GET", "/v1/admin/manifests")
         for row in rows:  # type: ignore[union-attr]

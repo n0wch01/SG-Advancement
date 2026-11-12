@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from ..integrity import Manifest, effective_status
 from ..schema import AgentEvent, EventKind
 from .auth import DbSession, require_admin
-from .db import PackageManifestRow, utcnow
+from .db import EventRow, PackageManifestRow, utcnow
 from .supply import DEFAULT_PUBLISHERS, SupplyError, VerifiedPackage, parse_spec, publisher_for
 
 log = logging.getLogger(__name__)
@@ -268,6 +268,51 @@ def approve_manifest(body: SpecRequest, request: Request, db: DbSession) -> Mani
 def revoke_manifest(body: SpecRequest, request: Request, db: DbSession) -> ManifestOut:
     """Stop trusting a version (e.g. it turned out to be malicious): plugins lose trusted status."""
     return _decide(request, db, body.spec, approve=False, by=body.by)
+
+
+class SkillApproveRequest(_Model):
+    ref: str = Field(description="source:name as in the inventory, e.g. openclaw-managed:pdf-tools")
+    digest: str | None = Field(
+        default=None, description="integrity.dir_digest of the skill directory you reviewed"
+    )
+    current: bool = Field(
+        default=False, description="Approve the digest sensors last reported for this skill (no digest given)"
+    )
+    by: str | None = None
+
+
+def _reported_skill_digest(db: Session, ref: str) -> str | None:
+    """Newest digest any sensor reported for this skill in an inventory snapshot."""
+    q = select(EventRow).where(EventRow.kind == "inventory.snapshot").order_by(EventRow.ts.desc()).limit(200)
+    for row in db.scalars(q):
+        for sk in row.doc["payload"].get("skills") or []:
+            if sk.get("ref") == ref and sk.get("digest"):
+                return sk["digest"]
+    return None
+
+
+@router.post("/skill", response_model=ManifestOut, status_code=status.HTTP_201_CREATED)
+def approve_skill(body: SkillApproveRequest, request: Request, db: DbSession) -> ManifestOut:
+    """Approve one skill's exact files (by digest). A changed skill is a new digest: approve again,
+    or it shows as tampered. Revoke with the returned spec."""
+    digest = body.digest
+    if digest is None:
+        if not body.current:
+            raise HTTPException(422, "give digest, or current=true")
+        digest = _reported_skill_digest(db, body.ref)
+        if digest is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no sensor has reported a digest for {body.ref}")
+    spec = f"skill:{body.ref}@{digest[:12]}"
+    row = db.get(PackageManifestRow, spec) or PackageManifestRow(
+        spec=spec, package=f"skill:{body.ref}", version=digest[:12], verified_at=utcnow()
+    )
+    row.components = {f"skill:{body.ref}": digest}
+    row.error, row.approved, row.revoked = None, True, False
+    row.decided_by, row.decided_at = body.by, utcnow()
+    db.merge(row)
+    db.commit()
+    request.app.state.refresh_policy()
+    return _out(db.get(PackageManifestRow, spec), _cooldown(request))  # type: ignore[arg-type]
 
 
 @router.post("/pin", response_model=ManifestOut, status_code=status.HTTP_201_CREATED)

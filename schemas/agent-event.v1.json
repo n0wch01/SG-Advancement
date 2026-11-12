@@ -1442,6 +1442,63 @@
           ],
           "default": null,
           "title": "Description Sha256"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Installed skill directory",
+          "title": "Path"
+        },
+        "digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "integrity.tree_digest of the skill directory",
+          "title": "Digest"
+        },
+        "integrity": {
+          "anyOf": [
+            {
+              "enum": [
+                "verified",
+                "mismatch",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "verified: matches a digest security approved; mismatch: an approved skill changed; unknown: nobody approved it. None: not checked (bundled with the agent, or files not readable)",
+          "title": "Integrity"
+        },
+        "trust": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Status of the approval it matched (approved / revoked)",
+          "title": "Trust"
         }
       },
       "required": [

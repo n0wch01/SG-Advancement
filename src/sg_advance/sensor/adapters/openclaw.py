@@ -37,15 +37,19 @@ import json
 import logging
 import os
 from collections import deque
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ...integrity import Manifest, dir_digest
 from ...redact import redact_value
 from ...schema import AgentEvent, Enforcement, ResponseAction, SensorType
 from .base import AdapterContext
 from .openclaw_gateway import DEFAULT_URL, DeviceIdentity, GatewayConnection, GatewayError, PairingRequired
 from .openclaw_people import OpenClawPeople
+from .openclaw_skills import TRUSTED_SET as SKILLS_TRUSTED
+from .openclaw_skills import Digester, SkillDisabler, check_skills, cli_skill_disabler
 
 log = logging.getLogger(__name__)
 
@@ -93,6 +97,7 @@ def _skills(status: dict[str, Any] | None) -> list[dict[str, Any]]:
                 "model_visible": sk.get("modelVisible") if isinstance(sk.get("modelVisible"), bool) else None,
                 "description": desc,
                 "description_sha256": hashlib.sha256(desc.encode()).hexdigest() if desc else None,
+                "path": sk.get("baseDir") if isinstance(sk.get("baseDir"), str) else None,
             }
         )
     return out
@@ -183,8 +188,10 @@ class OpenClawMapper:
         catalog: dict[str, Any],
         agent: dict[str, Any] | None = None,
         skills: dict[str, Any] | None = None,
+        check_skills: Callable[[list[dict[str, Any]]], None] | None = None,
     ) -> AgentEvent:
-        """One agent's inventory: ``tools.catalog`` (+ ``agents.list`` row, ``skills.status``)."""
+        """One agent's inventory: ``tools.catalog`` (+ ``agents.list`` row, ``skills.status``).
+        ``check_skills`` fills digest/integrity/trust on the skill rows (openclaw_skills)."""
         tools, plugins = [], {}
         for group in catalog.get("groups") or []:
             for t in group.get("tools") or []:
@@ -210,6 +217,8 @@ class OpenClawMapper:
             "plugins": list(plugins.values()),
             "skills": _skills(skills),
         }
+        if check_skills is not None:
+            check_skills(payload["skills"])
         model = agent.get("model")
         if isinstance(model, dict) and isinstance(model.get("primary"), str):
             payload["model"] = model["primary"]
@@ -484,6 +493,8 @@ class OpenClawAdapter:
         max_backoff: float = 60.0,
         plugin_grace: float = 3.0,
         password: str | None = None,
+        skill_digest: Digester | None = None,
+        skill_disabler: SkillDisabler | None = None,
     ) -> None:
         self.url = url
         self.token = token if token is not None else os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
@@ -503,6 +514,8 @@ class OpenClawAdapter:
             self.scopes.append("operator.approvals")
         self.aborted_runs: set[tuple[str, str | None]] = set()
         self.connected = asyncio.Event()
+        self.skill_digest = skill_digest or dir_digest
+        self.skill_disabler = skill_disabler or cli_skill_disabler()
 
     async def run(self, ctx: AdapterContext) -> None:
         mapper = OpenClawMapper(ctx.user_id, ctx.hostname, ctx.people)
@@ -640,7 +653,20 @@ class OpenClawAdapter:
                 continue
             skills = await conn.request("skills.status", params) if agent else {}
             status = skills.get("payload") if skills.get("ok") else None
-            await self._handle(ctx, conn, mapper.inventory(res["payload"], agent, status))
+            event = mapper.inventory(
+                res["payload"], agent, status, lambda rows: self._check_skills(ctx, rows)
+            )
+            await self._handle(ctx, conn, event)
+
+    def _check_skills(self, ctx: AdapterContext, rows: list[dict[str, Any]]) -> None:
+        manifests = [
+            Manifest.model_validate(m) for m in (ctx.sensor.policy.manifests if ctx.sensor.policy else ())
+        ]
+        trusted = check_skills(rows, manifests, self.skill_digest)
+        # One snapshot per agent: keep refs other agents' snapshots verified (same skill, same bytes).
+        current = ctx.sensor.trusted.get(SKILLS_TRUSTED, set())
+        mine = {r["ref"] for r in rows if r.get("ref")}
+        ctx.sensor.set_trusted(SKILLS_TRUSTED, (current - mine) | trusted)
 
     async def _people(self, conn: GatewayConnection, mapper: OpenClawMapper) -> None:
         """Profiles (id → email) and existing session owners, for attribution on team gateways.
@@ -679,6 +705,26 @@ class OpenClawAdapter:
         result = ctx.evaluate(event)
         ctx.record(result, await self._enforce(conn, event, result.verdict.action))
 
+    def _quarantine_skills(self, event: AgentEvent, action: ResponseAction) -> Enforcement:
+        """Inventory quarantine: disable approved skills whose files changed. Plugins are the
+        integrity adapter's job; nothing else in an inventory can be switched off here."""
+        sensor = SensorType.OPENCLAW_GATEWAY
+        skills = getattr(event.payload, "skills", ())
+        targets = [sk.name for sk in skills if sk.integrity == "mismatch" and sk.enabled]
+        if action is not ResponseAction.QUARANTINE or not targets:
+            return Enforcement(
+                action=action, enforced=False, enforcer=sensor, detail="nothing to quarantine here"
+            )
+        done, notes = [], []
+        for key in targets:
+            ok, msg = self.skill_disabler(key)
+            (done if ok else notes).append(key if ok else f"{key}: {msg}")
+            log.warning("quarantine skill %s: %s", key, "disabled" if ok else msg)
+        detail = "skills disabled: " + ", ".join(done) if done else "no skill disabled"
+        if notes:
+            detail += "; " + "; ".join(notes)
+        return Enforcement(action=action, enforced=bool(done) and not notes, enforcer=sensor, detail=detail)
+
     async def _enforce(
         self, conn: GatewayConnection, event: AgentEvent, action: ResponseAction
     ) -> Enforcement | None:
@@ -693,9 +739,7 @@ class OpenClawAdapter:
             return Enforcement(action=action, enforced=False, enforcer=sensor, detail="observe-only mode")
         key, run_id = event.agent.session_id, event.agent.run_id
         if key.startswith("inventory:"):
-            return Enforcement(
-                action=action, enforced=False, enforcer=sensor, detail="no run to abort; quarantine is M11"
-            )
+            return self._quarantine_skills(event, action)
         if (key, run_id) in self.aborted_runs:
             return Enforcement(action=action, enforced=True, enforcer=sensor, detail="run already aborted")
         try:

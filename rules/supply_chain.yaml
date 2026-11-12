@@ -84,7 +84,8 @@ rules:
   # 기본 허용은 이미지에 들어 있는 스킬(openclaw-bundled)과 설치된 플러그인이 넣은 스킬(openclaw-extra, 플러그인 자체는
   # 위 플러그인 룰과 무결성 검증이 맡는다). ClawHub 설치(openclaw-managed)와 작업 공간 스킬(openclaw-workspace)은 승인 대상.
   # 오탐 주의: 회사가 일부러 배포한 스킬 → allow에 "openclaw-managed:corp-*"처럼 추가. 꺼진(disabled) 스킬도 설치돼 있으면 걸린다.
-  # 미탐 주의: 이름만 보는 허용이라 같은 이름의 변조 스킬은 못 본다(스킬 무결성 검증은 후속 과제).
+  # 미탐 주의: allow 목록(bundled/extra)은 이름 기준이다. 승인 해시로 허용된 스킬은 바뀌면 openclaw-skill-tampered가 잡지만,
+  #   bundled·extra는 해시하지 않는다(bundled는 본체 무결성, extra는 플러그인 무결성이 맡음. 컨테이너에서는 둘 다 이미지 신뢰).
   - id: openclaw-skill-unapproved
     severity: high
     category: supply_chain
@@ -98,6 +99,24 @@ rules:
       type: allowlist
       field: "payload.skills[].ref"
       allow: ["openclaw-bundled:*", "openclaw-extra:*"]
+      # + 보안팀이 내용을 검토하고 해시로 승인한 스킬(sga-server manifest skill), 센서가 설치된 파일 해시를 확인한 것만
+      allow_trusted: openclaw_skills
+
+  # 승인된 스킬의 파일이 승인한 해시와 다르다(SKILL.md나 스크립트가 바뀜). 업데이트도 여기에 걸린다 → 다시 검토하고 승인.
+  # 인벤토리는 주기적으로 오므로 dedup은 기본(session): 한 에이전트에서 처음 한 번만 finding이 된다.
+  - id: openclaw-skill-tampered
+    severity: critical
+    category: supply_chain
+    title: 승인된 스킬 변조
+    message: 보안팀이 승인한 스킬의 파일이 승인 당시와 다릅니다.
+    recommended_action: 스킬을 비활성화한 상태로 두고 바뀐 내용(SKILL.md, 스크립트)을 검토하세요. 정상 업데이트면 새 해시로 다시 승인하세요.
+    response: quarantine
+    tags: [owasp-agentic:ASI04, incident:clawhavoc-2026]
+    when: {payload.kind: inventory.snapshot}
+    match:
+      type: regex
+      fields: ["payload.skills[].integrity"]
+      pattern: '^mismatch$'
 
   # ── 설치된 코드 무결성 (M5d) ──
   # integrity.report: 센서가 설치된 파일의 해시를 정책의 매니페스트(서버가 npm 레지스트리 서명과

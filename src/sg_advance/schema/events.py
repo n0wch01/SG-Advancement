@@ -168,6 +168,16 @@ class SkillDescriptor(StrictModel):
     model_visible: bool | None = None
     description: str | None = None
     description_sha256: str | None = None
+    path: str | None = Field(default=None, description="Installed skill directory")
+    digest: str | None = Field(default=None, description="integrity.tree_digest of the skill directory")
+    integrity: Literal["verified", "mismatch", "unknown"] | None = Field(
+        default=None,
+        description="verified: matches a digest security approved; mismatch: an approved skill changed; "
+        "unknown: nobody approved it. None: not checked (bundled with the agent, or files not readable)",
+    )
+    trust: str | None = Field(
+        default=None, description="Status of the approval it matched (approved / revoked)"
+    )
 
 
 class InventorySnapshot(StrictModel):
