@@ -178,6 +178,36 @@ uv run sga-detect examples/events/openclaw_team.jsonl
 `openclaw-skill-unapproved`로 걸렸고, 두 에이전트 모두 `permission_mode: full`이라 `openclaw-agent-permission-full`이 났다.
 에이전트와 스킬은 게이트웨이 볼륨(`team-openclaw`)에 남으므로, 볼륨을 새로 만들면 다시 추가해야 한다.
 
+## egress: 에이전트 망의 유일한 출구 (M5d)
+
+게이트웨이는 **인터넷 경로가 없는 내부망**(`team-net`, `internal: true`)에만 붙어 있다. 밖으로 나가는 길은 SG-Advance egress 프록시
+(`team-egress`, 172.28.0.12:3128) 하나뿐이고, 게이트웨이에는 `HTTP(S)_PROXY`와 `NODE_USE_ENV_PROXY=1`, OpenClaw `tools.web.fetch.useTrustedEnvProxy`를 설정했다.
+환경 변수를 무시하는 프로그램은 프록시를 우회하는 게 아니라 **아예 나가지 못한다**.
+
+```
+team-gateway ──(team-net, 내부망)──▶ team-egress ──(corp-net)──▶ 인터넷
+      │  직접 연결: 경로 없음                │ 연결마다 net.egress 이벤트, egress-unapproved-host로 판정
+```
+
+- 프록시는 `CONNECT host:port`(TLS)와 평문 HTTP 요청을 받는다. 목적지(호스트, 포트, 메서드, 평문이면 URL)만 기록하고 **TLS 안은 읽지 않는다.**
+- 판정은 서명된 정책의 `egress-unapproved-host`(허용 도메인 목록)다. `SGA_EGRESS_MODE=monitor`는 기록·경보만, `enforce`는 403으로 거절한다.
+- 사람 단위 귀속은 없다. 네트워크 계층에서는 어느 직원의 실행이 보낸 요청인지 알 수 없어서 `egress:<게이트웨이 IP>`로 남는다.
+- 관제 서버(`control-plane`)는 내부망에도 붙어 있어 센서들이 프록시 없이 보고한다(`NO_PROXY`).
+
+실측과 결정(2026-11-12):
+
+| 목적지 | 무엇 | 결정 |
+|---|---|---|
+| `chatgpt.com` | 모델 호출 (구독 로그인 방식이라 `api.openai.com`이 아님) | 허용 목록에 추가 |
+| `www.gravatar.com` | 사용자 아바타 | **차단**: 직원 이메일 해시가 외부 서비스로 나감 (아바타는 기본 이미지) |
+| 그 밖 (`example.com` 등) | | 차단 |
+
+감시 모드에서는 대화 한 번만 관찰하고 차단 모드로 바꿨다. 쓰이지 않은 기능(이미지 생성, 웹 검색 등)이 새 도메인을 쓰면 막히므로,
+막힌 목적지는 `egress-unapproved-host` finding을 보고 룰 허용 목록에 사례부터 추가한다.
+
+확인: 게이트웨이에서 직접 `curl https://example.com` → 경로 없음. 프록시 경유 → 차단 모드에서 `example.com`, `www.gravatar.com` 403(`egress BLOCK`), `chatgpt.com` 200.
+주의: 관제 서버와 프록시가 동시에 재시작되면 프록시가 **이전 정책 캐시**로 시작하고, 다음 동기화(최대 60초)까지 이전 허용 목록을 쓴다.
+
 ## 감사 프록시: 누가 승인하고, 중단하고, 지웠나
 
 OpenClaw는 승인한 사람을 기록하지 않는다. 내부 DB(`operator_approvals.resolver_id`)와 승인 이벤트(`resolvedBy`) 모두 앱 이름인
@@ -194,6 +224,9 @@ SG-Advance의 코어 무결성 검증(T22)에도 변조로 걸린다.
 | `sessions.patch` / `sessions.patchMany`의 `archived` | `session.archive` / `session.unarchive` (대상마다 한 건) |
 | `sessions.delete` | `session.delete`: 보관된 것만 삭제했는지(`archived_only`), 대화 기록까지 지웠는지 |
 | `sessions.patch` / `sessions.patchMany`의 권한 필드 (`permissionMode`, `sandboxMode`, `exec*`, `elevatedLevel`, `toolOverrides`) | `session.privilege`: `changes`에 `필드=값`. 권한을 넓히는 변경이 받아들여지면 `openclaw-session-privilege-raised`(high) |
+
+실환경(2026-11-12): alice가 대화 권한을 `workspace`로 바꿨다가 기본값으로 되돌림 → `session.privilege` 두 건, 경보 없음.
+secops가 `full`을 고름 → `openclaw-session-privilege-raised` (high, `secops@corp.test`).
 
 - 이벤트의 `principal`은 **행동한 사람**이고, 게이트웨이의 응답(허용, 거부와 오류 코드)도 함께 남긴다. 접속 IP는 라벨 `openclaw.client_ip`에 남긴다.
 - **대화 메시지는 읽지 않는다.** 위 메서드 이름이 들어 있지 않은 메시지는 해석하지 않고 그대로 넘긴다(테스트로 바이트 단위 동일 확인).
@@ -222,6 +255,7 @@ alice가 보관하지 않은 대화를 바로 지우려 하자 화면이 요청�
 | 보관된 대화 삭제 | `operator.write` (보관 → 삭제) | 같은 함수, `archivedOnly: true` |
 | 남의 대화 보기 | 역할의 `sessions.others` (`none`/`suggest`/`view`/`write`) | 데모는 `member: none`, `security: view` |
 | 하위 에이전트 만들기 | `operator.admin` 또는 `sessions.others: write` (자식이 에이전트 소유라서) | 위 실험 |
+| 대화 실행 권한 `full` 고르기 | 관리자만 (직원 화면에서는 잠김). 단 **고르지 않으면 에이전트 기본값**을 따르고 기본값이 `full`이면 그대로 전체 액세스 | Control UI 실행 권한 메뉴, 2026-11-12 |
 
 대화 삭제는 사고 조사에서 보면 증거 삭제다. 그래서 OpenClaw 기본값(직원은 보관을 거쳐야 함)을 그대로 두고 모든 시도를 기록한다.
 

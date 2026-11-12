@@ -216,6 +216,12 @@ v4 녹화 프레임은 [openclaw-2026.11.3-tool-run.jsonl](../tests/fixtures/ope
 `raw`도 뺀다. 탐지는 이미 원문으로 끝났으므로 영향이 없다. `sga-sensor run --keep-chat-text`로 끌 수 있다. 결정 배경과 한계는
 [team-gateway.md](team-gateway.md#데이터-최소화)에 있다.
 
+### egress 프록시 (M5d)
+
+`sga-sensor run --egress-proxy 0.0.0.0:3128 [--egress-enforce] [--egress-internal-suffix .corp]`: HTTP 프록시(CONNECT 포함)로 동작하며
+연결마다 `net.egress`(목적지, 내부/외부)를 만들어 룰로 판정한다. 기본은 감시 모드, `--egress-enforce`면 차단 판정에 403.
+구성과 결정은 [team-gateway.md](team-gateway.md#egress-에이전트-망의-유일한-출구-m5d).
+
 ### 팀 게이트웨이 (M5b)
 
 여러 직원이 쓰는 게이트웨이에서는 툴 호출을 시킨 사람으로 기록한다(`users.list`, 사용자 메시지의 `senderIdentity`, 대화 주인).
