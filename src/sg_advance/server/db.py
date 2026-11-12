@@ -11,7 +11,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, create_engine, event
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    create_engine,
+    event,
+    inspect,
+)
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -46,6 +56,9 @@ class Base(DeclarativeBase):
     pass
 
 
+BASELINE_REVISION = "0001"  # the schema as M3-M7 created it without migrations
+
+
 class EnrollmentToken(Base):
     """Issued by an admin, handed to whoever installs a sensor. Only the hash is stored."""
 
@@ -58,6 +71,9 @@ class EnrollmentToken(Base):
     expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     max_uses: Mapped[int] = mapped_column(Integer, default=1)
     uses: Mapped[int] = mapped_column(Integer, default=0)
+    group_name: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, doc="Devices enrolled with this token join this group (M9)"
+    )
 
 
 class Device(Base):
@@ -72,6 +88,12 @@ class Device(Base):
     enrolled_with: Mapped[int | None] = mapped_column(ForeignKey("enrollment_tokens.id"))
     last_seen: Mapped[datetime | None] = mapped_column(UTCDateTime)
     policy_version: Mapped[str | None] = mapped_column(String(64), doc="Last policy the sensor pulled")
+    group_name: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+        doc="Policy group: common policy + this group's stricter overrides",
+    )
 
 
 class EventRow(Base):
@@ -128,6 +150,55 @@ class PackageManifestRow(Base):
     error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
 
+class Group(Base):
+    """A team whose devices get the common policy plus stricter overrides (M9)."""
+
+    __tablename__ = "policy_groups"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    created_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+class PolicyOverride(Base):
+    """The current override of one rule in one scope ("common" or a group name). Unset fields
+    leave the rule as the layer below has it."""
+
+    __tablename__ = "policy_overrides"
+    __table_args__ = (UniqueConstraint("scope", "rule_id", name="uq_policy_overrides_scope_rule"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope: Mapped[str] = mapped_column(String(64), index=True)
+    rule_id: Mapped[str] = mapped_column(String(200))
+    enabled: Mapped[bool | None] = mapped_column(nullable=True)
+    response: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    allow: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    reason: Mapped[str] = mapped_column(String(1000), default="")
+
+
+class PolicyChange(Base):
+    """Append-only audit log of policy edits. ``id`` doubles as the policy revision number."""
+
+    __tablename__ = "policy_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+    actor: Mapped[str] = mapped_column(String(200))
+    role: Mapped[str] = mapped_column(String(20))
+    action: Mapped[str] = mapped_column(
+        String(40)
+    )  # override.set | override.clear | group.create | device.assign
+    scope: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    rule_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    target: Mapped[str | None] = mapped_column(String(200), nullable=True)  # device id for device.assign
+    before: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    reason: Mapped[str] = mapped_column(String(1000), default="")
+
+
 def make_engine(url: str) -> Engine:
     if url.startswith("sqlite"):
         path = url.split("///", 1)[-1]
@@ -159,8 +230,21 @@ class Database:
         self._sessions = sessionmaker(self.engine, expire_on_commit=False)
 
     def create_all(self) -> None:
-        # No migrations until M9 (Alembic); tables are created on startup.
-        Base.metadata.create_all(self.engine)
+        """Bring the schema to the latest migration (M9: Alembic, server/migrations).
+
+        A database made before migrations existed (tables created directly by M3-M7) is stamped
+        as the baseline first, so its data is kept and only the newer migrations run."""
+        from alembic import command
+        from alembic.config import Config
+
+        cfg = Config()
+        cfg.set_main_option("script_location", str(Path(__file__).parent / "migrations"))
+        with self.engine.begin() as conn:
+            cfg.attributes["connection"] = conn
+            tables = set(inspect(conn).get_table_names())
+            if "devices" in tables and "alembic_version" not in tables:
+                command.stamp(cfg, BASELINE_REVISION)
+            command.upgrade(cfg, "head")
 
     def session(self) -> Iterator[Session]:
         with self._sessions() as s:

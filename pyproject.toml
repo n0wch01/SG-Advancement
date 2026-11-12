@@ -17,6 +17,7 @@ openclaw = [
 ]
 # Control plane only. Endpoint sensors install the bare package and stay light.
 server = [
+    "alembic>=1.13",  # schema migrations (server/migrations)
     "fastapi>=0.115",
     "sigstore>=4.5",  # verifies npm provenance of agent packages (server/supply.py)
     "sqlalchemy>=2.0",

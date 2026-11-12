@@ -7,6 +7,13 @@
     sga-server manifest pin sg-advance --dir integrations/openclaw-plugin --version 0.1.0
     sga-server manifest skill openclaw-workspace:deploy-notes --current   # after reviewing the skill
     sga-server audit approvals [--user U] [--all] [--limit N]   # what users approved (C)
+    sga-server policy scopes                              # common + groups, devices, versions (M9)
+    sga-server policy rules [--scope data-team] [--changed]
+    sga-server policy group data-team --by me --reason "..."
+    sga-server policy assign dev-1 data-team --by me --reason "..."     (--common to leave a group)
+    sga-server policy set data-team destructive-sql --response block --by me --reason "..."
+    sga-server policy clear data-team destructive-sql --by me --reason "..."
+    sga-server policy log [--scope data-team]
 
 The manifest commands call the admin API (``--server``, default ``$SGA_SERVER`` or
 http://127.0.0.1:8000) with ``$SGA_ADMIN_TOKEN``; the token is never printed.
@@ -148,8 +155,111 @@ def audit_main(argv: list[str]) -> int:
     return 0
 
 
+def _who(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--by", required=True, help="who makes the change (kept in the change log)")
+    p.add_argument("--reason", required=True, help="why (kept in the change log)")
+
+
+def policy_main(argv: list[str]) -> int:
+    import os
+    import urllib.parse
+
+    ap = argparse.ArgumentParser(prog="sga-server policy", description="policy groups and overrides (M9)")
+    ap.add_argument("--server", default=os.environ.get("SGA_SERVER", "http://127.0.0.1:8000"))
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("scopes", help="common policy and groups")
+    p = sub.add_parser("rules", help="effective rules of a scope")
+    p.add_argument("--scope", default="common")
+    p.add_argument("--changed", action="store_true", help="only rules with an override")
+    p = sub.add_parser("group", help="create a group")
+    p.add_argument("name")
+    p.add_argument("--description")
+    _who(p)
+    p = sub.add_parser("assign", help="move a device into a group")
+    p.add_argument("device")
+    p.add_argument("group", nargs="?")
+    p.add_argument("--common", action="store_true", help="leave any group: common policy only")
+    _who(p)
+    p = sub.add_parser("set", help="override a rule in a scope (groups: stricter only)")
+    p.add_argument("scope")
+    p.add_argument("rule")
+    on = p.add_mutually_exclusive_group()
+    on.add_argument("--enable", dest="enabled", action="store_const", const=True)
+    on.add_argument("--disable", dest="enabled", action="store_const", const=False)
+    p.add_argument("--response", help="allow|alert|require_approval|block|abort_session|quarantine")
+    p.add_argument("--allow", help="allowlist entries, comma separated (allowlist rules only)")
+    _who(p)
+    p = sub.add_parser("clear", help="remove an override (back to the layer below)")
+    p.add_argument("scope")
+    p.add_argument("rule")
+    _who(p)
+    p = sub.add_parser("log", help="policy change log, newest first")
+    p.add_argument("--scope")
+    p.add_argument("--limit", type=int, default=30)
+    args = ap.parse_args(argv)
+    who = {"by": getattr(args, "by", None), "reason": getattr(args, "reason", None)}
+
+    if args.cmd == "scopes":
+        doc = _api(args.server, "GET", "/v1/admin/policy/scopes")
+        print(f"revision {doc['revision']}")  # type: ignore[index]
+        for sc in doc["scopes"]:  # type: ignore[index]
+            print(
+                f"{sc['name']:<16} devices={sc['devices']:<3} overrides={sc['overrides']:<3} "
+                f"{sc['version'][:16]}…"
+            )
+    elif args.cmd == "rules":
+        rows = _api(
+            args.server, "GET", "/v1/admin/policy/rules?" + urllib.parse.urlencode({"scope": args.scope})
+        )
+        for r in rows:  # type: ignore[union-attr]
+            changed = r["common_override"] or r["group_override"]
+            if args.changed and not changed:
+                continue
+            e = r["effective"]
+            state = "on " if e["enabled"] else "OFF"
+            mark = " *" if changed else ""
+            allow = f" allow={','.join(e['allow'])}" if e["allow"] is not None and changed else ""
+            print(f"{state} {e['response']:<17} {r['id']}{mark}{allow}")
+    elif args.cmd == "group":
+        body = {"name": args.name, "description": args.description, **who}
+        r = _api(args.server, "POST", "/v1/admin/policy/groups", body)
+        print(f"group {args.name} created (revision {r['revision']})")  # type: ignore[index]
+    elif args.cmd == "assign":
+        if bool(args.group) == args.common:
+            raise SystemExit("give a group or --common")
+        r = _api(args.server, "PUT", f"/v1/admin/devices/{args.device}/group", {"group": args.group, **who})
+        print(f"{args.device} → {args.group or 'common'} (revision {r['revision']})")  # type: ignore[index]
+    elif args.cmd == "set":
+        body = {"scope": args.scope, "rule_id": args.rule, **who}
+        if args.enabled is not None:
+            body["enabled"] = args.enabled
+        if args.response:
+            body["response"] = args.response
+        if args.allow is not None:
+            body["allow"] = [a.strip() for a in args.allow.split(",") if a.strip()]
+        r = _api(args.server, "PUT", "/v1/admin/policy/overrides", body)
+        print(f"{args.scope}/{args.rule} set (revision {r['revision']}, version {r['version'][:16]}…)")  # type: ignore[index]
+    elif args.cmd == "clear":
+        body = {"scope": args.scope, "rule_id": args.rule, **who}
+        r = _api(args.server, "POST", "/v1/admin/policy/overrides/clear", body)
+        print(f"{args.scope}/{args.rule} cleared (revision {r['revision']})")  # type: ignore[index]
+    else:
+        q = {"limit": args.limit} | ({"scope": args.scope} if args.scope else {})
+        log = _api(args.server, "GET", "/v1/admin/policy/changes?" + urllib.parse.urlencode(q))
+        for c in log:  # type: ignore[union-attr]
+            what = c["rule_id"] or c["target"] or ""
+            print(
+                f"#{c['id']:<4} {c['ts'][:19]} {c['actor']:<18} {c['action']:<15} "
+                f"{c['scope'] or '-':<12} {what}"
+                f"  {c['before'] or ''} → {c['after'] or ''}  ({c['reason']})"
+            )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["policy"]:
+        return policy_main(argv[1:])
     if argv[:1] == ["manifest"]:
         return manifest_main(argv[1:])
     if argv[:1] == ["audit"]:

@@ -26,6 +26,7 @@ from sqlalchemy import func, or_, select
 from ..schema import Severity
 from .auth import DbSession, require_admin
 from .db import Device, EventRow, FindingRow
+from .policy_admin import policy_for
 
 router = APIRouter(prefix="/v1/admin", tags=["dashboard"], dependencies=[Depends(require_admin)])
 
@@ -154,7 +155,6 @@ def summary(
         key=lambda u: (-SEVERITY_ORDER.index(u.max_severity), -u.count, u.user_id),
     )[:top]
 
-    current = request.app.state.policy.version
     devices = list(db.scalars(select(Device)))
     active_after = now - ACTIVE_WINDOW
     latest = db.scalars(
@@ -178,7 +178,9 @@ def summary(
         devices=DeviceStats(
             total=len(devices),
             active=sum(1 for d in devices if d.last_seen and _aware(d.last_seen) >= active_after),
-            policy_current=sum(1 for d in devices if d.policy_version == current),
+            policy_current=sum(
+                1 for d in devices if d.policy_version == policy_for(request.app, d.group_name).version
+            ),
         ),
         recent=list(latest),
     )
@@ -282,7 +284,6 @@ def inventory(request: Request, db: DbSession) -> list[DeviceInventory]:
         .group_by(FindingRow.device_id, FindingRow.severity)
     ):
         sev.setdefault(device, {})[severity] = n
-    current = request.app.state.policy.version
 
     def snaps(device: str, kind: str) -> list[Snapshot]:
         return sorted(per.get(device, {}).get(kind, {}).values(), key=lambda x: x.session_id)
@@ -294,7 +295,7 @@ def inventory(request: Request, db: DbSession) -> list[DeviceInventory]:
             sensor_version=d.sensor_version,
             enrolled_at=d.enrolled_at,
             last_seen=d.last_seen,
-            policy_current=d.policy_version == current,
+            policy_current=d.policy_version == policy_for(request.app, d.group_name).version,
             installs=snaps(d.device_id, "install.snapshot"),
             agents=snaps(d.device_id, "inventory.snapshot"),
             configs=snaps(d.device_id, "config.snapshot"),

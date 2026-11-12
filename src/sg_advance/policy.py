@@ -101,6 +101,14 @@ class PolicyBundle(BaseModel):
         return cls(version=_digest(docs, mans), rules=tuple(docs), manifests=tuple(mans))
 
     @classmethod
+    def from_docs(
+        cls, docs: list[dict[str, Any]], manifests: list[dict[str, Any]] | None = None
+    ) -> PolicyBundle:
+        """Rule documents after policy layers (M9); validated so a bad override can't ship."""
+        rules = [Rule.model_validate(d) for d in docs]
+        return cls.from_ruleset(RuleSet(rules, {r.id: "policy" for r in rules}), manifests)
+
+    @classmethod
     def load(cls, rules_dir: Path, manifests: list[dict[str, Any]] | None = None) -> PolicyBundle:
         return cls.from_ruleset(RuleSet.load(rules_dir), manifests)
 
