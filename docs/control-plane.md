@@ -81,6 +81,8 @@ docker compose up -d --build
   해시만으로는 위조를 막지 못하므로, 서버가 `version`에 Ed25519로 서명하고(`key_id`, `signature`) 센서가 검증한다.
   자세한 내용은 [sensor.md](sensor.md#정책-서명과-공개키).
 - 이 모듈은 서버 의존성이 없어서 센서(M4)가 그대로 가져다 쓴다.
+- M9부터는 `rules/` 위에 공통·팀 덮어쓰기를 얹은 결과를 같은 형식으로 서명한다. 팀 장비는 자기 팀 묶음을 받는다([policy.md](policy.md)).
+  덮어쓰기가 하나도 없으면 버전은 예전과 같다.
 
 ## 저장
 
@@ -90,7 +92,9 @@ docker compose up -d --build
   스키마에 필드가 추가돼도 테이블을 바꿀 필요가 없다.
 - 시각은 항상 UTC로 저장하고, 시간대 정보가 붙은 값으로 돌려준다. SQLite는 시간대를 버리기 때문에 `UTCDateTime` 타입이 그 차이를 감춘다.
 - SQLite는 WAL 모드로 연다. 읽기가 쓰기를 막지 않는다. 쓰기는 여전히 한 번에 하나라서, 병목이 생기면 Postgres로 옮긴다.
-- 테이블은 서버가 시작할 때 만든다. 마이그레이션 도구(Alembic)는 M9에서 들인다.
+- 스키마는 **Alembic 마이그레이션**(`server/migrations/versions/`, M9)으로 관리한다. 서버가 시작할 때 최신으로 올린다.
+  마이그레이션 이전(M3~M7)에 만들어진 DB는 기준 리비전 `0001`로 표시한 뒤 이후 리비전만 적용해 데이터를 그대로 둔다.
+  새 리비전은 `versions/`의 마지막 파일을 복사해 `revision`/`down_revision`을 올리고, `tests/test_migrations.py`가 모델과 일치하는지 검사한다.
 
 ## 수집 규칙
 
