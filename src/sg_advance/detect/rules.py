@@ -111,11 +111,19 @@ class SequenceStep(_PatternMixin):
 
 
 class SequenceMatch(_Model):
-    """Fires when the steps happen in order inside one session, all within ``within_seconds``."""
+    """Fires when the steps happen in order inside one session (or one delegation tree), all within
+    ``within_seconds``."""
 
     type: Literal["sequence"]
     steps: tuple[SequenceStep, ...] = Field(min_length=2)
     within_seconds: float = Field(default=600, gt=0)
+    scope: Literal["session", "delegation"] = Field(
+        default="session",
+        description="delegation = a session and the sub-agent sessions it spawned (agent.root_session_id)",
+    )
+    distinct_sessions: bool = Field(
+        default=False, description="The last step must happen in a different session than the first"
+    )
 
 
 Match = Annotated[

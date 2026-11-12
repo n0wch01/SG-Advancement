@@ -188,6 +188,7 @@ class _SeqProgress:
     started: datetime
     event_ids: list[str]
     notes: list[str]
+    first_session: str = ""
 
 
 class _SequenceMatcher:
@@ -205,14 +206,28 @@ class _SequenceMatcher:
         label = step.name or f"step{i + 1}"
         return f"{label}({first(doc, 'payload.kind')}{': ' + why if why else ''})"
 
+    def _key(self, doc: dict[str, Any]) -> tuple[str, str]:
+        if self.spec.scope == "delegation":  # the tree's top session; a root session is its own top
+            return (
+                first(doc, "endpoint.device_id"),
+                first(doc, "agent.root_session_id") or first(doc, "agent.session_id"),
+            )
+        return _session_key(doc)
+
     def check(self, event: AgentEvent, doc: dict[str, Any]) -> _RawHit | None:
-        key = _session_key(doc)
+        key = self._key(doc)
+        session = first(doc, "agent.session_id")
         p = self.progress.get(key)
         if p and (event.ts - p.started).total_seconds() > self.spec.within_seconds:
             p = None
             del self.progress[key]
         if p is not None:
             note = self._step_hit(p.next_step, doc)
+            last = p.next_step == len(self.spec.steps) - 1
+            if note is not None and last and self.spec.distinct_sessions and session == p.first_session:
+                note = None  # same session: the session-scoped rules already cover it
+            if note is not None and self.spec.distinct_sessions:
+                note = f"{note} @{session}"
             if note is not None:
                 p.next_step += 1
                 p.event_ids.append(event.event_id)
@@ -226,7 +241,9 @@ class _SequenceMatcher:
         # (Re)start: a fresh first step also refreshes a sequence stuck after step 1.
         note = self._step_hit(0, doc)
         if note is not None:
-            self.progress[key] = _SeqProgress(1, event.ts, [event.event_id], [note])
+            if self.spec.distinct_sessions:
+                note = f"{note} @{session}"
+            self.progress[key] = _SeqProgress(1, event.ts, [event.event_id], [note], session)
         return None
 
     def forget_session(self, key: tuple[str, str]) -> None:

@@ -57,3 +57,13 @@ def test_cli_runs(capsys: pytest.CaptureFixture[str], extra: list[str]) -> None:
     assert main([*files, "--rules", str(ROOT / "rules"), *extra]) == 0
     out = capsys.readouterr().out
     assert "injection-then-sensitive-action" in out
+
+
+def test_t18_injection_read_by_a_sub_agent_then_acted_on_by_its_parent() -> None:
+    """Team gateway: the sub-agent read the poisoned page, the delegating agent ran the exfil."""
+    verdicts = replay("openclaw_team.jsonl")
+    exfil = verdicts[-1]
+    assert exfil.event.agent.session_id != verdicts[-2].event.agent.session_id
+    assert "cross-agent-injection-propagation" in exfil.rule_ids
+    assert "injection-then-sensitive-action" not in exfil.rule_ids  # not one session
+    assert exfil.action is ResponseAction.BLOCK
