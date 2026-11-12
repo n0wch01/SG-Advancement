@@ -16,7 +16,9 @@ docker compose up -d --build
 
 | 환경 변수 | 기본값 | 설명 |
 |---|---|---|
-| `SGA_ADMIN_TOKEN` | (없음) | 관리자 API 토큰. M7에서 콘솔 로그인으로 바뀐다 |
+| `SGA_ADMIN_TOKEN` | (없음) | 관리자 API 토큰 (정책·등록·매니페스트를 바꿀 수 있음) |
+| `SGA_DASHBOARD_TOKEN` | (없음) | SGA-Dashboard 로그인용 **읽기 전용** 토큰. `/v1/admin`의 GET만 허용 ([dashboard.md](dashboard.md)) |
+| `SGA_DASHBOARD_DIR` | (없음) | 빌드된 대시보드(`dashboard/dist`). 있으면 `/dashboard`로 제공하고 `/`를 그리로 보낸다 |
 | `SGA_DB_URL` | `sqlite:///data/sga.db` | SQLAlchemy URL. Postgres로 갈 때 이 값만 바꾼다 |
 | `SGA_RULES_DIR` | `rules` | 정책 v0으로 내려줄 룰 디렉터리 |
 | `SGA_SIGNING_KEY` | `data/policy_signing_key.pem` | 정책 서명용 Ed25519 개인키. 없으면 처음 시작할 때 만든다 (0600) |
@@ -28,11 +30,12 @@ docker compose up -d --build
 
 ## 인증
 
-토큰은 세 종류이고, 모두 `Authorization: Bearer <token>` 헤더로 보낸다.
+토큰은 네 종류이고, 모두 `Authorization: Bearer <token>` 헤더로 보낸다.
 
 | 토큰 | 접두어 | 누가 쓰나 | 수명 |
 |---|---|---|---|
-| 관리자 토큰 | (자유) | 보안팀, 나중에 콘솔 | 서버 설정값 |
+| 관리자 토큰 | (자유) | 보안팀 CLI(`sga-server`) | 서버 설정값 |
+| 대시보드 토큰 | (자유) | SGA-Dashboard (웹 콘솔). GET만, 쓰기는 403 | 서버 설정값 |
 | 등록 토큰 | `set_` | 센서를 설치하는 사람 | 기본 1회용, 24시간 |
 | 장비 토큰 | `sdt_` | 등록을 마친 센서 | 폐기 전까지 (폐기는 M12) |
 
