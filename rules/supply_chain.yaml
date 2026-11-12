@@ -68,17 +68,36 @@ rules:
   - id: mcp-tool-description-poisoning
     severity: critical
     category: supply_chain
-    title: 툴 설명 변조(Tool Poisoning) 의심
-    message: 툴 설명에 모델에게 내리는 숨은 지시나 민감 경로가 포함돼 있습니다.
+    title: 툴·스킬 설명 변조(Tool Poisoning) 의심
+    message: 툴이나 스킬 설명에 모델에게 내리는 숨은 지시나 민감 경로가 포함돼 있습니다.
     recommended_action: 해당 MCP 서버/플러그인을 즉시 격리하고 툴 설명 원문을 검토하세요.
     response: quarantine
     tags: [owasp-llm:LLM01, owasp-agentic:T2]
     when: {payload.kind: inventory.snapshot}
     match:
       type: regex
-      fields: ["payload.tools[].description"]   # [] 가 들어간 경로는 따옴표 필수
+      fields: ["payload.tools[].description", "payload.skills[].description"]   # [] 가 들어간 경로는 따옴표 필수
       ignore_case: true
       pattern: '<important>|<system>|before using this tool|ignore (all )?previous|do not (tell|mention|inform)|~/\.ssh|id_rsa|\.aws/credentials|(^|[^\w.])\.env\b'
+
+  # 스킬: SKILL.md 지시문 + 스크립트라서 플러그인과 같은 공급망 경로다(ClawHavoc 2026: ClawHub 악성 스킬 341개 이상).
+  # 기본 허용은 이미지에 들어 있는 스킬(openclaw-bundled)과 설치된 플러그인이 넣은 스킬(openclaw-extra, 플러그인 자체는
+  # 위 플러그인 룰과 무결성 검증이 맡는다). ClawHub 설치(openclaw-managed)와 작업 공간 스킬(openclaw-workspace)은 승인 대상.
+  # 오탐 주의: 회사가 일부러 배포한 스킬 → allow에 "openclaw-managed:corp-*"처럼 추가. 꺼진(disabled) 스킬도 설치돼 있으면 걸린다.
+  # 미탐 주의: 이름만 보는 허용이라 같은 이름의 변조 스킬은 못 본다(스킬 무결성 검증은 후속 과제).
+  - id: openclaw-skill-unapproved
+    severity: high
+    category: supply_chain
+    title: 미허가 에이전트 스킬
+    message: 에이전트 인벤토리에 기본 제공이 아닌, 허용목록에 없는 스킬이 있습니다.
+    recommended_action: 스킬 출처와 SKILL.md·스크립트 내용을 검토하고, 승인되지 않았다면 비활성화하세요.
+    response: alert
+    tags: [owasp-agentic:ASI04, incident:clawhavoc-2026]
+    when: {payload.kind: inventory.snapshot, agent.type: openclaw}
+    match:
+      type: allowlist
+      field: "payload.skills[].ref"
+      allow: ["openclaw-bundled:*", "openclaw-extra:*"]
 
   # ── 설치된 코드 무결성 (M5d) ──
   # integrity.report: 센서가 설치된 파일의 해시를 정책의 매니페스트(서버가 npm 레지스트리 서명과

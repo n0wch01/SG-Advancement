@@ -695,12 +695,63 @@
     },
     "InventorySnapshot": {
       "additionalProperties": false,
+      "description": "What one agent can use. Multi-agent gateways send one snapshot per agent (``agent_id``).",
       "properties": {
         "kind": {
           "const": "inventory.snapshot",
           "default": "inventory.snapshot",
           "title": "Kind",
           "type": "string"
+        },
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent on a multi-agent gateway",
+          "title": "Agent Id"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime"
+        },
+        "permission_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The agent's default permission mode",
+          "title": "Permission Mode"
         },
         "tools": {
           "default": [],
@@ -716,6 +767,14 @@
             "$ref": "#/$defs/PluginDescriptor"
           },
           "title": "Plugins",
+          "type": "array"
+        },
+        "skills": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SkillDescriptor"
+          },
+          "title": "Skills",
           "type": "array"
         },
         "mcp_servers": {
@@ -1294,6 +1353,101 @@
         }
       },
       "title": "SessionStart",
+      "type": "object"
+    },
+    "SkillDescriptor": {
+      "additionalProperties": false,
+      "description": "An agent skill (instructions + scripts the model can load), e.g. OpenClaw ``SKILL.md``.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where it came from, e.g. openclaw-bundled / -extra / -managed / -workspace",
+          "title": "Source"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "source:name, what allowlists match on",
+          "title": "Ref"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "eligible": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Requirements met, so the agent can use it",
+          "title": "Eligible"
+        },
+        "model_visible": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Visible"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "description_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description Sha256"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "SkillDescriptor",
       "type": "object"
     },
     "Source": {

@@ -155,10 +155,32 @@ class NetEgress(StrictModel):
     destination: Literal["internal", "external", "unknown"] = "unknown"
 
 
+class SkillDescriptor(StrictModel):
+    """An agent skill (instructions + scripts the model can load), e.g. OpenClaw ``SKILL.md``."""
+
+    name: str
+    source: str | None = Field(
+        default=None, description="Where it came from, e.g. openclaw-bundled / -extra / -managed / -workspace"
+    )
+    ref: str | None = Field(default=None, description="source:name, what allowlists match on")
+    enabled: bool = True
+    eligible: bool | None = Field(default=None, description="Requirements met, so the agent can use it")
+    model_visible: bool | None = None
+    description: str | None = None
+    description_sha256: str | None = None
+
+
 class InventorySnapshot(StrictModel):
+    """What one agent can use. Multi-agent gateways send one snapshot per agent (``agent_id``)."""
+
     kind: Literal[EventKind.INVENTORY_SNAPSHOT] = EventKind.INVENTORY_SNAPSHOT
+    agent_id: str | None = Field(default=None, description="Agent on a multi-agent gateway")
+    model: str | None = None
+    runtime: str | None = None
+    permission_mode: str | None = Field(default=None, description="The agent's default permission mode")
     tools: tuple[ToolDescriptor, ...] = ()
     plugins: tuple[PluginDescriptor, ...] = ()
+    skills: tuple[SkillDescriptor, ...] = ()
     mcp_servers: tuple[str, ...] = ()
 
 

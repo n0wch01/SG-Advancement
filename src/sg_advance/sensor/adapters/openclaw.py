@@ -32,6 +32,7 @@ which is exactly "the user approves" for ``require_approval``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -69,6 +70,32 @@ def _text(content: Any) -> str:
     if isinstance(content, dict):
         return _text(content.get("content") or content.get("text"))
     return ""
+
+
+def _skills(status: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """``skills.status`` rows → SkillDescriptor dicts (description kept for poisoning rules)."""
+    out = []
+    for sk in (status or {}).get("skills") or []:
+        if not isinstance(sk, dict):
+            continue
+        name = sk.get("skillKey") or sk.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        source = sk.get("source") if isinstance(sk.get("source"), str) else None
+        desc = sk.get("description") if isinstance(sk.get("description"), str) else None
+        out.append(
+            {
+                "name": name,
+                "source": source,
+                "ref": f"{source or 'unknown'}:{name}",
+                "enabled": not sk.get("disabled"),
+                "eligible": sk.get("eligible") if isinstance(sk.get("eligible"), bool) else None,
+                "model_visible": sk.get("modelVisible") if isinstance(sk.get("modelVisible"), bool) else None,
+                "description": desc,
+                "description_sha256": hashlib.sha256(desc.encode()).hexdigest() if desc else None,
+            }
+        )
+    return out
 
 
 def _result_text(result: Any) -> str:
@@ -151,7 +178,13 @@ class OpenClawMapper:
 
     # ── inventory ────────────────────────────────────────────────────────────
 
-    def inventory(self, catalog: dict[str, Any]) -> AgentEvent:
+    def inventory(
+        self,
+        catalog: dict[str, Any],
+        agent: dict[str, Any] | None = None,
+        skills: dict[str, Any] | None = None,
+    ) -> AgentEvent:
+        """One agent's inventory: ``tools.catalog`` (+ ``agents.list`` row, ``skills.status``)."""
         tools, plugins = [], {}
         for group in catalog.get("groups") or []:
             for t in group.get("tools") or []:
@@ -168,11 +201,24 @@ class OpenClawMapper:
                     self.core_tools.add(name)
                 provider = {"kind": "plugin", "plugin_id": pid} if pid else {"kind": "builtin"}
                 tools.append({"name": name, "provider": provider, "description": t.get("description")})
-        agent_id = catalog.get("agentId") or "main"
-        return self._event(
-            f"inventory:{agent_id}",
-            {"kind": "inventory.snapshot", "tools": tools, "plugins": list(plugins.values())},
-        )
+        agent = agent or {}
+        agent_id = agent.get("id") or catalog.get("agentId") or "main"
+        payload: dict[str, Any] = {
+            "kind": "inventory.snapshot",
+            "agent_id": agent_id,
+            "tools": tools,
+            "plugins": list(plugins.values()),
+            "skills": _skills(skills),
+        }
+        model = agent.get("model")
+        if isinstance(model, dict) and isinstance(model.get("primary"), str):
+            payload["model"] = model["primary"]
+        runtime = agent.get("agentRuntime")
+        if isinstance(runtime, dict) and isinstance(runtime.get("id"), str):
+            payload["runtime"] = runtime["id"]
+        if isinstance(agent.get("defaultPermissionMode"), str):
+            payload["permission_mode"] = agent["defaultPermissionMode"]
+        return self._event(f"inventory:{agent_id}", payload)
 
     # ── exec approvals ───────────────────────────────────────────────────────
 
@@ -580,12 +626,21 @@ class OpenClawAdapter:
         ctx.record(result, enforcement)
 
     async def _snapshot(self, ctx: AdapterContext, conn: GatewayConnection, mapper: OpenClawMapper) -> None:
+        """Per-agent inventory (M5b): every agent on the gateway has its own tools, skills, model.
+        Gateways without ``agents.list`` get the single default catalog, as before."""
         await self._people(conn, mapper)
-        res = await conn.request("tools.catalog", {})
-        if res.get("ok") and isinstance(res.get("payload"), dict):
-            await self._handle(ctx, conn, mapper.inventory(res["payload"]))
-        else:
-            log.warning("tools.catalog failed: %s", res.get("error"))
+        res = await conn.request("agents.list", {})
+        rows = (res.get("payload") or {}).get("agents") if res.get("ok") else None
+        agents = [a for a in rows if isinstance(a, dict) and isinstance(a.get("id"), str)] if rows else []
+        for agent in agents or [None]:
+            params = {"agentId": agent["id"]} if agent else {}
+            res = await conn.request("tools.catalog", params)
+            if not (res.get("ok") and isinstance(res.get("payload"), dict)):
+                log.warning("tools.catalog failed for %s: %s", params or "default agent", res.get("error"))
+                continue
+            skills = await conn.request("skills.status", params) if agent else {}
+            status = skills.get("payload") if skills.get("ok") else None
+            await self._handle(ctx, conn, mapper.inventory(res["payload"], agent, status))
 
     async def _people(self, conn: GatewayConnection, mapper: OpenClawMapper) -> None:
         """Profiles (id → email) and existing session owners, for attribution on team gateways.

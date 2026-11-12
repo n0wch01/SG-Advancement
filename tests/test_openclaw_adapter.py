@@ -801,3 +801,84 @@ async def test_team_gateway_attributes_calls_to_people(gateway, enrolled: Sensor
         assert got["c-b"]["labels"]["openclaw.attribution"] == "session_owner"
     finally:
         task.cancel()
+
+
+SKILLS_STATUS = {
+    "agentId": "research",
+    "skills": [
+        {
+            "name": "github",
+            "skillKey": "github",
+            "source": "openclaw-bundled",
+            "disabled": False,
+            "eligible": True,
+            "modelVisible": True,
+            "description": "Work with GitHub.",
+        },
+        {
+            "name": "wallet",
+            "skillKey": "crypto-wallet-helper",
+            "source": "openclaw-managed",
+            "disabled": True,
+            "eligible": False,
+            "description": "Manage wallets.",
+        },
+        {"skillKey": 7},  # malformed rows are skipped
+    ],
+}
+
+
+def test_inventory_per_agent_with_model_runtime_and_skills() -> None:
+    m = OpenClawMapper("team-gateway")
+    agent = {
+        "id": "research",
+        "model": {"primary": "openai/gpt-6-astra"},
+        "agentRuntime": {"id": "openclaw"},
+        "defaultPermissionMode": "full",
+    }
+    inv = m.inventory(CATALOG | {"agentId": "research"}, agent, SKILLS_STATUS)
+    p = inv.payload
+    assert inv.agent.session_id == "inventory:research"
+    assert (p.agent_id, p.model, p.runtime, p.permission_mode) == (
+        "research",
+        "openai/gpt-6-astra",
+        "openclaw",
+        "full",
+    )
+    assert [(s.ref, s.enabled) for s in p.skills] == [
+        ("openclaw-bundled:github", True),
+        ("openclaw-managed:crypto-wallet-helper", False),
+    ]
+    assert p.skills[0].description_sha256 and len(p.skills[0].description_sha256) == 64
+    # Without agents.list data (older gateways) it is the single default agent, as before.
+    assert m.inventory(CATALOG).payload.agent_id == "main"
+
+
+async def test_adapter_snapshots_every_agent(gateway, enrolled: Sensor) -> None:
+    gw, url = gateway
+    gw.directory = {
+        "agents.list": {"defaultId": "main", "agents": [{"id": "main"}, {"id": "research"}]},
+        "skills.status": SKILLS_STATUS,
+    }
+    adapter = OpenClawAdapter(url, "gw-token", enforce=False)
+    task = await run_adapter(adapter, enrolled)
+    try:
+        import sqlite3
+
+        def snapshots() -> dict[str, dict[str, Any]]:
+            with sqlite3.connect(enrolled.spool.path) as db:
+                docs = [json.loads(d) for (d,) in db.execute("SELECT doc FROM outbox WHERE kind = 'event'")]
+            return {d["payload"]["agent_id"]: d for d in docs if d["payload"]["kind"] == "inventory.snapshot"}
+
+        await until(lambda: {"main", "research"} <= set(snapshots()))
+        asked = [(m, p) for m, p in gw.calls if m in ("tools.catalog", "skills.status")]
+        assert ("tools.catalog", {"agentId": "research"}) in asked and (
+            "skills.status",
+            {"agentId": "research"},
+        ) in asked
+        findings = queued_findings(enrolled)
+        assert any(
+            f["rule_id"] == "openclaw-skill-unapproved" for f in findings
+        )  # the ClawHub-installed skill
+    finally:
+        task.cancel()
