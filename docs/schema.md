@@ -35,6 +35,7 @@ AgentEvent
 | `operator.action` | 사람이 게이트웨이 제어 화면에서 한 행동. principal은 **행동한 사람** (감사 프록시, [team-gateway.md](team-gateway.md)) | action(`approval.resolve\|run.abort\|session.delete\|session.archive\|session.unarchive\|session.privilege`), method, ok, error, decision, approval_id, call_id, tool, target_session_id, target_run_id, archived_only, delete_transcript, changes(`필드=값`) |
 | `integrity.report` | 설치된 에이전트 코드 vs 서명된 배포본 (바뀔 때마다) | product, version, core, plugins[{component, package, version, origin, path, digest, integrity, trust}] |
 | `config.snapshot` | 에이전트 설치의 보안 설정 (허용된 필드만, 바뀔 때마다) | product, path, changed, guard_plugin, plugins, exec_policies[{scope, security, ask, mode, host, elevated}], runtimes[{scope, model, runtime}], sandboxes[{scope, mode, mode_source, workspace_access, scope_kind, elevated_default}] |
+| `install.snapshot` | 장비에서 찾은 에이전트 설치 하나 (관리 여부 포함, 처음 볼 때·바뀔 때·사라질 때) | product, instance, present, changed, version, install_path, install_source, config_path, configured, services, running, bind, bind_scope(`loopback\|network`), guard_plugin, watched, managed, unmanaged_reasons |
 
 `provider.kind`는 툴의 출처를 나타낸다: `builtin | plugin | mcp | function | unknown`.
 
@@ -64,6 +65,7 @@ AgentEvent
 | OpenClaw 플러그인 `requireApproval.onResolution` | `approval.resolved` |
 | OpenClaw 설정 파일 `~/.openclaw/openclaw.json` (센서 `openclaw_config`) | `config.snapshot` |
 | `openclaw plugins list --json` + 설치 폴더 해시 (센서 `openclaw_integrity`) | `integrity.report` |
+| `openclaw` 실행 파일·`~/.openclaw*/openclaw.json`·launchd/systemd 파일·127.0.0.1 게이트웨이 포트 (센서 `agent_discovery`) | `install.snapshot` |
 | 직원 화면 → 게이트웨이 `*.approval.resolve` / `chat.abort`·`sessions.abort` / `sessions.delete`·`sessions.patch(archived)` (센서 `openclaw_audit_proxy`) | `operator.action` |
 | Claude Code `SessionStart` / `SessionEnd` hook | `session.start` / `session.end` |
 | Claude Code `UserPromptSubmit` hook | `prompt.user` |

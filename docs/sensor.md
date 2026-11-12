@@ -458,6 +458,30 @@ sga-sensor run --openclaw          # 데몬이 <home>/sga.sock을 연다 (--sock
 실환경(2026-11-12, 팀 게이트웨이): `research`의 작업 공간 스킬 `deploy-notes`가 `unknown` → 내용 검토 후 `--current`로 승인 → `verified`, 미허가 finding 사라짐
 → `SKILL.md`에 한 줄 추가 → `mismatch`, `openclaw-skill-tampered` + 자동 비활성화(`enforced: true, skills disabled: deploy-notes`) → 되돌려 다시 켬.
 
+## 비관리 설치 탐지 (섀도 AI, M5d)
+
+회사의 공식 경로는 팀 게이트웨이다. 직원 PC에 개인이 설치한 OpenClaw는 막는 대상이 아니라 **찾아서 기준선을 지키는지 보는 대상**이다.
+`sga-sensor run`은 기본으로 10분마다(`--discovery-interval`) 현재 사용자의 설치 흔적을 찾는다(`--no-discovery`로 끔).
+
+| 보는 곳 | 알아내는 것 |
+|---|---|
+| PATH의 `openclaw`, 전역 패키지 폴더(Homebrew·npm·nvm·pnpm·volta) | 버전, 설치 경로, 설치 방식 |
+| `~/.openclaw`, `~/.openclaw-<프로필>`의 `openclaw.json` | 설정 여부, `gateway.bind`(기본 loopback)·포트, SG-Advance 플러그인 상태 |
+| `~/Library/LaunchAgents`, `~/.config/systemd/user`에서 이름에 openclaw가 든 파일 | 상시 실행 등록 |
+| 127.0.0.1의 그 설치 게이트웨이 포트 | 실행 중인지 |
+
+설정 폴더 하나가 `install.snapshot` 하나다. **관리됨** = 설정됨 + 플러그인 켜짐 + 이 센서가 그 설정을 감시(`--openclaw` + 설정 감시).
+처음 볼 때, 값이 바뀔 때, 사라질 때(`present: false`)만 보낸다.
+
+- 개인정보: 전체 프로세스 목록이나 다른 포트는 보지 않는다. 설정 파일에서는 bind·port·플러그인 상태만 읽는다(토큰은 나가지 않는다).
+- 룰([shadow_ai.yaml](../rules/shadow_ai.yaml), 알림만): `openclaw-unmanaged-install`(medium, 설정된 비관리 설치),
+  `openclaw-gateway-network-exposed`(high, 비관리 설치가 loopback이 아닌 주소로 실행 중, T20).
+- 한계: 현재 사용자 홈만 본다. 설정한 적 없는 설치(코드만)는 기록만 하고 경보하지 않는다. 다른 버전 사본이 여럿이면 PATH가 실행하는 것의 버전만 적는다.
+
+실환경(2026-11-12, compose `--profile shadow`의 `carol-pc`: 개인 설정 + `bind: lan` + 플러그인 없음):
+`openclaw-unmanaged-install`과 `openclaw-gateway-network-exposed`가 carol 이름으로 관제 서버에 올라왔다. 같은 시각 팀 게이트웨이는
+`lan` 바인드지만 관리됨(플러그인 켜짐, 센서 감시)이라 경보가 없었고, 같은 이미지를 쓰는 egress·감사 프록시는 "설정 안 됨"으로 기록만 됐다.
+
 ## 어댑터 계약
 
 [adapters/base.py](../src/sg_advance/sensor/adapters/base.py)

@@ -206,6 +206,9 @@ team-gateway ──(team-net, 내부망)──▶ team-egress ──(corp-net)�
 막힌 목적지는 `egress-unapproved-host` finding을 보고 룰 허용 목록에 사례부터 추가한다.
 
 확인: 게이트웨이에서 직접 `curl https://example.com` → 경로 없음. 프록시 경유 → 차단 모드에서 `example.com`, `www.gravatar.com` 403(`egress BLOCK`), `chatgpt.com` 200.
+차단 모드 실대화(2026-11-12, alice): 모델 호출은 정상. 날씨 질문에 에이전트가 Code Mode `web_fetch`로 `wttr.in`·`wttr.is`를 시도했고,
+플러그인은 `web_fetch`를 통과시켰지만 egress 프록시가 403으로 막았다(두 겹 방어). 에이전트는 가져오지 못했다고 답했고 `egress-unapproved-host` finding이 남았다.
+날씨 사이트는 업무용이 아니라 허용 목록에 넣지 않았다.
 주의: 관제 서버와 프록시가 동시에 재시작되면 프록시가 **이전 정책 캐시**로 시작하고, 다음 동기화(최대 60초)까지 이전 허용 목록을 쓴다.
 
 ## 감사 프록시: 누가 승인하고, 중단하고, 지웠나
