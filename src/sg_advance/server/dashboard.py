@@ -4,7 +4,7 @@
 - ``GET /v1/admin/summary``: counts for the overview (findings by severity / rule / person, events,
   devices) and the latest findings, optionally since a point in time.
 - ``GET /v1/admin/findings/{finding_id}``: one finding with its evidence events, the conversation's
-  surrounding events and the other findings of that conversation.
+  surrounding events, the other findings of that conversation and its campaign links (M11).
 - ``GET /v1/admin/inventory``: per device, the latest state snapshots the sensors sent: agent installs
   (``install.snapshot``), agents (``inventory.snapshot``), config baseline and code integrity.
 - ``GET /v1/admin/timeline``: one person's activity, or one conversation with every sub-agent
@@ -23,7 +23,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 
+from ..detect.engine import INDICATOR
 from ..schema import Severity
+from . import campaigns
 from .auth import DbSession, require_admin
 from .db import Device, EventRow, FindingRow
 from .policy_admin import policy_for
@@ -86,6 +88,10 @@ class FindingDetail(BaseModel):
     evidence: list[dict[str, Any]]
     session_events: list[dict[str, Any]]
     session_findings: list[dict[str, Any]]
+    # M11 campaigns: for a campaign finding, every finding of that rule + indicator around it
+    # (people who joined after it was raised included); for any other finding, the campaigns it is in.
+    campaign_members: list[dict[str, Any]] = []
+    campaigns: list[dict[str, Any]] = []
 
 
 @router.get("/whoami", response_model=WhoAmI)
@@ -227,7 +233,34 @@ def finding_detail(
         evidence=[evidence[i] for i in ids if i in evidence],
         session_events=list(reversed(window)),
         session_findings=list(others),
+        **_campaign_links(db, row),
     )
+
+
+def _campaign_links(db: DbSession, row: FindingRow) -> dict[str, list[dict[str, Any]]]:
+    labels = row.doc.get("labels") or {}
+    start, end = row.ts - campaigns.WINDOW, row.ts + campaigns.WINDOW
+    if row.rule_id == campaigns.RULE_ID:
+        found = campaigns.members(db, labels.get("source_rule", ""), labels.get(INDICATOR, ""), start, end)
+        ids = list(dict.fromkeys(m.finding_id for m in found))
+        docs = {
+            r.finding_id: r.doc for r in db.scalars(select(FindingRow).where(FindingRow.finding_id.in_(ids)))
+        }
+        return {"campaign_members": [docs[i] for i in ids if i in docs]}
+    mine = set(labels.get(INDICATOR, "").split("\n")) - {""}
+    if not mine:
+        return {}
+    out = [
+        d
+        for d in db.scalars(
+            select(FindingRow.doc).where(
+                FindingRow.rule_id == campaigns.RULE_ID, FindingRow.ts >= start, FindingRow.ts <= end
+            )
+        )
+        if (d.get("labels") or {}).get("source_rule") == row.rule_id
+        and (d.get("labels") or {}).get(INDICATOR) in mine
+    ]
+    return {"campaigns": out}
 
 
 SNAPSHOT_KINDS = ("install.snapshot", "inventory.snapshot", "config.snapshot", "integrity.report")

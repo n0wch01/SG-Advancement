@@ -38,6 +38,12 @@ from .rules import (
 # Live sets the sensor maintains for allowlist ``allow_trusted`` (name -> values).
 TrustedSets = dict[str, set[str]]
 EXCERPT_CONTEXT = 40
+# Campaign indicators (M11): findings of rules tagged ``campaign`` carry the matched value(s) in
+# ``labels[INDICATOR]`` (normalised, newline-separated) so the control plane can tell when the same
+# thing reaches several people (server/campaigns.py).
+CAMPAIGN_TAG = "campaign"
+INDICATOR = "indicator"
+INDICATOR_MAX = 200
 _ACTION_RANK = {a: i for i, a in enumerate(ResponseAction)}
 
 
@@ -72,6 +78,13 @@ class _RawHit:
     key: str
     explanation: str
     evidence_event_ids: tuple[str, ...]
+    values: tuple[str, ...] = ()  # the matched values themselves (campaign indicators)
+
+
+def indicator_of(values: Iterable[str]) -> str | None:
+    """Normalised (lower case, single spaces, redacted, capped), sorted, newline-separated."""
+    out = sorted({redact_text(" ".join(v.lower().split()))[:INDICATOR_MAX] for v in values} - {""})
+    return "\n".join(out) or None
 
 
 def _session_key(doc: dict[str, Any]) -> tuple[str, str]:
@@ -93,17 +106,17 @@ def _excerpt(text: str, start: int, end: int) -> str:
     return redact_text("".join(parts).replace("\n", "\\n"))
 
 
-def _search(doc: dict[str, Any], spec: RegexMatch | SequenceStep) -> str | None:
-    """Return an explanation of the first regex hit, or None."""
+def _search(doc: dict[str, Any], spec: RegexMatch | SequenceStep) -> tuple[str, str] | None:
+    """Return (explanation, matched text) of the first regex hit, or None."""
     cre = spec.compiled()
     if cre is None:
-        return ""
+        return "", ""
     for path in spec.fields:
         for value in resolve(doc, path):
             for text in string_leaves(value):
                 m = cre.search(text)
                 if m:
-                    return f"{path}: {_excerpt(text, m.start(), m.end())}"
+                    return f"{path}: {_excerpt(text, m.start(), m.end())}", m.group(0)
     return None
 
 
@@ -115,8 +128,8 @@ class _RegexMatcher:
         self.spec = spec
 
     def check(self, event: AgentEvent, doc: dict[str, Any]) -> _RawHit | None:
-        why = _search(doc, self.spec)
-        return _RawHit("", why, (event.event_id,)) if why is not None else None
+        hit = _search(doc, self.spec)
+        return _RawHit("", hit[0], (event.event_id,), (hit[1],)) if hit is not None else None
 
 
 class _AllowlistMatcher:
@@ -139,7 +152,7 @@ class _AllowlistMatcher:
         if not offending:
             return None
         why = f"{self.spec.field} not in allowlist: {', '.join(redact_text(v) for v in offending)}"
-        return _RawHit(",".join(offending), why, (event.event_id,))
+        return _RawHit(",".join(offending), why, (event.event_id,), tuple(offending))
 
 
 class _InSetMatcher:
@@ -154,7 +167,8 @@ class _InSetMatcher:
         for path in self.spec.fields:
             for v in resolve(doc, path):
                 if isinstance(v, str) and v in members:
-                    return _RawHit(v, f"{path} is in {self.spec.set}: {redact_text(v)}", (event.event_id,))
+                    why = f"{path} is in {self.spec.set}: {redact_text(v)}"
+                    return _RawHit(v, why, (event.event_id,), (v,))
         return None
 
 
@@ -217,9 +231,10 @@ class _SequenceMatcher:
         step = self.spec.steps[i]
         if not condition_holds(doc, step.when):
             return None
-        why = _search(doc, step)
-        if why is None:
+        hit = _search(doc, step)
+        if hit is None:
             return None
+        why = hit[0]
         label = step.name or f"step{i + 1}"
         return f"{label}({first(doc, 'payload.kind')}{': ' + why if why else ''})"
 
@@ -346,6 +361,7 @@ class Engine:
             tags=rule.tags,
             explanation=raw.explanation,
             evidence_event_ids=raw.evidence_event_ids,
+            labels=_campaign_labels(rule, raw),
             response=Enforcement(
                 action=rule.response,
                 enforced=False,
@@ -354,3 +370,8 @@ class Engine:
                 detail="not enforced: detection only",
             ),
         )
+
+
+def _campaign_labels(rule: Rule, raw: _RawHit) -> dict[str, str]:
+    indicator = indicator_of(raw.values) if CAMPAIGN_TAG in rule.tags else None
+    return {INDICATOR: indicator} if indicator else {}

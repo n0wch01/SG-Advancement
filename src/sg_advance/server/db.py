@@ -15,6 +15,7 @@ from sqlalchemy import (
     JSON,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -217,6 +218,21 @@ class RemoteAction(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     result_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     result_detail: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
+class FindingIndicator(Base):
+    """One campaign indicator of one finding (M11, ``labels.indicator`` split per value), indexed so
+    the control plane can count distinct people per (rule, indicator) in a time window."""
+
+    __tablename__ = "finding_indicators"
+    __table_args__ = (Index("ix_finding_indicators_lookup", "rule_id", "indicator", "ts"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    finding_id: Mapped[str] = mapped_column(ForeignKey("findings.finding_id"), index=True)
+    rule_id: Mapped[str] = mapped_column(String(200))
+    indicator: Mapped[str] = mapped_column(String(200))
+    user_id: Mapped[str] = mapped_column(String(200))
+    ts: Mapped[datetime] = mapped_column(UTCDateTime)
 
 
 def make_engine(url: str) -> Engine:

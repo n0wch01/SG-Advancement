@@ -83,7 +83,7 @@ rules:
     message: 허용목록에 없는 외부 호스트로 네트워크 요청이 나갔습니다.
     recommended_action: 목적지를 확인하고, 유출이 의심되면 세션을 중단하세요.
     response: block
-    tags: [owasp-llm:LLM02, scenario:S1, scenario:S2]
+    tags: [campaign, owasp-llm:LLM02, scenario:S1, scenario:S2]
     when: {payload.kind: net.egress, payload.destination: external}
     match:
       type: allowlist

@@ -9,7 +9,7 @@ rules:
     message: 에이전트 인벤토리에 허용목록에 없는 플러그인이 나타났습니다.
     recommended_action: 플러그인 출처를 확인하고, 승인되지 않았다면 비활성화(quarantine)하세요.
     response: quarantine
-    tags: [owasp-llm:LLM03, scenario:S1]
+    tags: [campaign, owasp-llm:LLM03, scenario:S1]
     when: {payload.kind: inventory.snapshot}
     match:
       type: allowlist
@@ -41,7 +41,7 @@ rules:
     message: 허용되지 않은 주소의 MCP 서버가 툴을 제공하고 있습니다.
     recommended_action: MCP 서버 설정을 확인하고 승인되지 않은 서버를 제거하세요.
     response: quarantine
-    tags: [owasp-agentic:T2, scenario:S1]
+    tags: [campaign, owasp-agentic:T2, scenario:S1]
     when: {payload.kind: inventory.snapshot}
     match:
       type: allowlist
@@ -72,7 +72,7 @@ rules:
     message: 툴이나 스킬 설명에 모델에게 내리는 숨은 지시나 민감 경로가 포함돼 있습니다.
     recommended_action: 해당 MCP 서버/플러그인을 즉시 격리하고 툴 설명 원문을 검토하세요.
     response: quarantine
-    tags: [owasp-llm:LLM01, owasp-agentic:T2]
+    tags: [campaign, owasp-llm:LLM01, owasp-agentic:T2]
     when: {payload.kind: inventory.snapshot}
     match:
       type: regex
@@ -93,7 +93,7 @@ rules:
     message: 에이전트 인벤토리에 기본 제공이 아닌, 허용목록에 없는 스킬이 있습니다.
     recommended_action: 스킬 출처와 SKILL.md·스크립트 내용을 검토하고, 승인되지 않았다면 비활성화하세요.
     response: alert
-    tags: [owasp-agentic:ASI04, incident:clawhavoc-2026]
+    tags: [campaign, owasp-agentic:ASI04, incident:clawhavoc-2026]
     when: {payload.kind: inventory.snapshot, agent.type: openclaw}
     match:
       type: allowlist

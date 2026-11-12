@@ -8,7 +8,7 @@ rules:
     title: 지시 무력화 시도 (Vigil InstructionBypass)
     message: 이전 지시를 무시·우회하라는 표현이 감지됐습니다.
     recommended_action: 입력의 출처를 확인하고 에이전트에 그대로 전달되지 않게 하세요.
-    tags: [owasp-llm:LLM01, mitre-atlas:AML.T0051]
+    tags: [campaign, owasp-llm:LLM01, mitre-atlas:AML.T0051]
     when: {payload.kind: [tool.result, prompt.user]}
     match:
       type: regex
@@ -22,7 +22,7 @@ rules:
     title: 시스템 인스트럭션 마커 (Vigil SystemInstructions)
     message: LLM 제어 토큰(<|im_start|>system, <<SYS>> 등)이 외부 입력에서 감지됐습니다.
     recommended_action: 신뢰할 수 없는 텍스트의 모델 제어 토큰을 이스케이프하세요.
-    tags: [owasp-llm:LLM01]
+    tags: [campaign, owasp-llm:LLM01]
     when: {payload.kind: [tool.result, prompt.user]}
     match:
       type: regex
@@ -48,7 +48,7 @@ rules:
     title: ReAct 사고/행동 위장 (Vigil ContainsReAct)
     message: ReAct "Thought/Action" 토큰이 JSON 액션과 함께 외부 입력에 들어 있습니다.
     recommended_action: 해당 입력을 격리하고 ReAct 토큰을 이스케이프하세요.
-    tags: [owasp-llm:LLM01]
+    tags: [campaign, owasp-llm:LLM01]
     when: {payload.kind: tool.result}
     match:
       type: regex
@@ -74,7 +74,7 @@ rules:
     title: 한국어 AI 지시 패턴 (인젝션 의심)
     message: 문서가 AI에게 민감 파일을 읽거나 단계별로 따르라고 지시합니다.
     recommended_action: 에이전트에 전달된 외부 문서 내용을 검토하세요.
-    tags: [owasp-llm:LLM01, scenario:S2]
+    tags: [campaign, owasp-llm:LLM01, scenario:S2]
     when: {payload.kind: tool.result}
     match:
       type: regex
@@ -158,7 +158,7 @@ rules:
     message: 하위 에이전트 작업 지시나 다른 세션으로 보내는 메시지에 인젝션 의심 문구가 들어 있습니다.
     recommended_action: 전달을 승인하기 전에 지시 내용의 출처(어떤 문서·툴 결과에서 왔는지)를 확인하세요.
     response: require_approval
-    tags: [owasp-llm:LLM01, threat:T18]
+    tags: [campaign, owasp-llm:LLM01, threat:T18]
     when: {payload.kind: tool.call, payload.tool: [sessions_spawn, sessions_send]}
     match:
       type: regex

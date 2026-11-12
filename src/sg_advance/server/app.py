@@ -24,7 +24,7 @@ from .. import __version__
 from ..policy import PolicyBundle, key_id, load_or_create_signing_key, public_key_b64
 from ..redact import redact_event, redact_text
 from ..schema import AgentEvent, Finding, Severity
-from . import actions, audit, dashboard, manifests, policy_admin
+from . import actions, audit, campaigns, dashboard, manifests, policy_admin
 from .auth import (
     DEVICE_PREFIX,
     ENROLL_PREFIX,
@@ -306,32 +306,44 @@ def ingest_findings(
     _check_owner(device, body.findings)
     now = utcnow()
     seen = _existing_ids(db, FindingRow.finding_id, [f.finding_id for f in body.findings])
-    accepted = 0
+    stored: list[tuple[str, Finding]] = []
     for f in body.findings:
         if f.finding_id in seen:
             continue
         seen.add(f.finding_id)
         if f.explanation:
             f = f.model_copy(update={"explanation": redact_text(f.explanation)})
-        db.add(
-            FindingRow(
-                finding_id=f.finding_id,
-                device_id=device.device_id,
-                ts=f.ts,
-                received_ts=now,
-                rule_id=f.rule_id,
-                severity=str(f.severity),
-                category=str(f.category),
-                user_id=f.principal.user_id,
-                agent_type=str(f.agent.type),
-                session_id=f.agent.session_id,
-                doc=f.model_dump(mode="json"),
-            )
-        )
-        accepted += 1
+        if f.detector != "local":  # central findings are the control plane's own (campaigns)
+            f = f.model_copy(update={"detector": "local"})
+        _store_finding(db, device.device_id, f, now)
+        stored.append((device.device_id, f))
+    db.flush()  # finding rows first: the indicator rows reference them
+    for _, f in stored:
+        campaigns.record(db, f)
+    db.flush()
+    for device_id, campaign in campaigns.detect(db, stored):
+        _store_finding(db, device_id, campaign, now)
     device.last_seen = now
     db.commit()
-    return IngestResult(accepted=accepted, duplicates=len(body.findings) - accepted)
+    return IngestResult(accepted=len(stored), duplicates=len(body.findings) - len(stored))
+
+
+def _store_finding(db: Session, device_id: str, f: Finding, now: datetime) -> None:
+    db.add(
+        FindingRow(
+            finding_id=f.finding_id,
+            device_id=device_id,
+            ts=f.ts,
+            received_ts=now,
+            rule_id=f.rule_id,
+            severity=str(f.severity),
+            category=str(f.category),
+            user_id=f.principal.user_id,
+            agent_type=str(f.agent.type),
+            session_id=f.agent.session_id,
+            doc=f.model_dump(mode="json"),
+        )
+    )
 
 
 # ── admin routes ────────────────────────────────────────────────────────────

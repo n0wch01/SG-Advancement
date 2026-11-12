@@ -4,7 +4,8 @@ Each file in tests/rule_cases/ lists cases: a short event stream plus the rule i
 (``expect``) and must not (``expect_not``) hit. Events are written as payload dicts; envelope
 fields are filled in by sg_advance.shorthand. Optional per-event keys: ``at`` (seconds from
 start), ``session``, ``user``, ``device``, ``sensor``. Optional per-case keys: ``agent``, ``sensor``,
-``sets`` (sensor-maintained sets for ``allow_trusted`` / ``in_set`` rules, name → values).
+``sets`` (sensor-maintained sets for ``allow_trusted`` / ``in_set`` rules, name → values),
+``indicators`` (rule id → the campaign indicator its finding must carry, or null for none; M11).
 
 When you find a false positive / negative, add it here first, watch it fail, then tune the rule.
 """
@@ -18,6 +19,7 @@ import pytest
 import yaml
 
 from sg_advance.detect import Engine, RuleSet
+from sg_advance.detect.engine import INDICATOR, Verdict
 from sg_advance.shorthand import build_event
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,12 +38,12 @@ def _load_cases() -> list[tuple[str, dict[str, Any]]]:
 CASES = _load_cases()
 
 
-def hit_rule_ids(case: dict[str, Any]) -> set[str]:
+def run_case(case: dict[str, Any]) -> list[Verdict]:
     defaults = {k: case[k] for k in ("agent", "sensor") if k in case}
     events = [build_event(s, defaults=defaults, index=i) for i, s in enumerate(case["events"])]
     events.sort(key=lambda e: e.ts)
     sets = {name: set(values) for name, values in (case.get("sets") or {}).items()}
-    return {rid for v in Engine(RULES, sets).replay(events) for rid in v.rule_ids}
+    return Engine(RULES, sets).replay(events)
 
 
 @pytest.mark.parametrize("case", [c for _, c in CASES], ids=[n for n, _ in CASES])
@@ -50,11 +52,15 @@ def test_rule_case(case: dict[str, Any]) -> None:
     referenced = set(case.get("expect", [])) | set(case.get("expect_not", []))
     assert referenced <= known, f"unknown rule ids: {referenced - known}"
 
-    hits = hit_rule_ids(case)
+    verdicts = run_case(case)
+    hits = {rid for v in verdicts for rid in v.rule_ids}
     missing = set(case.get("expect", [])) - hits
     unexpected = set(case.get("expect_not", [])) & hits
     assert not missing, f"false negative — expected to hit: {sorted(missing)} (hits: {sorted(hits)})"
     assert not unexpected, f"false positive — must not hit: {sorted(unexpected)}"
+    for rid, want in (case.get("indicators") or {}).items():
+        got = {f.labels.get(INDICATOR) for v in verdicts for f in v.findings if f.rule_id == rid}
+        assert got == {want}, f"{rid}: campaign indicator {sorted(map(str, got))}, expected {want!r}"
 
 
 def test_every_enabled_rule_has_positive_and_negative_case() -> None:
