@@ -204,6 +204,18 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
                 or (".corp", ".internal", ".local", ".lan"),
             )
         )
+    if args.mcp_gateway:  # the path from any agent to the company's MCP servers (M8)
+        from .adapters.mcp_gateway import McpGatewayAdapter
+
+        servers = dict(entry.split("=", 1) for entry in args.mcp_server if "=" in entry)
+        if not servers:
+            print("--mcp-gateway needs at least one --mcp-server NAME=URL", file=sys.stderr)
+            return 2
+        adapters.append(
+            McpGatewayAdapter(
+                args.mcp_gateway, servers, enforce=not args.mcp_monitor, user_header=args.mcp_user_header
+            )
+        )
     if args.openclaw_audit_proxy:  # team gateway: who approved / stopped what (M5b)
         if not args.audit_trusted_peer:
             print(
@@ -382,6 +394,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--socket", type=Path, help="local verdict API socket (default: <home>/sga.sock)")
     p.add_argument("--no-local-api", action="store_true", help="don't serve verdicts to gateway plugins")
     p.add_argument("--egress-proxy", metavar="HOST:PORT", help="run the egress proxy (HTTP + CONNECT)")
+    p.add_argument("--mcp-gateway", metavar="HOST:PORT", help="run the MCP gateway (agents use /mcp/<name>)")
+    p.add_argument(
+        "--mcp-server",
+        action="append",
+        default=[],
+        metavar="NAME=URL",
+        help="an approved MCP server (repeatable)",
+    )
+    p.add_argument("--mcp-monitor", action="store_true", help="MCP gateway records only, never refuses")
+    p.add_argument(
+        "--mcp-user-header", help="trusted identity header on a shared MCP gateway (e.g. x-forwarded-user)"
+    )
     p.add_argument(
         "--egress-enforce",
         action="store_true",

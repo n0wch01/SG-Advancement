@@ -24,7 +24,7 @@
 | Gemini CLI | `gemini_cli_hook` | 사전(가능 시) | X1에서 확인. 안 되면 차단 + 콘솔 승인 큐 | hook 사양은 선택 과제 X1에서 확인 |
 | Codex CLI | `codex_cli_hook` | 확인 필요 | X1에서 확인. 안 되면 차단 + 콘솔 승인 큐 | 연동 지점은 선택 과제 X1에서 조사 |
 | LangGraph | `langgraph_callback` | 사전(callback에서 예외) | 그래프를 멈추고(사람 개입 단계) 승인을 기다린다. 가상 직원은 승인자도 시뮬레이션 | Ollama 로컬 모델로 가상 직원 다수 시뮬레이션 |
-| 모든 MCP 클라이언트 | `mcp_proxy` | **사전**(JSON-RPC 중계 중 거부) | 클라이언트가 MCP elicitation(사용자에게 되묻기)을 지원하면 그걸로, 아니면 거부 + 콘솔 승인 큐 | 에이전트 종류와 무관한 범용 경로 |
+| 모든 MCP 클라이언트 | `mcp_proxy` (센서의 MCP 게이트웨이) | **사전**(`tools/call`을 서버에 보내기 전에 거부, 변조 툴은 목록에서 숨김) | 게이트웨이는 묻지 않고 에이전트의 확인 창에 맡김(Claude Code는 hook이 `ask`). 보안팀 승인은 게이트웨이가 대기 | 에이전트 종류와 무관한 범용 경로. M8 ✅ |
 | 모든 에이전트 | `egress_proxy` / `llm_proxy` | 사전 | 요청을 보류하고 콘솔 승인 큐 | 외부 유출, 비용 한도 |
 
 ### 현재 구현: OpenClaw (M5c 기준)

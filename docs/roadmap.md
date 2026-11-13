@@ -96,7 +96,7 @@ OpenClaw 전용 추가 기능.
 | # | 마일스톤 | 완료 기준 | 상태 |
 |---|---|---|---|
 | M6 | Claude Code hook 어댑터 | hook → 로컬 소켓(M5c에서 만든 것) → 데몬 판정, PreToolUse에서 deny, `ask`로 사용자 승인 후 결과 기록, 데몬이 없으면 캐시로 상태 없는 룰만 판정, 캐시도 없으면 툴 위험도로 허용·차단 + 라벨 기록 진행([sensor.md](sensor.md#claude-code-어댑터-m6)): `sga-hook`(가벼운 진입점), 같은 판정 API·룰, 보안팀 승인 대기, 승인 추정 기록, 관리 설정/사용자 설정 설치(결정: 둘 다 + 탐지), hook 위치·우회 모드 점검 룰 3개, 실제 관제 서버까지 확인(Claude 실행 없이) ✅ 2026-11-13. 남은 것: 실제 Claude Code에서 확인(노트북) | ⏳ |
-| M8 | MCP 프록시 + 악성 MCP 시나리오 | tool poisoning, 미허가 MCP 서버 차단 | |
+| M8 | MCP 프록시 + 악성 MCP 시나리오 | tool poisoning, 미허가 MCP 서버 차단 진행([sensor.md](sensor.md#mcp-게이트웨이-m8)): 센서 안의 MCP 게이트웨이(Streamable HTTP, JSON·SSE), 등록된 서버만, `tools/list` 변조 툴 숨김·호출 거부, `tools/call` 실행 전 판정(같은 판정 API·룰), 결과 검사, 감시 모드, 실제 관제 서버까지 확인 ✅ 2026-11-13. 남은 것: 실제 Claude Code에서 확인(노트북) | ⏳ |
 | M10 | 가상 직원 (LangGraph + Ollama) | 페르소나·일과 기반 LLM 직원 다수, 녹화/재생 모드, `docker compose up`으로 전체 데모 | |
 
 ## 선택 과제

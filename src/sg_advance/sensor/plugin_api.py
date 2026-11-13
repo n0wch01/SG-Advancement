@@ -149,6 +149,8 @@ class EnforcementPoint:
 
 OPENCLAW_PLUGIN = EnforcementPoint(SensorType.OPENCLAW_PLUGIN, "openclaw plugin", "OpenClaw")
 CLAUDE_CODE_HOOK = EnforcementPoint(SensorType.CLAUDE_CODE_HOOK, "claude code hook", "Claude Code")
+# require_approval at the MCP gateway is left to the agent's own prompt (the gateway cannot ask anyone).
+MCP_GATEWAY = EnforcementPoint(SensorType.MCP_PROXY, "mcp gateway", "the agent's own approval prompt")
 
 
 def plugin_response(
@@ -306,7 +308,8 @@ def judge_event(
                 detail="pre-exec: held for security approval in the console",
             )
         ctx.record(result, enforcement)
-        if response.get("decision") == "approve":
+        if response.get("decision") == "approve" and point.sensor is SensorType.CLAUDE_CODE_HOOK:
+            # Claude Code asked the person: a later result means they approved. The MCP gateway asks no one.
             ctx.plugins.remember_approval(result.event.payload.call_id, pending)  # type: ignore[union-attr]
         return response
     ctx.record(result)

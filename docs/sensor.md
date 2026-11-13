@@ -572,6 +572,42 @@ Claude Code ─ PreToolUse 등 hook (JSON stdin) ─▶ sga-hook ─▶ 로컬 �
 관제 서버에 Finding 2건(에이전트 `claude_code`, 집행 주체 `claude_code_hook`)과 `tool.call` 3건이 들어왔다. 시험 장비 `m6-mac-test`는 폐기했다.
 실제 Claude Code 세션 확인은 노트북 실설치(M12 5단계)에서 한다.
 
+## MCP 게이트웨이 (M8)
+
+회사가 사내 도구(CRM, 위키, DB …)를 MCP 서버로 열면, 어떤 에이전트든(Claude Code, Cursor, 사내 LangGraph) **게이트웨이를 거쳐서만** 붙게 한다.
+에이전트 종류와 상관없는 길목이라 hook이 없는 에이전트도 통제된다.
+
+```bash
+sga-sensor run --mcp-gateway 127.0.0.1:18790 --mcp-server crm=https://crm.corp/mcp --mcp-server wiki=http://wiki.corp/mcp
+claude mcp add --transport http crm http://127.0.0.1:18790/mcp/crm      # 에이전트는 게이트웨이 주소만 안다
+```
+
+| 지점 | 하는 일 |
+|---|---|
+| `/mcp/<이름>` | 등록된 서버만 있다. 모르는 이름은 404 |
+| `tools/list` 응답 | `inventory.snapshot`(툴 설명, 서버 URL)으로 판정. 격리급 룰(툴 설명 변조 등)에 걸린 툴은 **목록에서 숨기고** 호출도 거부(`quarantine` 집행 기록) |
+| `tools/call` 요청 | 서버에 보내기 **전에** `tool.call`로 판정. 차단이면 모델이 읽을 수 있는 MCP 툴 오류(`isError`)로 답하고 서버는 모른다. 보안팀 승인은 결정까지 대기. 승인 요청은 통과(게이트웨이는 묻지 못함: 에이전트 확인 창에 맡김) |
+| `tools/call` 응답 | `tool.result`로 기록·판정(결과 속 인젝션, 비밀값). 같은 대화의 다음 호출은 시퀀스 룰이 본다 |
+
+- JSON과 SSE(청크) 응답을 모두 중계한다. SSE는 이벤트 단위로 그대로 흘려보내면서 검사한다.
+- `--mcp-monitor`: 막지 않고 기록만(도입 초기). 공용 게이트웨이로 둘 때는 신원 프록시가 넣는 헤더로 사람을 구분한다(`--mcp-user-header`).
+- 에이전트 종류는 User-Agent로 알아본다(Claude Code). 센서 의존성을 늘리지 않으려고 HTTP는 asyncio로 직접 처리한다.
+
+### 실환경 확인 (2026-11-13, Mac, 가짜 사내 MCP 서버 `demo/fake_mcp_server.py`)
+
+시험 센서를 실제 관제 서버에 등록하고 게이트웨이를 띄워 JSON-RPC로 호출했다.
+
+| 호출 | 결과 |
+|---|---|
+| `tools/list` | 3개 중 설명이 변조된 `get_weather`가 빠지고 2개만 보임 |
+| `query_customers` | 정상 응답 |
+| `get_weather` 호출 | 거부: "격리됨(설명 변조)" |
+| `read_doc` | 응답 통과, 결과 속 인젝션 기록(`vigil-instruction-bypass`) |
+| 그 뒤 `~/.aws/credentials`를 curl로 보내는 인자 | **차단**: 민감 파일 접근, 민감 파일 외부 전송, 인젝션 이후 민감 행동(시퀀스) |
+| 등록 안 된 서버 `/mcp/evil` | 404 |
+
+관제 서버에 Finding 6건(에이전트 `claude_code`, 집행 주체 `mcp_proxy`). 시험 장비 `m8-mac-test`는 폐기했다.
+
 ## 어댑터 계약
 
 [adapters/base.py](../src/sg_advance/sensor/adapters/base.py)
