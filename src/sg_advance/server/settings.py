@@ -26,6 +26,16 @@ class Settings:
     release_cooldown_days: float = 3.0  # verified releases are trusted only after this long
     auto_verify: bool = True  # verify versions sensors report, without waiting for an admin
     npm_registry: str = "https://registry.npmjs.org"
+    # M12 multi-host: the device CA signs sensor (client) and LAN gateway (server) certificates.
+    ca_dir: Path | None = None  # default: "ca" next to the signing key
+    device_cert_days: int = 365
+    # Shared with the LAN gateway (nginx). Its client-certificate headers count only with this
+    # secret, so nothing else on the internal network can claim a verified certificate.
+    proxy_secret: str | None = None
+
+    @property
+    def ca_path(self) -> Path:
+        return self.ca_dir or self.signing_key_path.parent / "ca"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -40,4 +50,7 @@ class Settings:
             release_cooldown_days=float(os.environ.get("SGA_RELEASE_COOLDOWN_DAYS", "3")),
             auto_verify=os.environ.get("SGA_AUTO_VERIFY", "1") not in ("0", "false", "no"),
             npm_registry=os.environ.get("SGA_NPM_REGISTRY", "https://registry.npmjs.org"),
+            ca_dir=Path(d) if (d := os.environ.get("SGA_CA_DIR")) else None,
+            device_cert_days=int(os.environ.get("SGA_DEVICE_CERT_DAYS", "365")),
+            proxy_secret=os.environ.get("SGA_PROXY_SECRET") or None,
         )

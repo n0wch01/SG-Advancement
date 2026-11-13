@@ -19,6 +19,8 @@
     sga-server action disable-plugin|disable-skill DEVICE TARGET ...
     sga-server action list [--device D]
     sga-server security list [--all] | approve ID | deny ID --by me --reason "..."   (M11)
+    sga-server tls ca | server-cert --host 192.168.0.10 [--host my-mac.local] [--out /lan-tls]   (M12)
+    sga-server device list | revoke DEVICE --by me --reason "..."   (M12)
 
 The manifest commands call the admin API (``--server``, default ``$SGA_SERVER`` or
 http://127.0.0.1:8000) with ``$SGA_ADMIN_TOKEN``; the token is never printed.
@@ -347,8 +349,96 @@ def security_main(argv: list[str]) -> int:
     return 0
 
 
+def tls_main(argv: list[str]) -> int:
+    """Run where the control plane's data lives (inside the container: the CA is in /data/ca)."""
+    from pathlib import Path
+
+    from ..pki import cert_pem, key_pem
+    from . import device_ca
+
+    ap = argparse.ArgumentParser(
+        prog="sga-server tls", description="device CA and LAN gateway certificate (M12)"
+    )
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("ca", help="print the device CA fingerprint (pinned by the install command)")
+    p = sub.add_parser("server-cert", help="issue the LAN gateway's TLS certificate")
+    p.add_argument("--host", action="append", required=True, help="LAN IP or name sensors use (repeat)")
+    p.add_argument("--out", type=Path, default=Path("/lan-tls"))
+    p.add_argument("--days", type=int, default=825)
+    args = ap.parse_args(argv)
+    ca = device_ca.load_or_create(Settings.from_env().ca_path)
+    if args.cmd == "ca":
+        print(ca.fingerprint)
+        return 0
+    cert, key = ca.sign_server(args.host, args.days)
+    args.out.mkdir(parents=True, exist_ok=True)
+    device_ca._write(args.out / "server.pem", cert_pem(cert), 0o644)  # noqa: SLF001
+    device_ca._write(args.out / "server-key.pem", key_pem(key), 0o600)  # noqa: SLF001
+    device_ca._write(args.out / "ca.pem", cert_pem(ca.cert), 0o644)  # noqa: SLF001
+    print(
+        f"wrote {args.out}/server.pem for {', '.join(args.host)} (until {cert.not_valid_after_utc:%Y-%m-%d})"
+    )
+    print(f"device CA sha256 {ca.fingerprint}")
+    return 0
+
+
+def device_main(argv: list[str]) -> int:
+    import os
+
+    ap = argparse.ArgumentParser(prog="sga-server device", description="devices and enrollment tokens (M12)")
+    ap.add_argument("--server", default=os.environ.get("SGA_SERVER", "http://127.0.0.1:8000"))
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("list", help="enrolled devices: certificate, last seen, revoked")
+    p = sub.add_parser("revoke", help="stop a device for good (its token and certificate)")
+    p.add_argument("device")
+    _who(p)
+    p = sub.add_parser("token", help="create an enrollment token for one PC")
+    p.add_argument("--label")
+    p.add_argument("--group", help="policy group the device joins (M9)")
+    p.add_argument("--ttl-hours", type=float, default=24)
+    sub.add_parser("tokens", help="enrollment tokens and whether they can still be used")
+    p = sub.add_parser("revoke-token", help="make an unused enrollment token unusable")
+    p.add_argument("id", type=int)
+    args = ap.parse_args(argv)
+    if args.cmd == "list":
+        for d in _api(args.server, "GET", "/v1/admin/devices"):  # type: ignore[union-attr]
+            state = f"REVOKED by {d['revoked_by']}" if d["revoked_at"] else "active"
+            cert = f"cert until {d['cert_not_after'][:10]}" if d["client_certificate"] else "token only"
+            print(f"{d['device_id']:<16} {state:<24} {cert:<22} last seen {(d['last_seen'] or '-')[:19]}")
+        return 0
+    if args.cmd == "revoke":
+        d = _api(
+            args.server,
+            "POST",
+            f"/v1/admin/devices/{args.device}/revoke",
+            {"by": args.by, "reason": args.reason},
+        )
+        print(f"revoked {d['device_id']} at {d['revoked_at'][:19]}; its token and certificate no longer work")  # type: ignore[index]
+        return 0
+    if args.cmd == "token":
+        body = {"label": args.label, "group": args.group, "ttl_hours": args.ttl_hours}
+        t = _api(args.server, "POST", "/v1/admin/enrollment-tokens", body)
+        print(t["token"])  # type: ignore[index]
+        print(f"id {t['id']}, single use, expires {t['expires_at'][:19]}", file=sys.stderr)  # type: ignore[index]
+        return 0
+    if args.cmd == "tokens":
+        for t in _api(args.server, "GET", "/v1/admin/enrollment-tokens"):  # type: ignore[union-attr]
+            print(
+                f"#{t['id']:<4} {'usable' if t['usable'] else 'unusable':<9} {t['uses']}/{t['max_uses']} "
+                f"until {(t['expires_at'] or '-')[:19]}  {t['label'] or ''}"
+            )
+        return 0
+    _api(args.server, "POST", f"/v1/admin/enrollment-tokens/{args.id}/revoke")
+    print(f"enrollment token #{args.id} revoked")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["tls"]:
+        return tls_main(argv[1:])
+    if argv[:1] == ["device"]:
+        return device_main(argv[1:])
     if argv[:1] == ["security"]:
         return security_main(argv[1:])
     if argv[:1] == ["action"]:

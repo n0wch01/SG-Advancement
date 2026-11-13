@@ -75,6 +75,7 @@ class EnrollmentToken(Base):
     group_name: Mapped[str | None] = mapped_column(
         String(64), nullable=True, doc="Devices enrolled with this token join this group (M9)"
     )
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)  # M12
 
 
 class Device(Base):
@@ -95,6 +96,12 @@ class Device(Base):
         index=True,
         doc="Policy group: common policy + this group's stricter overrides",
     )
+    # M12: a device enrolled over the LAN holds a client certificate; every request must present it.
+    cert_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cert_not_after: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    revoke_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
 
 class EventRow(Base):

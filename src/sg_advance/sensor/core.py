@@ -14,16 +14,18 @@ import json
 import logging
 import platform
 import socket
+import ssl
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from .. import __version__
 from ..detect import Engine, Verdict
+from ..pki import fingerprint, key_pem, make_csr, new_key
 from ..policy import PolicyBundle, PolicyVerificationError, key_id, load_public_key
 from ..redact import redact_event
 from ..schema import AgentEvent, Enforcement
-from .client import ControlPlaneClient, ControlPlaneError, Offline, Transport
+from .client import ControlPlaneClient, ControlPlaneError, Offline, Transport, urllib_transport
 from .priority import event_priority
 from .spool import FlushResult, Spool
 from .state import Credentials, SensorHome, now_utc, write_private
@@ -47,6 +49,7 @@ class SyncStatus(StrEnum):
     UPDATED = "updated"  # new bundle fetched, verified and cached
     UNCHANGED = "unchanged"  # 304
     OFFLINE = "offline"  # kept the policy we had
+    REFUSED = "refused"  # the server said no (revoked device, bad token or certificate); cache kept
 
 
 def enroll(
@@ -57,11 +60,31 @@ def enroll(
     device_id: str | None = None,
     pinned_key: str | None = None,
     transport: Transport | None = None,
+    ca_file: Path | None = None,
+    ca_sha256: str | None = None,
 ) -> Credentials:
     """Register this endpoint. ``pinned_key`` (option B) must match the server's policy key;
-    without it the key from the enroll response is trusted on first use (option A)."""
+    without it the key from the enroll response is trusted on first use (option A).
+
+    M12: an ``https`` server is the LAN gateway. Then ``ca_file`` is the device CA to trust (its
+    SHA-256 must equal ``ca_sha256`` when given: the install command pins it), and the sensor makes
+    a key here and enrolls with a CSR; the signed client certificate comes back with the token."""
     if home.load_credentials() is not None:
         raise SensorError(f"already enrolled ({home.credentials_path}); remove it to re-enroll")
+    lan = server_url.lower().startswith("https://")
+    ca_pem = key = None
+    if lan:
+        if ca_file is None:
+            raise SensorError("an https control plane needs --ca-file (device CA, see install command)")
+        ca_pem = ca_file.read_text("utf-8")
+        got = fingerprint(ca_pem)
+        if ca_sha256 is not None and got != ca_sha256.lower().replace(":", ""):
+            raise SensorError(f"CA fingerprint {got} does not match the pinned {ca_sha256}")
+        key = new_key()
+        if transport is None:
+            ctx = ssl.create_default_context(cadata=ca_pem)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            transport = urllib_transport(context=ctx)
     client = ControlPlaneClient(server_url, transport=transport)
     if pinned_key is not None:
         expected = key_id(load_public_key(pinned_key))
@@ -75,7 +98,17 @@ def enroll(
         hostname=socket.gethostname(),
         os=f"{platform.system().lower()} {platform.release()}",
         sensor_version=__version__,
+        csr=make_csr(key, device_id) if key is not None else None,
     )
+    if lan:
+        cert = resp.get("client_certificate")
+        ca_back = resp.get("ca_certificate")
+        if not cert or not ca_back or fingerprint(ca_back) != fingerprint(ca_pem):  # type: ignore[arg-type]
+            raise SensorError("the control plane did not return a certificate from the pinned CA; not saving")
+        home.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        write_private(home.key_path, key_pem(key))  # type: ignore[arg-type]
+        write_private(home.cert_path, cert)
+        write_private(home.ca_path, ca_pem)  # type: ignore[arg-type]
     server_key = resp["policy_public_key"]
     if pinned_key is not None and server_key != pinned_key:
         raise SensorError("enroll response carried a different policy key than the pinned one; not saving")
@@ -87,6 +120,7 @@ def enroll(
         policy_key_id=key_id(pinned_key or server_key),
         key_pinned=pinned_key is not None,
         enrolled_at=now_utc(),
+        client_certificate=lan,
     )
     home.save_credentials(creds)
     return creds
@@ -119,6 +153,8 @@ class Sensor:
         self.home = home
         self.creds = creds
         self._key = load_public_key(creds.policy_public_key)
+        if transport is None:
+            transport = urllib_transport(context=home.ssl_context())
         self.client = ControlPlaneClient(creds.server_url, creds.device_token, transport)
         self.spool = Spool(home.spool_path)
         self.policy: PolicyBundle | None = None
@@ -189,8 +225,9 @@ class Sensor:
         except ControlPlaneError as e:
             if self.engine is None:
                 raise NoPolicy(f"server refused policy ({e}) and there is no valid cache") from e
-            log.warning("policy sync failed, using cache: %s", e)
-            return SyncStatus.OFFLINE
+            # Keep enforcing the last signed policy: being cut off must not switch protection off.
+            log.warning("policy sync refused, using cache: %s", e)
+            return SyncStatus.REFUSED
         if self.engine is None:
             raise NoPolicy("control plane unreachable and there is no valid cached policy")
         return status

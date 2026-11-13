@@ -21,10 +21,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import __version__
+from ..pki import cert_pem, fingerprint
 from ..policy import PolicyBundle, key_id, load_or_create_signing_key, public_key_b64
 from ..redact import redact_event, redact_text
 from ..schema import AgentEvent, Finding, Severity
-from . import actions, audit, campaigns, dashboard, manifests, policy_admin, security_approvals
+from . import actions, audit, campaigns, dashboard, device_ca, manifests, policy_admin, security_approvals
 from .auth import (
     DEVICE_PREFIX,
     ENROLL_PREFIX,
@@ -34,6 +35,7 @@ from .auth import (
     new_token,
     require_admin,
     require_device,
+    via_gateway,
 )
 from .db import Database, Device, EnrollmentToken, EventRow, FindingRow, Group, utcnow
 from .settings import Settings
@@ -59,6 +61,11 @@ class EnrollRequest(_Model):
     hostname: str | None = Field(default=None, max_length=255)
     os: str | None = Field(default=None, max_length=100)
     sensor_version: str | None = Field(default=None, max_length=50)
+    csr: str | None = Field(
+        default=None,
+        max_length=8000,
+        description="PEM certificate request for a client certificate (M12; required over the LAN)",
+    )
 
 
 class EnrollResponse(_Model):
@@ -66,6 +73,8 @@ class EnrollResponse(_Model):
     device_token: str = Field(description="Shown once. Store it on the endpoint; the server keeps a hash")
     policy_public_key: str = Field(description="base64 Ed25519 key the sensor verifies policy bundles with")
     policy_key_id: str
+    client_certificate: str | None = Field(default=None, description="PEM, when a CSR was sent (M12)")
+    ca_certificate: str | None = Field(default=None, description="PEM of the device CA (M12)")
 
 
 class EventBatch(_Model):
@@ -91,6 +100,7 @@ class EnrollmentTokenRequest(_Model):
 
 
 class EnrollmentTokenResponse(_Model):
+    id: int | None = None
     token: str = Field(description="Shown once")
     label: str | None
     max_uses: int
@@ -108,6 +118,29 @@ class DeviceOut(_Model):
     policy_version: str | None
     policy_current: bool = Field(description="Sensor has pulled the policy the server serves it now")
     group: str | None = Field(default=None, description="Policy group (M9); None: common policy only")
+    # M12
+    client_certificate: bool = Field(default=False, description="Enrolled with a client certificate (LAN)")
+    cert_not_after: datetime | None = None
+    revoked_at: datetime | None = None
+    revoked_by: str | None = None
+    revoke_reason: str | None = None
+
+
+class RevokeRequest(_Model):
+    by: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class EnrollmentTokenOut(_Model):
+    id: int
+    label: str | None
+    group: str | None
+    created_at: datetime
+    expires_at: datetime | None
+    max_uses: int
+    uses: int
+    revoked_at: datetime | None
+    usable: bool
 
 
 class PolicyInfo(_Model):
@@ -209,13 +242,27 @@ def enroll(body: EnrollRequest, request: Request, db: DbSession, token: Token) -
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not an enrollment token")
     et = db.scalar(select(EnrollmentToken).where(EnrollmentToken.token_hash == hash_token(token)))
     now = utcnow()
-    if et is None or et.uses >= et.max_uses or (et.expires_at is not None and et.expires_at <= now):
+    if (
+        et is None
+        or et.revoked_at is not None
+        or et.uses >= et.max_uses
+        or (et.expires_at is not None and et.expires_at <= now)
+    ):
         # Same answer for unknown / used up / expired: don't help guessing.
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or expired enrollment token")
 
     device_id = body.device_id or f"dev-{secrets.token_hex(4)}"
     if db.get(Device, device_id) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"device {device_id!r} already enrolled")
+    if body.csr is None and via_gateway(request):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "enrolling over the LAN needs a certificate request")
+    cert = None
+    if body.csr is not None:
+        ca = request.app.state.device_ca
+        try:
+            cert = ca.sign_device(body.csr, device_id, request.app.state.settings.device_cert_days)
+        except ValueError as e:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
 
     device_token = new_token(DEVICE_PREFIX)
     db.add(
@@ -229,13 +276,20 @@ def enroll(body: EnrollRequest, request: Request, db: DbSession, token: Token) -
             enrolled_with=et.id,
             last_seen=now,
             group_name=et.group_name,
+            cert_fingerprint=fingerprint(cert) if cert else None,
+            cert_not_after=cert.not_valid_after_utc if cert else None,
         )
     )
     et.uses += 1
     db.commit()
     pub = _public_key(request)
     return EnrollResponse(
-        device_id=device_id, device_token=device_token, policy_public_key=pub, policy_key_id=key_id(pub)
+        device_id=device_id,
+        device_token=device_token,
+        policy_public_key=pub,
+        policy_key_id=key_id(pub),
+        client_certificate=cert_pem(cert) if cert else None,
+        ca_certificate=cert_pem(request.app.state.device_ca.cert) if cert else None,
     )
 
 
@@ -357,18 +411,22 @@ def create_enrollment_token(body: EnrollmentTokenRequest, db: DbSession) -> Enro
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no such group: {body.group}")
     token = new_token(ENROLL_PREFIX)
     expires_at = utcnow() + timedelta(hours=body.ttl_hours)
-    db.add(
-        EnrollmentToken(
-            token_hash=hash_token(token),
-            label=body.label,
-            max_uses=body.max_uses,
-            expires_at=expires_at,
-            group_name=body.group,
-        )
+    row = EnrollmentToken(
+        token_hash=hash_token(token),
+        label=body.label,
+        max_uses=body.max_uses,
+        expires_at=expires_at,
+        group_name=body.group,
     )
+    db.add(row)
     db.commit()
     return EnrollmentTokenResponse(
-        token=token, label=body.label, max_uses=body.max_uses, expires_at=expires_at, group=body.group
+        id=row.id,
+        token=token,
+        label=body.label,
+        max_uses=body.max_uses,
+        expires_at=expires_at,
+        group=body.group,
     )
 
 
@@ -386,9 +444,61 @@ def list_devices(request: Request, db: DbSession) -> list[DeviceOut]:
             policy_version=d.policy_version,
             policy_current=d.policy_version == policy_admin.policy_for(request.app, d.group_name).version,
             group=d.group_name,
+            client_certificate=d.cert_fingerprint is not None,
+            cert_not_after=d.cert_not_after,
+            revoked_at=d.revoked_at,
+            revoked_by=d.revoked_by,
+            revoke_reason=d.revoke_reason,
         )
         for d in rows
     ]
+
+
+@admin.post("/devices/{device_id}/revoke", response_model=DeviceOut)
+def revoke_device(device_id: str, body: RevokeRequest, request: Request, db: DbSession) -> DeviceOut:
+    """Stop a device for good (T11: a stolen token or PC). Its token and certificate stop working at
+    once; enrolling the PC again needs a new enrollment token and a new device id."""
+    if request.state.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "revoking needs the admin token")
+    d = db.get(Device, device_id)
+    if d is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
+    if d.revoked_at is None:
+        d.revoked_at, d.revoked_by, d.revoke_reason = utcnow(), body.by, body.reason
+        db.commit()
+    return next(x for x in list_devices(request, db) if x.device_id == device_id)
+
+
+@admin.get("/enrollment-tokens", response_model=list[EnrollmentTokenOut])
+def list_enrollment_tokens(db: DbSession) -> list[EnrollmentTokenOut]:
+    now = utcnow()
+    return [
+        EnrollmentTokenOut(
+            id=t.id,
+            label=t.label,
+            group=t.group_name,
+            created_at=t.created_at,
+            expires_at=t.expires_at,
+            max_uses=t.max_uses,
+            uses=t.uses,
+            revoked_at=t.revoked_at,
+            usable=t.revoked_at is None
+            and t.uses < t.max_uses
+            and (t.expires_at is None or t.expires_at > now),
+        )
+        for t in db.scalars(select(EnrollmentToken).order_by(EnrollmentToken.id.desc()))
+    ]
+
+
+@admin.post("/enrollment-tokens/{token_id}/revoke", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_enrollment_token(token_id: int, request: Request, db: DbSession) -> None:
+    if request.state.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "revoking needs the admin token")
+    t = db.get(EnrollmentToken, token_id)
+    if t is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "enrollment token not found")
+    t.revoked_at = t.revoked_at or utcnow()
+    db.commit()
 
 
 @admin.get("/events", response_model=list[AgentEvent])
@@ -480,6 +590,7 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.state.settings = settings
     app.state.db = Database(settings.db_url)
     app.state.signing_key = load_or_create_signing_key(settings.signing_key_path)
+    app.state.device_ca = device_ca.load_or_create(settings.ca_path)  # M12 device certificates
     app.state.verify_package = verify_package or _default_package_verifier(settings)
     app.state.verifying = set()
     app.state.verify_lock = threading.Lock()

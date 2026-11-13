@@ -3,11 +3,15 @@
 credentials.json   device id/token, server URL, trusted policy key   (0600)
 policy.json        last signed policy bundle (verified again on every load)
 spool.db           outbound queue of events/findings (see spool.py)
+ca.pem             device CA the control plane's LAN gateway is signed by (M12)
+device.pem         this device's client certificate (M12)
+device-key.pem     its private key, made here and never sent anywhere (0600)
 """
 
 from __future__ import annotations
 
 import os
+import ssl
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,6 +32,9 @@ class Credentials(BaseModel):
         description="True: key was given at install time (B). False: learned at enroll (A)"
     )
     enrolled_at: AwareDatetime
+    client_certificate: bool = Field(
+        default=False, description="M12: talks to the control plane with device.pem/device-key.pem (mTLS)"
+    )
 
 
 def write_private(path: Path, data: str) -> None:
@@ -56,6 +63,29 @@ class SensorHome:
     @property
     def spool_path(self) -> Path:
         return self.root / "spool.db"
+
+    @property
+    def ca_path(self) -> Path:
+        return self.root / "ca.pem"
+
+    @property
+    def cert_path(self) -> Path:
+        return self.root / "device.pem"
+
+    @property
+    def key_path(self) -> Path:
+        return self.root / "device-key.pem"
+
+    def ssl_context(self) -> ssl.SSLContext | None:
+        """TLS for an https control plane: trust only the pinned device CA, present the device
+        certificate when there is one. None: plain http (inside the compose network)."""
+        if not self.ca_path.exists():
+            return None
+        ctx = ssl.create_default_context(cafile=str(self.ca_path))
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        if self.cert_path.exists() and self.key_path.exists():
+            ctx.load_cert_chain(str(self.cert_path), str(self.key_path))
+        return ctx
 
     def load_credentials(self) -> Credentials | None:
         p = self.credentials_path

@@ -44,10 +44,20 @@ def _cmd_enroll(home: SensorHome, args: argparse.Namespace) -> int:
     if not token:
         print("enrollment token required: --token or SGA_ENROLL_TOKEN", file=sys.stderr)
         return 2
-    creds = enroll(home, args.server, token, device_id=args.device_id, pinned_key=args.pin_key)
+    creds = enroll(
+        home,
+        args.server,
+        token,
+        device_id=args.device_id,
+        pinned_key=args.pin_key,
+        ca_file=args.ca_file,
+        ca_sha256=args.ca_sha256,
+    )
     mode = "pinned at install" if creds.key_pinned else "trusted from enroll response"
     print(f"enrolled as {creds.device_id} → {creds.server_url}")
     print(f"policy key {creds.policy_key_id} ({mode})")
+    if creds.client_certificate:
+        print(f"client certificate {home.cert_path} (key stays in {home.key_path})")
     print(f"state: {home.root}")
     return 0
 
@@ -304,6 +314,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--token", help="enrollment token (or SGA_ENROLL_TOKEN)")
     p.add_argument("--device-id")
     p.add_argument("--pin-key", help="base64 policy public key to require (option B)")
+    p.add_argument("--ca-file", type=Path, help="device CA for an https (LAN) control plane (M12)")
+    p.add_argument("--ca-sha256", help="expected SHA-256 of --ca-file (from the install command)")
     p.set_defaults(fn=_cmd_enroll)
 
     sub.add_parser("status", help="show identity, cached policy, spool").set_defaults(fn=_cmd_status)

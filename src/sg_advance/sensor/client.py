@@ -6,6 +6,7 @@ The HTTP layer is a swappable ``Transport`` so tests can drive the real FastAPI 
 from __future__ import annotations
 
 import json
+import ssl
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -29,11 +30,13 @@ class HttpResponse:
 Transport = Callable[[str, str, dict[str, str], bytes | None], HttpResponse]
 
 
-def urllib_transport(timeout: float = 10.0) -> Transport:
+def urllib_transport(timeout: float = 10.0, context: ssl.SSLContext | None = None) -> Transport:
+    """``context``: TLS trusting the device CA and presenting the device certificate (M12)."""
+
     def send(method: str, url: str, headers: dict[str, str], body: bytes | None) -> HttpResponse:
         req = urllib.request.Request(url, data=body, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 (URL comes from config)
+            with urllib.request.urlopen(req, timeout=timeout, context=context) as r:  # noqa: S310
                 return HttpResponse(r.status, {k.lower(): v for k, v in r.headers.items()}, r.read())
         except urllib.error.HTTPError as e:  # 304 and every 4xx/5xx land here
             return HttpResponse(e.code, {k.lower(): v for k, v in e.headers.items()}, e.read())

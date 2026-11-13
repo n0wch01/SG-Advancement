@@ -5,6 +5,9 @@
   console logs in with it, so the browser never holds a token that can change policy or enroll devices.
 - Sensor: a per-device token issued at enrollment. Only its sha256 is stored, so a leaked DB
   does not leak usable tokens. Tokens are 256-bit random, so a fast hash is sufficient.
+- M12: a device enrolled over the LAN also holds a client certificate. The LAN gateway (nginx)
+  verifies it and forwards it with the shared proxy secret; such a device is accepted only with its
+  own certificate, so a leaked device token alone is not enough (T11). Revoked devices are refused.
 """
 
 from __future__ import annotations
@@ -15,12 +18,15 @@ import secrets
 from collections.abc import Iterator
 from typing import Annotated
 
+from cryptography import x509
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .db import Device
+from ..pki import fingerprint
+from .db import Device, utcnow
+from .device_ca import presented_certificate
 
 ENROLL_PREFIX = "set_"  # SG-Advance enrollment token (prefix kept: existing tokens stay valid)
 DEVICE_PREFIX = "sdt_"  # SG-Advance device token
@@ -75,10 +81,39 @@ def require_admin(request: Request, token: Token) -> None:
     raise _unauthorized("invalid admin token")
 
 
-def require_device(token: Token, db: DbSession) -> Device:
+PROXY_SECRET_HEADER = "x-sga-proxy-secret"
+CLIENT_CERT_HEADER = "x-sga-client-cert"  # nginx $ssl_client_escaped_cert (verified)
+ENTRY_HEADER = "x-sga-entry"  # "lan" when the request came in through the LAN gateway
+
+
+def via_gateway(request: Request) -> bool:
+    """The request came through the LAN gateway (its client-certificate headers can be trusted)."""
+    given = request.headers.get(PROXY_SECRET_HEADER)
+    return given is not None and _matches(given, request.app.state.settings.proxy_secret)
+
+
+def client_certificate(request: Request) -> x509.Certificate | None:
+    if not via_gateway(request):
+        return None
+    return presented_certificate(request.headers.get(CLIENT_CERT_HEADER), request.app.state.device_ca)
+
+
+def require_device(request: Request, token: Token, db: DbSession) -> Device:
     if not token.startswith(DEVICE_PREFIX):
         raise _unauthorized("not a device token")
     device = db.scalar(select(Device).where(Device.token_hash == hash_token(token)))
     if device is None:
         raise _unauthorized("unknown device token")
+    if device.revoked_at is not None:
+        raise _unauthorized("device revoked")
+    cert = client_certificate(request)
+    if device.cert_fingerprint is not None:
+        if cert is None or fingerprint(cert) != device.cert_fingerprint:
+            raise _unauthorized("this device must present its own client certificate")
+        if device.cert_not_after is not None and utcnow() >= device.cert_not_after:
+            raise _unauthorized("client certificate expired; re-enroll the device")
+    elif cert is not None or (via_gateway(request) and request.headers.get(ENTRY_HEADER) == "lan"):
+        # A token-only device (enrolled inside the compose network) coming in over the LAN, or with
+        # someone else's certificate: refuse rather than accept the token alone.
+        raise _unauthorized("this device has no client certificate; enroll it over the LAN")
     return device
