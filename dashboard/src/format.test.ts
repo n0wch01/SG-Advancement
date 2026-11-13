@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   activeBlocks,
   campaignPeople,
+  remainingText,
   agentPosture,
   reasonText,
   responseChoices,
@@ -134,7 +135,14 @@ describe("format", () => {
 
   it("offers only stricter responses to a team", () => {
     expect(responseChoices("common", "block")[0]).toBe("allow");
-    expect(responseChoices("data-team", "require_approval")).toEqual(["require_approval", "block", "abort_session", "quarantine"]);
+    expect(responseChoices("data-team", "require_approval")).toEqual([
+      "require_approval",
+      "security_approval",
+      "block",
+      "abort_session",
+      "quarantine",
+    ]);
+    expect(responseChoices("data-team", "block")).not.toContain("security_approval"); // weaker than block
     expect(parseHash("#/policy?scope=data-team")).toEqual({ page: "policy", query: { scope: "data-team" } });
   });
 
@@ -164,6 +172,14 @@ describe("format", () => {
       ["alice", ["pc-a", "pc-a2"], 2],
       ["bob", ["pc-b"], 1],
     ]);
+  });
+
+  it("shows the time left to decide", () => {
+    const now = new Date("2026-11-12T12:00:00Z");
+    expect(remainingText("2026-11-12T12:04:59Z", now)).toBe("4:59");
+    expect(remainingText("2026-11-12T12:00:05Z", now)).toBe("0:05");
+    expect(remainingText("2026-11-12T11:59:00Z", now)).toBe("0:00");
+    expect(parseHash("#/security")).toEqual({ page: "security" });
   });
 
   it("computes time ranges", () => {

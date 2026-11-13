@@ -20,6 +20,7 @@ export const ACTION_LABEL: Record<string, string> = {
   allow: "허용",
   alert: "알림",
   require_approval: "승인 요청",
+  security_approval: "보안팀 승인",
   block: "차단",
   abort_session: "실행 중단",
   quarantine: "격리",
@@ -140,7 +141,8 @@ export type Route =
   | { page: "inventory" }
   | { page: "timeline"; query: Record<string, string> }
   | { page: "policy"; query: Record<string, string> }
-  | { page: "actions" };
+  | { page: "actions" }
+  | { page: "security" };
 
 export function parseHash(hash: string): Route {
   const [path, qs = ""] = hash.replace(/^#/, "").split("?", 2);
@@ -149,6 +151,7 @@ export function parseHash(hash: string): Route {
   if (parts[0] === "findings") return { page: "findings", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "inventory") return { page: "inventory" };
   if (parts[0] === "actions") return { page: "actions" };
+  if (parts[0] === "security") return { page: "security" };
   if (parts[0] === "policy") return { page: "policy", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "timeline") return { page: "timeline", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "approvals") return { page: "approvals", query: Object.fromEntries(new URLSearchParams(qs)) };
@@ -257,7 +260,7 @@ export function sessionTree<T extends { session_id: string; parent_session_id: s
   return out;
 }
 
-export const RESPONSES = ["allow", "alert", "require_approval", "block", "abort_session", "quarantine"];
+export const RESPONSES = ["allow", "alert", "require_approval", "security_approval", "block", "abort_session", "quarantine"];
 
 /** Responses a scope may pick: anything for common, the current one or stricter for a group. */
 export function responseChoices(scope: string, current: string): string[] {
@@ -325,4 +328,26 @@ export function campaignPeople(members: Finding[]): CampaignPerson[] {
     by.set(user, p);
   }
   return [...by.values()];
+}
+
+// Security approval queue (M11): a held tool call waits for security; nobody decides in time → denied.
+export const SECURITY_STATUS_LABEL: Record<string, string> = {
+  pending: "결정 대기",
+  approved: "승인",
+  denied: "거부",
+  expired: "시간 초과",
+};
+
+export const SECURITY_OUTCOME_LABEL: Record<string, string> = {
+  allowed: "실행됨",
+  denied: "막힘(거부)",
+  timeout: "막힘(시간 초과)",
+  cancelled: "취소됨(실행 중단)",
+  unreachable: "막힘(관제 서버 연결 실패)",
+};
+
+/** Time left to decide, as "4:59"; "0:00" once it is over. */
+export function remainingText(expiresAt: string, now: Date = new Date()): string {
+  const left = Math.max(0, Math.floor((new Date(expiresAt).getTime() - now.getTime()) / 1000));
+  return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
 }

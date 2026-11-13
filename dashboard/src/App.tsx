@@ -4,6 +4,7 @@ import { Api, ApiError, loadToken, saveToken } from "./api";
 import { parseHash, type Route } from "./format";
 import { Actions } from "./pages/Actions";
 import { Approvals } from "./pages/Approvals";
+import { Security } from "./pages/Security";
 import { FindingDetail } from "./pages/FindingDetail";
 import { Findings } from "./pages/Findings";
 import { Inventory } from "./pages/Inventory";
@@ -72,6 +73,9 @@ export function App() {
           <a href="#/timeline" className={route.page === "timeline" ? "on" : ""}>
             타임라인
           </a>
+          <a href="#/security" className={route.page === "security" ? "on" : ""}>
+            보안 승인
+          </a>
           <a href="#/approvals" className={route.page === "approvals" ? "on" : ""}>
             승인 감사
           </a>
@@ -106,6 +110,7 @@ export function App() {
         {route.page === "timeline" && <Timeline api={api} query={route.query} />}
         {route.page === "policy" && <Policy api={api} role={role} query={route.query} />}
         {route.page === "actions" && <Actions api={api} role={role} />}
+        {route.page === "security" && <Security api={api} role={role} />}
       </main>
     </div>
   );

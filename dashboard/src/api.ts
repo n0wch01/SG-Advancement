@@ -12,6 +12,7 @@ import type {
   PolicyRule,
   PolicyScope,
   RemoteAction,
+  SecurityApproval,
   Role,
   Summary,
   Timeline,
@@ -143,6 +144,14 @@ export class Api {
 
   createAction(body: { device_id: string; action: string; target: string; finding_id?: string; by: string; reason: string }) {
     return this.call<RemoteAction>("POST", "/actions", body);
+  }
+
+  securityApprovals(q: { status?: string } = {}) {
+    return this.get<SecurityApproval[]>("/security-approvals", { ...q, limit: 100 });
+  }
+
+  decideSecurity(id: string, body: { decision: "approve" | "deny"; by: string; reason: string }) {
+    return this.call<SecurityApproval>("POST", `/security-approvals/${encodeURIComponent(id)}/decision`, body);
   }
 
   inventory() {
