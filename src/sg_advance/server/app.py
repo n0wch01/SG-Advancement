@@ -27,13 +27,16 @@ from ..redact import redact_event, redact_text
 from ..schema import AgentEvent, Finding, Severity
 from . import (
     actions,
+    approval_metrics,
     audit,
+    audit_chain,
     campaigns,
     dashboard,
     device_ca,
     install,
     manifests,
     policy_admin,
+    risk,
     security_approvals,
 )
 from .auth import (
@@ -389,6 +392,7 @@ def ingest_findings(
         _store_finding(db, device_id, campaign, now)
     device.last_seen = now
     db.commit()
+    audit_chain.seal(db)
     return IngestResult(accepted=len(stored), duplicates=len(body.findings) - len(stored))
 
 
@@ -408,6 +412,7 @@ def _store_finding(db: Session, device_id: str, f: Finding, now: datetime) -> No
             doc=f.model_dump(mode="json"),
         )
     )
+    audit_chain.append(db, "finding", f.finding_id, f.model_dump(mode="json"), snapshot=False)
 
 
 # ── admin routes ────────────────────────────────────────────────────────────
@@ -622,6 +627,7 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.include_router(sensor)
     app.include_router(admin)
     app.include_router(manifests.router)
+    app.include_router(approval_metrics.router)
     app.include_router(audit.router)
     app.include_router(dashboard.router)
     app.include_router(policy_admin.router)
@@ -631,6 +637,9 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.include_router(install.admin)
     app.include_router(security_approvals.admin)
     app.include_router(security_approvals.sensor)
+    app.include_router(audit_chain.router)
+    app.include_router(risk.admin)
+    app.include_router(risk.sensor)
     _mount_dashboard(app, settings)
     return app
 

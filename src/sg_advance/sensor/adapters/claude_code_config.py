@@ -63,8 +63,11 @@ class ClaudeCodeConfigAdapter:
 
     def poll(self, ctx: AdapterContext) -> bool:
         if not installed(self.home, self.path_env):
+            ctx.sensor.set_posture("claude-code-hook", [])
             return False
         row = snapshot(self.home, self.platform)
+        missing = row["guard_plugin"] != "enabled"
+        ctx.sensor.set_posture("claude-code-hook", ["claude-code: no SG-Advance hook"] if missing else [])
         if row == self._last:
             return False
         changed = [] if self._last is None else sorted(k for k in row if self._last.get(k) != row.get(k))

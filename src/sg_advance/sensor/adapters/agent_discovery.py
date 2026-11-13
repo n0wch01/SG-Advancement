@@ -312,6 +312,12 @@ class AgentDiscoveryAdapter:
         """Emit what changed since the last scan. Returns the number of snapshots emitted."""
         rows = self.scan() if rows is None else rows
         now = {r["instance"]: r for r in rows}
+        # Zero trust: a configured install outside company control makes this PC "degraded".
+        ctx.sensor.set_posture(
+            "agent-discovery",
+            [f"{r['product']}: {(r.get('unmanaged_reasons') or ['unmanaged'])[0]}"
+             for r in rows if r.get("configured") and not r.get("managed")],
+        )  # fmt: skip
         sent = 0
         for key, row in now.items():
             before = self._last.get(key)

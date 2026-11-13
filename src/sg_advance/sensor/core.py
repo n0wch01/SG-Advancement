@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import platform
 import socket
 import ssl
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 
@@ -24,7 +26,7 @@ from ..detect import Engine, Verdict
 from ..pki import fingerprint, key_pem, make_csr, new_key
 from ..policy import PolicyBundle, PolicyVerificationError, key_id, load_public_key
 from ..redact import redact_event
-from ..schema import AgentEvent, Enforcement
+from ..schema import AgentEvent, Enforcement, EventKind
 from .client import ControlPlaneClient, ControlPlaneError, Offline, Transport, urllib_transport
 from .priority import event_priority
 from .spool import FlushResult, Spool
@@ -166,6 +168,47 @@ class Sensor:
         # Prompts and replies are employees' conversations: only those a rule hit leave the endpoint
         # with their text (detection already saw the full text locally). ``--keep-chat-text`` opts out.
         self.keep_chat_text = False
+        # Zero trust (KISA agentic AI ZT guide 2.4.3): a cached policy has a lifetime. When the
+        # control plane has not confirmed the policy is current for this long, tool calls carry
+        # labels.sga_policy_stale and the signed rules decide (rules/zero_trust.yaml).
+        self.policy_max_age = timedelta(hours=float(os.environ.get("SGA_POLICY_MAX_AGE_HOURS", "72")))
+        self._checked_at = self._load_checked_at()
+        # Device posture for zero-trust access decisions: each check (Claude Code hook settings,
+        # agent discovery) reports why this PC falls short; no report yet means unknown.
+        self.posture: dict[str, list[str]] = {}
+
+    def set_posture(self, check: str, reasons: list[str]) -> None:
+        if self.posture.get(check) != reasons:
+            log.info("posture %s: %s", check, "; ".join(reasons) or "ok")
+        self.posture[check] = list(reasons)
+
+    # ── policy freshness ─────────────────────────────────────────────────────
+
+    @property
+    def _checked_path(self) -> Path:
+        return self.home.root / "policy-checked.json"
+
+    def _load_checked_at(self) -> datetime | None:
+        try:
+            return datetime.fromisoformat(json.loads(self._checked_path.read_text("utf-8"))["at"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        try:  # sensors from before this file: the cache's own write time
+            return datetime.fromtimestamp(self.home.policy_path.stat().st_mtime, tz=now_utc().tzinfo)
+        except OSError:
+            return None
+
+    def _mark_checked(self) -> None:
+        self._checked_at = now_utc()
+        write_private(self._checked_path, json.dumps({"at": self._checked_at.isoformat()}))
+
+    def policy_age(self, now: datetime | None = None) -> timedelta | None:
+        """Time since the control plane last confirmed this policy is current (None: never)."""
+        return None if self._checked_at is None else (now or now_utc()) - self._checked_at
+
+    def policy_stale(self, now: datetime | None = None) -> bool:
+        age = self.policy_age(now)
+        return age is None or age > self.policy_max_age
 
     # ── trusted sets ─────────────────────────────────────────────────────────
 
@@ -212,9 +255,11 @@ class Sensor:
             log.info("policy sync offline: %s", e)
             return SyncStatus.OFFLINE
         if bundle is None:
+            self._mark_checked()
             return SyncStatus.UNCHANGED
         self._install(bundle)  # raises PolicyVerificationError before touching the cache
         write_private(self.home.policy_path, bundle.model_dump_json())
+        self._mark_checked()
         return SyncStatus.UPDATED
 
     def start(self) -> SyncStatus:
@@ -235,13 +280,35 @@ class Sensor:
     # ── events ───────────────────────────────────────────────────────────────
 
     def stamp(self, event: AgentEvent) -> AgentEvent:
-        """Adapters don't need to know the enrolled identity; the core fills it in."""
+        """Adapters don't need to know the enrolled identity; the core fills it in. Tool calls also
+        carry the endpoint's state the zero-trust rules decide on (labels.sga_*)."""
         ep = event.endpoint
-        if ep.device_id == self.creds.device_id:
-            return event
-        return event.model_copy(
-            update={"endpoint": ep.model_copy(update={"device_id": self.creds.device_id})}
-        )
+        update: dict[str, object] = {}
+        if ep.device_id != self.creds.device_id:
+            update["endpoint"] = ep.model_copy(update={"device_id": self.creds.device_id})
+        if event.kind is EventKind.TOOL_CALL:
+            labels = self.state_labels()
+            if labels:
+                update["labels"] = event.labels | labels
+        return event.model_copy(update=update) if update else event
+
+    def state_labels(self) -> dict[str, str]:
+        """Endpoint state for the zero-trust rules (rules/zero_trust.yaml)."""
+        labels: dict[str, str] = {}
+        if not self.posture:
+            labels["sga_posture"] = "unknown"
+        else:
+            reasons = list(dict.fromkeys(r for rs in self.posture.values() for r in rs))
+            labels["sga_posture"] = "degraded" if reasons else "ok"
+            if reasons:
+                labels["sga_posture_reasons"] = "; ".join(reasons)[:500]
+        if self.policy_stale():
+            age = self.policy_age()
+            labels["sga_policy_stale"] = "true"
+            labels["sga_policy_age_hours"] = (
+                "unknown" if age is None else str(int(age.total_seconds() // 3600))
+            )
+        return labels
 
     def evaluate(self, event: AgentEvent) -> ProcessResult:
         """Step 1: stamp + detect. Nothing is queued yet, so the adapter can enforce first

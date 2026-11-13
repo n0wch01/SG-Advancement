@@ -139,12 +139,13 @@ class Daemon:
 
     async def _actions_loop(self) -> None:
         """Remote response (M11): polled on the flush tick, so a block lands within seconds."""
-        from .response import run_pending
+        from .response import refresh_risk, run_pending
 
         while True:
             await asyncio.sleep(self.flush_interval)
             try:
                 self.stats.remote_actions += await run_pending(self.ctx)
+                await refresh_risk(self.ctx)
             except Exception:  # noqa: BLE001 - never let remote response take the daemon down
                 log.exception("remote actions failed")
 

@@ -19,6 +19,22 @@ log = logging.getLogger(__name__)
 
 BLOCKED_SESSIONS = "remote_blocked_sessions"
 BLOCKED_USERS = "remote_blocked_users"
+ELEVATED_RISK_USERS = "elevated_risk_users"
+
+
+async def refresh_risk(ctx: AdapterContext) -> bool:
+    """Zero trust (2026-11-13): who among this device's people is elevated risk now. Kept on failure:
+    being cut off must not lower anyone's risk."""
+    try:
+        doc = await asyncio.to_thread(ctx.sensor.client.get_risk)
+    except (Offline, ControlPlaneError) as e:
+        log.debug("risk unavailable: %s", e)
+        return False
+    users = {str(u) for u in doc.get("elevated_users", [])}
+    if users != ctx.sensor.trusted.get(ELEVATED_RISK_USERS, set()):
+        log.warning("elevated risk users on this device: %s", ", ".join(sorted(users)) or "none")
+    ctx.sensor.set_trusted(ELEVATED_RISK_USERS, users)
+    return True
 
 
 def install_core_handlers(ctx: AdapterContext) -> None:

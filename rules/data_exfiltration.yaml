@@ -7,7 +7,7 @@ rules:
     title: 민감 파일 접근
     message: 툴 호출이 자격증명·키 파일(.env, ~/.ssh, ~/.aws/credentials 등)에 접근합니다.
     recommended_action: 작업에 필요한 접근인지 확인하고, 아니라면 파일 접근 allowlist를 적용하세요.
-    tags: [owasp-llm:LLM02, scenario:S2]
+    tags: ["grade:0", owasp-llm:LLM02, scenario:S2]
     when: {payload.kind: tool.call}
     match:
       type: regex
@@ -26,7 +26,7 @@ rules:
     message: 자격증명·키 파일을 네트워크로 전송하는 명령이 실행되려 합니다.
     recommended_action: 호출을 차단하고, 이 명령을 만든 입력(문서, 이슈, 프롬프트)을 확인하세요. 이미 실행됐다면 해당 자격증명을 교체하세요.
     response: block
-    tags: [owasp-llm:LLM02, incident:nx-s1ngularity-2025]
+    tags: ["grade:3-1", owasp-llm:LLM02, incident:nx-s1ngularity-2025]
     when: {payload.kind: tool.call}
     match:
       type: regex
@@ -56,7 +56,7 @@ rules:
     message: 자격증명(또는 마스킹된 자격증명)이 툴 호출 인자에 실려 나갑니다.
     recommended_action: 호출을 차단하고 어떤 지시로 자격증명이 인자에 들어갔는지 확인하세요.
     response: block
-    tags: [owasp-llm:LLM02]
+    tags: ["grade:3-1", owasp-llm:LLM02]
     when: {payload.kind: tool.call}
     match:
       type: regex

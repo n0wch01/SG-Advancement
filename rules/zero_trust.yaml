@@ -1,0 +1,79 @@
+# 제로트러스트 접근 결정 (2026-11-13). 근거: 과기정통부·KISA 「에이전틱 AI 제로트러스트 안내서」(2026-11).
+# 센서(집행 지점)는 상태만 라벨로 붙이고(labels.sga_*) 결정은 이 서명된 룰이 한다(PDP·PEP 분리).
+# 등급 태그 grade:<0|1|2-1|2-2|3-1|3-2>는 안내서 표 2-5의 가역성·실시간성 등급.
+version: 1
+rules:
+  # 안내서 2장 4절 3): 캐시된 정책에는 유효기간을 두고, 판단 근거가 낡았으면 허용 쪽으로 판단하지 않는다.
+  # 센서가 관제 서버로부터 "이 정책이 최신"이라는 확인을 기본 72시간(SGA_POLICY_MAX_AGE_HOURS) 받지 못하면 라벨을 붙인다.
+  # 오탐 주의: 출장 등으로 오래 오프라인인 노트북은 상태를 바꾸는 모든 툴에서 확인 창이 뜬다(의도).
+  # 미탐 주의: 읽기 전용 목록에 든 툴은 낡은 정책에서도 통과한다. 목록은 에이전트별 툴 이름이다.
+  - id: policy-stale-state-changing-tool
+    severity: medium
+    category: policy_violation
+    title: 정책이 오래 확인되지 않은 상태에서 상태를 바꾸는 툴 호출
+    message: 이 장비가 관제 서버로부터 오래 정책을 확인받지 못해, 상태를 바꾸는 툴 호출은 사람이 확인하도록 했습니다.
+    recommended_action: 장비의 관제 서버 연결(네트워크, 인증서, 폐기 여부)을 확인하세요.
+    response: require_approval
+    dedup: none
+    tags: ["action-independent", zero-trust, "kisa-zt:P4-6"]
+    when: {payload.kind: tool.call, labels.sga_policy_stale: "true"}
+    match:
+      type: allowlist
+      field: payload.tool
+      allow:
+        # Claude Code
+        - Read
+        - Glob
+        - Grep
+        - LS
+        - NotebookRead
+        - TodoRead
+        - TodoWrite
+        # OpenClaw
+        - read
+        - memory_search
+        - memory_get
+        - sessions_list
+
+  # 민감 리소스는 정책(여기)이 정한다: 아래 when의 mcp_server 목록. 두 룰이 같은 목록을 쓴다(바꿀 때 둘 다).
+  # 안내서 P2-1·P2-2: 보안 상태가 비정상인 기기는 민감 데이터 접근을 자동 제한. 상태는 센서가 점검해 라벨로 붙인다
+  # (labels.sga_posture: ok | degraded | unknown, 이유는 sga_posture_reasons): hook이 없는 Claude Code,
+  # 통제 밖 에이전트(Cursor·Codex·Gemini)가 설정돼 있으면 degraded.
+  # 오탐 주의: 회사가 허용한 다른 에이전트가 있는 PC도 degraded가 된다(shadow_ai 룰을 먼저 조정).
+  # 미탐 주의: unknown(점검을 끈 센서, 시작 직후 첫 점검 전)은 막지 않는다. 다른 사람 PC의 상태는 보지 않는다.
+  - id: sensitive-resource-from-degraded-device
+    severity: medium
+    category: policy_violation
+    title: 보안 상태 미달 PC에서 민감 리소스 접근
+    message: 이 PC는 회사 통제 수단이 빠져 있어(sga_posture_reasons) 민감한 사내 리소스 호출을 막았습니다.
+    recommended_action: PC에 SG-Advance hook을 다시 설치하거나 통제 밖 에이전트를 정리하게 한 뒤, 상태가 ok로 바뀌면 자동으로 풀립니다.
+    response: block
+    dedup: none
+    tags: ["action-independent", zero-trust, "kisa-zt:P2-2"]
+    when:
+      payload.kind: tool.call
+      payload.provider.mcp_server: [crm, hr-db, payments]
+    match:
+      type: regex
+      fields: [labels.sga_posture]
+      pattern: '^degraded$'
+
+  # 안내서 P1-4·C1-7: 사람의 위험도를 지속적으로 재평가해 접근 범위를 조정. 관제 서버가 최근 24시간 critical 1건 이상
+  # 또는 high 3건 이상인 사람을 elevated_risk_users로 내려보낸다(이 파일의 medium 룰은 세지 않음: 되먹임 방지).
+  # 오탐 주의: 오탐 Finding이 많은 룰이 있으면 그 사람이 24시간 동안 보안팀 승인을 기다리게 된다.
+  - id: sensitive-resource-by-elevated-risk-user
+    severity: medium
+    category: policy_violation
+    title: 고위험 사용자의 민감 리소스 접근
+    message: 최근 고위험 Finding이 쌓인 사람이 민감한 사내 리소스를 호출해 보안팀 승인을 기다립니다.
+    recommended_action: 최근 Finding을 확인하고 계정 침해가 아니면 승인하세요. 위험도는 24시간이 지나면 내려갑니다.
+    response: security_approval
+    dedup: none
+    tags: ["action-independent", zero-trust, "kisa-zt:P1-4"]
+    when:
+      payload.kind: tool.call
+      payload.provider.mcp_server: [crm, hr-db, payments]
+    match:
+      type: in_set
+      set: elevated_risk_users
+      fields: [principal.user_id]

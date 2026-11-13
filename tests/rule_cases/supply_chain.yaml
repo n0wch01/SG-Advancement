@@ -34,6 +34,22 @@ cases:
       - {kind: tool.call, tool: read_file, provider: {kind: mcp, mcp_server: filesystem}, arguments: {path: README.md}}
     expect_not: [unapproved-mcp-server-url, mcp-tool-description-poisoning, unapproved-mcp-tool-call]
 
+  # 2026-11-13 결정(A안): 게이트웨이에 등록된 서버가 곧 허용 목록이다. 게이트웨이를 거친 호출은 이 룰에서 빼고,
+  # 이 룰은 게이트웨이를 거치지 않은 MCP 호출(Claude Code hook의 mcp__<서버>__… 등)만 본다.
+  - name: 게이트웨이에 등록된 서버의 호출은 미허가 MCP 툴 호출이 아님
+    sensor: mcp_proxy
+    events:
+      - {kind: tool.call, tool: query_customers, provider: {kind: mcp, mcp_server: crm, mcp_server_url: "http://crm.corp/mcp"},
+         arguments: {name: Kim}, labels: {sga_source: mcp_gateway, mcp.server: crm}}
+    expect_not: [unapproved-mcp-tool-call]
+
+  - name: 게이트웨이 밖에서 직접 붙은 MCP 서버의 호출은 여전히 경보
+    agent: claude_code
+    sensor: claude_code_hook
+    events:
+      - {kind: tool.call, tool: mcp__notion__search, provider: {kind: mcp, mcp_server: notion}, arguments: {q: x}}
+    expect: [unapproved-mcp-tool-call]
+
   # ── 설치된 코드 무결성 (M5d): 서명된 npm 배포본과 비교한 integrity.report ──
   - name: 기본 플러그인 파일이 배포본과 다름 (변조)
     agent: openclaw

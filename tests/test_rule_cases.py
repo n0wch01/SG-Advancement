@@ -73,3 +73,42 @@ def test_every_enabled_rule_has_positive_and_negative_case() -> None:
 
 def test_bundled_rules_load() -> None:
     assert len(RULES.enabled) >= 20
+
+
+# ── 가역성·실시간성 등급 (KISA 「에이전틱 AI 제로트러스트 안내서」 표 2-5, 2026-11-13 결정) ──
+# 행동(tool.call)을 판정하는 룰은 등급 태그 grade:<0|1|2-1|2-2|3-1|3-2>를 단다. 상태·주체 기준 룰은
+# action-independent. 응답은 사용자가 정하고, 등급과 어긋나면 이 시험이 알려 준다(자동으로 바꾸지 않음).
+GRADES = {"0", "1", "2-1", "2-2", "3-1", "3-2"}
+# 2-x·3-x: 사람의 명시 승인(require_approval·security_approval) 이상.
+# 3-1의 사람 승인에는 사후 감사가 붙어야 한다(user-approved-high-risk는 high 이상 승인만 본다).
+# 2-2·3-2(실시간, 사전 승인 정책 내 자동 실행)는 아직 쓰지 않는다.
+HUMAN_OR_STRICTER = {"require_approval", "security_approval", "block", "abort_session", "quarantine"}
+
+
+def _kinds(rule: Any) -> set[str]:
+    k = rule.when.get("payload.kind") if rule.when else None
+    if k is None:  # sequence rules end on a tool.call step
+        return {"tool.call"} if getattr(rule.match, "steps", None) else set()
+    return set(k) if isinstance(k, (list, tuple)) else {k}
+
+
+def test_action_rules_carry_a_grade_that_matches_their_response() -> None:
+    problems = []
+    for r in RULES.rules:
+        grades = [t.split(":", 1)[1] for t in r.tags if t.startswith("grade:")]
+        if "tool.call" in _kinds(r) and not grades and "action-independent" not in r.tags:
+            problems.append(f"{r.id}: tool.call rule without grade:<…> or action-independent")
+        for g in grades:
+            if g not in GRADES:
+                problems.append(f"{r.id}: unknown grade {g}")
+            elif g in {"2-1", "3-1"} and r.response.value not in HUMAN_OR_STRICTER:
+                problems.append(f"{r.id}: grade {g} needs human approval or stricter, has {r.response.value}")
+            elif (
+                g == "3-1"
+                and r.response.value in {"require_approval"}
+                and str(r.severity) not in {"high", "critical"}
+            ):
+                problems.append(
+                    f"{r.id}: 3-1 approved by a person must be audited afterwards (severity high+)"
+                )
+    assert not problems, "\n".join(problems)

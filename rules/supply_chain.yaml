@@ -26,7 +26,7 @@ rules:
     message: 허용목록에 없는 플러그인이 제공하는 툴이 호출됐습니다.
     recommended_action: 호출을 차단하고 해당 플러그인을 격리하세요.
     response: block
-    tags: [owasp-llm:LLM03, scenario:S1]
+    tags: ["action-independent", owasp-llm:LLM03, scenario:S1]
     when: {payload.kind: tool.call, payload.provider.kind: plugin}
     match:
       type: allowlist
@@ -58,8 +58,11 @@ rules:
     message: 허용목록에 없는 이름의 MCP 서버 툴이 호출됐습니다.
     recommended_action: 해당 MCP 서버가 승인된 것인지 확인하세요.
     response: alert
-    tags: [owasp-agentic:T2]
+    tags: ["action-independent", owasp-agentic:T2]
     when: {payload.kind: tool.call, payload.provider.kind: mcp}
+    # 2026-11-13 결정(A안): MCP 게이트웨이를 거친 호출은 제외(게이트웨이에 등록된 서버 = 허용 목록, 미등록은 게이트웨이가 404).
+    # 미탐 주의: 게이트웨이 라벨은 센서가 붙인다. 이벤트를 위조할 수 있는 쪽이면 이 예외도 위조할 수 있다.
+    unless: {labels.sga_source: mcp_gateway}
     match:
       type: allowlist
       field: payload.provider.mcp_server

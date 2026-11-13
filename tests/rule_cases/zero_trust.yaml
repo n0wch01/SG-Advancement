@@ -1,0 +1,69 @@
+# 제로트러스트 접근 결정 (2026-11-13, KISA 「에이전틱 AI 제로트러스트 안내서」 2장 4절 3) 정책 결정 지연).
+# 센서가 상태를 라벨로 붙이고(labels.sga_*) 판단은 서명된 룰이 한다.
+cases:
+  # 캐시 정책 유효기간: 관제 서버가 오래(기본 72시간) 정책을 확인해 주지 못하면 판단 근거가 낡은 것.
+  # 읽기 전용 툴은 그대로 두고, 상태를 바꾸는 툴은 사람에게 묻는다(차단·보류 기본).
+  - name: 정책이 오래 확인되지 않음 → 상태를 바꾸는 툴은 사람 확인
+    agent: claude_code
+    sensor: claude_code_hook
+    events:
+      - {kind: tool.call, tool: Bash, arguments: {command: "git push"}, labels: {sga_policy_stale: "true"}}
+      - {kind: tool.call, tool: exec, arguments: {command: ls}, labels: {sga_policy_stale: "true"}}
+    expect: [policy-stale-state-changing-tool]
+
+  - name: 정책이 오래됐어도 읽기 전용 툴은 통과
+    agent: claude_code
+    sensor: claude_code_hook
+    events:
+      - {kind: tool.call, tool: Read, arguments: {file_path: README.md}, labels: {sga_policy_stale: "true"}}
+      - {kind: tool.call, tool: Grep, arguments: {pattern: TODO}, labels: {sga_policy_stale: "true"}}
+    expect_not: [policy-stale-state-changing-tool]
+
+  - name: 정책이 최신이면 대상 아님
+    agent: claude_code
+    sensor: claude_code_hook
+    events:
+      - {kind: tool.call, tool: Bash, arguments: {command: "git push"}}
+    expect_not: [policy-stale-state-changing-tool]
+
+  # 단말 상태 기반 접근 결정 (안내서 P2-1·P2-2·P1-4): 통제 수단이 빠진 PC(hook 없는 Claude Code, 통제 밖 에이전트)에서는
+  # 민감한 사내 MCP 서버(정책의 목록)에 붙지 못한다. 게이트웨이를 거치든 hook에서 보든 같은 룰.
+  - name: 상태 미달 PC에서 민감 MCP 서버 호출 → 차단
+    sensor: mcp_proxy
+    events:
+      - {kind: tool.call, tool: query_customers, provider: {kind: mcp, mcp_server: crm}, arguments: {name: Kim},
+         labels: {sga_source: mcp_gateway, sga_posture: degraded, sga_posture_reasons: "cursor: outside control"}}
+    expect: [sensitive-resource-from-degraded-device]
+
+  - name: 상태 미달이어도 민감하지 않은 서버, 상태 정상이면 민감 서버도 통과
+    sensor: mcp_proxy
+    events:
+      - {kind: tool.call, tool: search, provider: {kind: mcp, mcp_server: wiki}, labels: {sga_source: mcp_gateway, sga_posture: degraded}}
+      - {kind: tool.call, tool: query_customers, provider: {kind: mcp, mcp_server: crm}, labels: {sga_source: mcp_gateway, sga_posture: ok}}
+    expect_not: [sensitive-resource-from-degraded-device]
+
+  # 미탐 주의: 상태 점검을 끈 센서(--no-discovery 등)는 unknown이라 막지 않는다(알려진 공백, 문서화).
+  - name: 상태를 모르면(점검 꺼짐) 대상 아님
+    sensor: mcp_proxy
+    events:
+      - {kind: tool.call, tool: query_customers, provider: {kind: mcp, mcp_server: crm}, labels: {sga_posture: unknown}}
+    expect_not: [sensitive-resource-from-degraded-device]
+
+  # 사람의 위험도 (안내서 P1-4·C1-7): 최근 24시간 high·critical Finding이 쌓인 사람은 관제 서버가 고위험으로 내려보내고,
+  # 그 사람의 민감 리소스 호출은 보안팀 승인을 받는다.
+  - name: 고위험 사용자의 민감 MCP 호출 → 보안팀 승인
+    agent: claude_code
+    sensor: claude_code_hook
+    sets: {elevated_risk_users: [mallory]}
+    events:
+      - {kind: tool.call, user: mallory, tool: mcp__crm__export, provider: {kind: mcp, mcp_server: crm}}
+    expect: [sensitive-resource-by-elevated-risk-user]
+
+  - name: 위험도가 평범한 사람, 민감하지 않은 리소스는 대상 아님
+    agent: claude_code
+    sensor: claude_code_hook
+    sets: {elevated_risk_users: [mallory]}
+    events:
+      - {kind: tool.call, user: alice, tool: mcp__crm__export, provider: {kind: mcp, mcp_server: crm}}
+      - {kind: tool.call, user: mallory, tool: mcp__wiki__search, provider: {kind: mcp, mcp_server: wiki}}
+    expect_not: [sensitive-resource-by-elevated-risk-user]

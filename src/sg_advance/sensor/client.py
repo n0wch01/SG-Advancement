@@ -118,6 +118,10 @@ class ControlPlaneClient:
         """Remote response actions waiting for this device (M11)."""
         return list(self._ok(self._call("GET", "/v1/actions"), 200))
 
+    def get_risk(self) -> dict[str, Any]:
+        """People who used this device and are elevated risk now (zero trust, 2026-11-13)."""
+        return dict(self._ok(self._call("GET", "/v1/risk"), 200))
+
     def report_action(self, action_id: str, ok: bool, detail: str) -> None:
         r = self._call("POST", f"/v1/actions/{action_id}/result", {"ok": ok, "detail": detail[:1000]})
         if r.status != 204:

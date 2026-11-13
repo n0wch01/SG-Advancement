@@ -12,7 +12,7 @@ rules:
     message: 보안팀이 원격으로 차단한 대화(또는 그 대화가 위임한 하위 에이전트)가 툴을 실행하려 합니다.
     recommended_action: 조사가 끝나면 대시보드나 `sga-server action unblock-session`으로 해제하세요.
     response: block
-    tags: [response:remote]
+    tags: ["action-independent", response:remote]
     when: {payload.kind: tool.call}
     match:
       type: in_set
@@ -27,7 +27,7 @@ rules:
     message: 보안팀이 원격으로 차단한 사람의 에이전트가 툴을 실행하려 합니다.
     recommended_action: 계정 침해 여부를 확인한 뒤 해제하세요.
     response: block
-    tags: [response:remote]
+    tags: ["action-independent", response:remote]
     when: {payload.kind: tool.call}
     match:
       type: in_set
