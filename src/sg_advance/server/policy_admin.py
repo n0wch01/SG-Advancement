@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..detect.rules import RuleSet
 from ..policy import PolicyBundle
+from . import audit_chain
 from .auth import DbSession, require_admin
 from .db import Device, Group, PolicyChange, PolicyOverride, utcnow
 from .policy_layers import COMMON, RESPONSES, Override, apply_common, apply_group, check
@@ -178,6 +179,9 @@ def _scope_exists(db: Session, scope: str) -> None:
 def _log(db: Session, request: Request, who: Who, action: str, **fields: Any) -> PolicyChange:
     row = PolicyChange(actor=who.by, role=request.state.role, action=action, reason=who.reason, **fields)
     db.add(row)
+    db.flush()  # the change id is the audit reference
+    doc = {"actor": who.by, "role": request.state.role, "action": action, "reason": who.reason, **fields}
+    audit_chain.append(db, "policy_change", str(row.id), doc)
     return row
 
 

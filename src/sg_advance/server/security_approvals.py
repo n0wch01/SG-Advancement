@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from ..redact import redact_text
+from . import audit_chain
 from .auth import DbSession, require_admin, require_device
 from .db import Device, SecurityApproval, utcnow
 
@@ -210,5 +211,12 @@ def decide(hold_id: str, body: DecisionIn, request: Request, db: DbSession) -> A
         raise HTTPException(status.HTTP_409_CONFLICT, f"already {current}")
     a.status = "approved" if body.decision == "approve" else "denied"
     a.decided_at, a.decided_by, a.decision_reason = now, body.by, body.reason
+    audit_chain.append(
+        db,
+        "security_decision",
+        a.id,
+        {"status": a.status, "by": a.decided_by, "reason": a.decision_reason, "at": now, "user_id": a.user_id,
+         "tool": a.tool, "rule_ids": a.rule_ids},
+    )  # fmt: skip
     db.commit()
     return _out(a, now)

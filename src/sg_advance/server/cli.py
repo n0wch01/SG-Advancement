@@ -7,6 +7,7 @@
     sga-server manifest pin sg-advance --dir integrations/openclaw-plugin --version 0.1.0
     sga-server manifest skill openclaw-workspace:deploy-notes --current   # after reviewing the skill
     sga-server audit approvals [--user U] [--all] [--limit N]   # what users approved (C)
+    sga-server audit chain [--expect-head H]                    # verify the tamper-evident audit chain
     sga-server policy scopes                              # common + groups, devices, versions (M9)
     sga-server policy rules [--scope data-team] [--changed]
     sga-server policy group data-team --by me --reason "..."
@@ -140,7 +141,16 @@ def audit_main(argv: list[str]) -> int:
     p.add_argument("--user")
     p.add_argument("--all", action="store_true", help="include denials, timeouts and cancellations")
     p.add_argument("--limit", type=int, default=50)
+    c = sub.add_parser("chain", help="verify the tamper-evident audit chain and print its head")
+    c.add_argument("--expect-head", help="a head kept outside earlier: detects a cut-off tail")
     args = ap.parse_args(argv)
+    if args.what == "chain":
+        q = "?" + urllib.parse.urlencode({"expect_head": args.expect_head}) if args.expect_head else ""
+        v = _api(args.server, "GET", "/v1/admin/audit/chain/verify" + q)
+        print(f"{'OK' if v['ok'] else 'TAMPERED'}  entries={v['entries']}  head={v['head']}")  # type: ignore[index]
+        for pr in v["problems"]:  # type: ignore[index]
+            print(f"  seq={pr['seq']} {pr['kind']} {pr['ref_id']}: {pr['problem']}")
+        return 0 if v["ok"] else 1  # type: ignore[index]
     query = {"limit": args.limit} | ({"user_id": args.user} if args.user else {})
     if not args.all:
         query["approved"] = "true"

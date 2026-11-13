@@ -242,6 +242,27 @@ class FindingIndicator(Base):
     ts: Mapped[datetime] = mapped_column(UTCDateTime)
 
 
+class AuditEntry(Base):
+    """Tamper-evident audit trail (2026-11-13, KISA agentic AI ZT guide C1-6; 금융보안원 ⑰).
+
+    One row per audited record (finding, remote action and its result, security decision, policy
+    change), in order. ``digest`` fingerprints the record; ``hash`` chains it to the row before.
+    Rows are appended with only the digest and sealed in sequence later (server/audit_chain.py)."""
+
+    __tablename__ = "audit_chain"
+
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    kind: Mapped[str] = mapped_column(String(40), index=True)
+    ref_id: Mapped[str] = mapped_column(String(64), index=True)
+    digest: Mapped[str] = mapped_column(String(64))
+    doc: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )  # snapshot when the source changes later
+    prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
+
 class SecurityApproval(Base):
     """A tool call held on a device until security decides (M11 ``security_approval``).
 

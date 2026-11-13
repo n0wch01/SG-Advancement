@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from . import audit_chain
 from .auth import DbSession, require_admin, require_device
 from .db import Device, RemoteAction, utcnow
 
@@ -116,6 +117,7 @@ def create_action(body: ActionCreate, request: Request, db: DbSession) -> Action
         reason=body.reason,
     )
     db.add(row)
+    audit_chain.append(db, "remote_action", row.id, _out(row).model_dump(mode="json"))
     db.commit()
     return _out(row)
 
@@ -164,4 +166,7 @@ def action_result(action_id: str, body: ActionResult, device: CurrentDevice, db:
     a.status = "done" if body.ok else "failed"
     a.result_at = utcnow()
     a.result_detail = body.detail
+    audit_chain.append(
+        db, "remote_action_result", a.id, {"status": a.status, "detail": a.result_detail, "at": a.result_at}
+    )
     db.commit()
