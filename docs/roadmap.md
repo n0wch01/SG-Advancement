@@ -23,6 +23,7 @@
 | 2 | M8 MCP 게이트웨이 ✅ | 에이전트와 상관없는 길목: 허용 MCP 서버, 툴 설명 변조, `tools/call` 실행 전 판정 |
 | 3 | 섀도 AI 탐지 확장 ✅ | OpenClaw 외 Claude Code·Cursor·Codex·Gemini 설치, 관리 여부(Claude Code hook), 게이트웨이를 거치지 않는 MCP 서버 탐지 |
 | 3.5 | 제로트러스트 구조 ✅ | KISA 「에이전틱 AI 제로트러스트 안내서」에 맞춤([zero-trust.md](zero-trust.md)): 가역성 등급 태그, 캐시 정책 유효기간, PC 상태·사람 위험도 기반 접근 결정, 감사 로그 해시 체인, 승인 피로 지표, MCP 게이트웨이 입력 PEP |
+| 3.6 | 그림 2-4 구현 강화 ✅ | 중앙 MCP 게이트웨이(유일한 길, 자격증명 보관, 요청마다 장비 폐기 확인), Claude Code hook 입력 PEP·하위 에이전트 위임 PEP, 작업 범위 프로필 |
 | 4 | 노트북 실설치 (M12 5단계) | Windows 노트북에 한 줄 설치 + Claude Code 연결, 실환경 확인 |
 | 5 | 평가 (M13 일부) | 같은 공격을 OpenClaw·Claude Code·MCP에 넣은 탐지·차단 표, 물량·오탐 측정, 금융보안원 17개 항목 대응표, KISA 보안 기능 53개 성숙도 자가 진단, 안내서 시나리오 재현 |
 | 6 | 마감 | README·문서 정리, 데모 시나리오 |
