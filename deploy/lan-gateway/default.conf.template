@@ -4,6 +4,9 @@
 #   certificate and forwards it with the shared proxy secret; the control plane ties it to the device.
 # - 8080 (plain HTTP; SGA_LAN_INSTALL_PORT, default 18080): /install/ only (sensor wheel, install script, CA certificate). Nothing secret;
 #   the install command pins their SHA-256, so tampering on the way is detected.
+# - /mcp/<server> (2026-11-13, zero trust): the only path from employees' agents to company MCP servers.
+#   Device certificate required, and the control plane confirms per request that the device is not
+#   revoked (auth_request). The central MCP gateway holds the servers' credentials; agents hold none.
 # Admin API and dashboard are never reachable from the LAN (they stay on the Mac's 127.0.0.1).
 # ${SGA_PROXY_SECRET} is filled in by the nginx image (envsubst) at start; nginx's own $vars stay.
 
@@ -34,6 +37,37 @@ server {
     location = /v1/enroll { proxy_pass http://control-plane:8000; }
 
     location /v1/admin/ { return 403; }
+    location /v1/gateway/ { return 404; }  # only nginx itself asks (below)
+
+    # Every MCP request: is this certificate's device enrolled, unrevoked, unexpired?
+    location = /_sga_authz {
+        internal;
+        proxy_pass              http://control-plane:8000/v1/gateway/authz;
+        proxy_method            GET;
+        proxy_pass_request_body off;
+        proxy_set_header        Content-Length "";
+        proxy_set_header        X-SGA-Proxy-Secret "${SGA_PROXY_SECRET}";
+        proxy_set_header        X-SGA-Entry        "lan";
+        proxy_set_header        X-SGA-Client-Cert  $ssl_client_escaped_cert;
+    }
+
+    location /mcp/ {
+        if ($ssl_client_verify != SUCCESS) { return 403; }
+        auth_request     /_sga_authz;
+        auth_request_set $sga_device $upstream_http_x_sga_device;
+        resolver         127.0.0.11 valid=10s;  # docker DNS: nginx starts even when the gateway is off
+        set              $sga_mcp http://mcp-gateway:18790;
+        # A location with its own proxy_set_header inherits none from the server block: all set here.
+        proxy_set_header X-SGA-Proxy-Secret "${SGA_PROXY_SECRET}";
+        proxy_set_header X-SGA-Device       $sga_device;  # overwrites anything the client sent
+        proxy_set_header X-SGA-Client-Cert  "";  # the gateway gets the device id, not the certificate
+        proxy_set_header X-SGA-Entry        "lan";
+        proxy_set_header X-Forwarded-For    $remote_addr;
+        proxy_set_header Host               $host;
+        proxy_buffering  off;                    # MCP answers may stream (SSE)
+        proxy_read_timeout 360s;                 # a call held for security approval waits up to 5 min
+        proxy_pass       $sga_mcp;
+    }
 
     location /v1/ {
         if ($ssl_client_verify != SUCCESS) { return 403; }

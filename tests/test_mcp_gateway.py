@@ -31,6 +31,7 @@ class FakeMcp:
     def __init__(self, sse: bool) -> None:
         self.sse = sse
         self.seen: list[dict[str, Any]] = []
+        self.headers: list[dict[str, str]] = []
         self.port = 0
 
     async def start(self) -> asyncio.base_events.Server:
@@ -57,6 +58,7 @@ class FakeMcp:
         body = b"".join([c async for c in body_chunks(r, headers)])
         msg = json.loads(body)
         self.seen.append(msg)
+        self.headers.append(headers)
         out = json.dumps(self.answer(msg)).encode()
         if self.sse:
             event = b"event: message\ndata: " + out + b"\n\n"
@@ -70,13 +72,15 @@ class FakeMcp:
         w.close()
 
 
-async def rpc(port: int, path: str, msg: dict[str, Any], ua: str = "claude-code/2.1") -> tuple[int, Any]:
+async def rpc(
+    port: int, path: str, msg: dict[str, Any], ua: str = "claude-code/2.1", extra: str = ""
+) -> tuple[int, Any]:
     r, w = await asyncio.open_connection("127.0.0.1", port)
     body = json.dumps(msg).encode()
     w.write(
         f"POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
         "Accept: application/json, text/event-stream\r\n"
-        f"User-Agent: {ua}\r\nMcp-Session-Id: s-1\r\nContent-Length: {len(body)}\r\n\r\n".encode()
+        f"User-Agent: {ua}\r\nMcp-Session-Id: s-1\r\n{extra}Content-Length: {len(body)}\r\n\r\n".encode()
         + body
     )
     await w.drain()
@@ -222,3 +226,67 @@ async def test_input_pep_withholds_injected_results_from_the_model(enrolled: Sen
         if (f.get("response") or {}).get("detail", "").startswith("input pep")
     ]
     assert held and all(f["response"]["enforced"] for f in held)
+
+
+async def test_the_gateway_holds_the_credential_and_trusts_only_the_lan_gateway(enrolled: Sensor) -> None:
+    """Zero trust (2026-11-13): agents never hold corp-crm's token; whatever auth they send is dropped
+    and the gateway's own credential goes upstream. Behind the LAN gateway, requests without its proxy
+    secret are refused, and the device it names (not one the client claims) is recorded."""
+    upstream = FakeMcp(sse=False)
+    server = await upstream.start()
+    gw = McpGatewayAdapter(
+        "127.0.0.1:0",
+        {"crm": f"http://127.0.0.1:{upstream.port}/mcp"},
+        credentials={"crm": "Bearer crm-secret"},
+        proxy_secret="lan-secret",
+        device_header="x-sga-device",
+        user_header="x-sga-user",
+    )
+    await gw.start(AdapterContext(enrolled, "mcp-gateway", "central"))
+    try:
+        status, _ = await rpc(gw.port, "/mcp/crm", LIST, extra="X-SGA-Device: laptop-1\r\n")
+        assert status == 403 and upstream.seen == []  # straight to the gateway, past nginx: refused
+        via_lan = ("X-SGA-Proxy-Secret: lan-secret\r\nX-SGA-Device: laptop-1\r\nX-SGA-User: bob\r\n"
+                   "Authorization: Bearer stolen-or-personal\r\nCookie: s=1\r\n")  # fmt: skip
+        _, ok = await rpc(gw.port, "/mcp/crm", call(2, "query_customers", name="Kim"), extra=via_lan)
+        assert ok["result"]["content"][0]["text"] == "query_customers ok"
+        sent = upstream.headers[-1]
+        assert sent["authorization"] == "Bearer crm-secret"  # the gateway's, not the agent's
+        assert "cookie" not in sent and "x-sga-proxy-secret" not in sent and "x-sga-device" not in sent
+    finally:
+        await gw.close()
+        server.close()
+    calls = [e for e in spooled(enrolled, "event") if e["payload"]["kind"] == "tool.call"]
+    assert (
+        calls[-1]["principal"]["user_id"] == "bob" and calls[-1]["labels"]["sga_client_device"] == "laptop-1"
+    )
+
+
+def test_credentials_only_for_registered_servers() -> None:
+    with pytest.raises(ValueError):
+        McpGatewayAdapter("127.0.0.1:0", {"crm": "http://x"}, credentials={"hr": "Bearer t"})
+
+
+async def test_an_upstream_refusal_reaches_the_agent_as_an_mcp_error(enrolled: Sensor) -> None:
+    """A revoked laptop: the LAN gateway answers 403 with an HTML page; the local gateway turns it into
+    a JSON-RPC error the agent can read."""
+
+    async def nginx_403(r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
+        _, headers = await read_head(r)
+        b"".join([c async for c in body_chunks(r, headers)])
+        page = b"<html><body><h1>403 Forbidden</h1></body></html>"
+        w.write(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nContent-Length: "
+                + str(len(page)).encode() + b"\r\n\r\n" + page)  # fmt: skip
+        await w.drain()
+        w.close()
+
+    up = await asyncio.start_server(nginx_403, "127.0.0.1", 0)
+    port = up.sockets[0].getsockname()[1]
+    gw = McpGatewayAdapter("127.0.0.1:0", {"crm": f"http://127.0.0.1:{port}/mcp/crm"})
+    await gw.start(AdapterContext(enrolled, "bob", "pc"))
+    try:
+        status, out = await rpc(gw.port, "/mcp/crm", call(7, "query_customers", name="Kim"))
+        assert status == 403 and out["id"] == 7 and "refused this device" in out["error"]["message"]
+    finally:
+        await gw.close()
+        up.close()

@@ -1,6 +1,10 @@
 """A fake company MCP server for the MCP gateway demo (M8). Stdlib only, Streamable HTTP, JSON answers.
 
     uv run python demo/fake_mcp_server.py --port 18791
+    CRM_TOKEN=... python demo/fake_mcp_server.py --host 0.0.0.0 --token-env CRM_TOKEN   # compose corp-crm
+
+With ``--token-env`` every request must carry ``Authorization: Bearer <token>`` (401 otherwise): in the
+zero-trust demo only the central MCP gateway has the token, agents do not.
 
 Tools:
 - ``query_customers``: harmless CRM lookup (fake data)
@@ -11,7 +15,9 @@ Tools:
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TOOLS = [
@@ -65,7 +71,19 @@ def answer(msg: dict) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
+    token: str | None = None
+
     def do_POST(self) -> None:  # noqa: N802
+        if self.token is not None:
+            given = self.headers.get("Authorization", "")
+            if not hmac.compare_digest(given.encode(), f"Bearer {self.token}".encode()):
+                out = b'{"error": "unauthorized: this server accepts only the company MCP gateway"}'
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+                return
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         msg = json.loads(body or b"{}")
         if "id" not in msg:  # a notification (e.g. notifications/initialized)
@@ -87,8 +105,14 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=18791)
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--token-env", help="require Authorization: Bearer $<this env var>")
     args = ap.parse_args()
-    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+    if args.token_env:
+        Handler.token = os.environ.get(args.token_env) or None
+        if Handler.token is None:
+            raise SystemExit(f"{args.token_env} is empty")
+    ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
 
 
 if __name__ == "__main__":

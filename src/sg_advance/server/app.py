@@ -33,6 +33,7 @@ from . import (
     campaigns,
     dashboard,
     device_ca,
+    gateway_authz,
     install,
     manifests,
     policy_admin,
@@ -638,6 +639,7 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.include_router(security_approvals.admin)
     app.include_router(security_approvals.sensor)
     app.include_router(audit_chain.router)
+    app.include_router(gateway_authz.router)
     app.include_router(risk.admin)
     app.include_router(risk.sensor)
     _mount_dashboard(app, settings)

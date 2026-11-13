@@ -15,6 +15,12 @@ name (MCP Streamable HTTP: JSON or SSE responses). Only registered servers exist
   input PEP (KISA ZT guide P6-7) a result with high or critical prompt-injection findings is
   replaced by a notice before the model reads it (enforce).
 
+Zero trust (2026-11-13): the only path to a company MCP server. The server's credential is given to
+the gateway (``credentials``) and never to agents: their own auth headers are dropped for such a
+server. A central gateway sits behind the LAN gateway (device mTLS, revocation checked per request)
+and accepts only requests carrying its proxy secret; a laptop's local gateway reaches it with the
+device certificate (``upstream_ssl``) and passes the person (``forward_user``).
+
 ``enforce=False`` (monitor) passes everything and only records. Who: the sensor's user, or a header
 set by a trusted identity proxy in front of a shared gateway (``user_header``). Which agent: from the
 client's User-Agent when it says (Claude Code), else unknown. One request per upstream connection;
@@ -25,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import json
 import logging
 import re
@@ -53,7 +60,11 @@ _HOP = {
     "te",
     "upgrade",
 }
-INPUT_GUARD_SEVERITIES = {"high", "critical"}  # injection findings that keep a result from the model
+PROXY_SECRET_HEADER = "x-sga-proxy-secret"
+FORWARDED_USER_HEADER = "X-SGA-User"
+# Never passed upstream from the client: identity is what this gateway or the LAN gateway says.
+IDENTITY_HEADERS = {PROXY_SECRET_HEADER, "x-sga-device", "x-sga-client-cert", "x-sga-entry"}
+CLIENT_AUTH_HEADERS = {"authorization", "proxy-authorization", "cookie", "x-api-key"}
 _QUARANTINE = {ResponseAction.QUARANTINE, ResponseAction.BLOCK, ResponseAction.ABORT_SESSION}
 NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
@@ -163,6 +174,10 @@ class McpGatewayAdapter:
         enforce: bool = True,
         user_header: str | None = None,
         upstream_ssl: ssl.SSLContext | None = None,
+        credentials: dict[str, str] | None = None,
+        proxy_secret: str | None = None,
+        device_header: str | None = None,
+        forward_user: bool = False,
     ) -> None:
         host, _, port = listen.rpartition(":")
         self.host, self.port = host or "127.0.0.1", int(port)
@@ -173,6 +188,18 @@ class McpGatewayAdapter:
         self.enforce = enforce
         self.user_header = user_header.lower() if user_header else None
         self.upstream_ssl = upstream_ssl
+        # Zero trust (2026-11-13): the resource's credential lives here, never with the agent. For a
+        # server listed here the client's own auth headers are dropped and this value is sent instead.
+        self.credentials = dict(credentials or {})
+        unknown = set(self.credentials) - set(servers)
+        if unknown:
+            raise ValueError(f"credentials for unknown MCP servers: {sorted(unknown)}")
+        # Behind the LAN gateway (nginx, device mTLS): requests must carry its proxy secret, and the
+        # identity headers it sets (device, user) count only then.
+        self.proxy_secret = proxy_secret
+        self.device_header = device_header.lower() if device_header else None
+        # Laptop side: tell the next gateway who the person is (it trusts the device certificate).
+        self.forward_user = forward_user
         self.quarantined: set[tuple[str, str]] = set()  # (server, tool) hidden from agents
         self._server: asyncio.base_events.Server | None = None
 
@@ -212,6 +239,14 @@ class McpGatewayAdapter:
                 writer.write(_reply(404, "Not Found", body))
                 return
             name = parts[1]
+            if self.proxy_secret is not None and not hmac.compare_digest(
+                headers.get(PROXY_SECRET_HEADER, "").encode(), self.proxy_secret.encode()
+            ):
+                body = json.dumps(
+                    rpc_error(None, -32001, "SG-Advance: only through the LAN gateway")
+                ).encode()
+                writer.write(_reply(403, "Forbidden", body))
+                return
             body = await read_body(reader, headers) if method == "POST" else b""
             who = self._who(ctx, headers)
             await self._forward(ctx, writer, name, method, headers, body, who)
@@ -229,7 +264,9 @@ class McpGatewayAdapter:
 
     def _who(self, ctx: AdapterContext, headers: dict[str, str]) -> dict[str, str]:
         user = headers.get(self.user_header, "") if self.user_header else ""
+        device = headers.get(self.device_header, "") if self.device_header else ""
         return {
+            "device": device,
             "user": user or ctx.user_id,
             "agent": _agent_type(headers.get("user-agent", "")),
             "session": headers.get("mcp-session-id", "") or "mcp-no-session",
@@ -245,7 +282,8 @@ class McpGatewayAdapter:
             "agent": {"type": who["agent"], "session_id": f"mcp:{name}:{who['session']}"},
             "source": {"sensor": "mcp_proxy"},
             "payload": payload,
-            "labels": {"sga_source": "mcp_gateway", "mcp.server": name},
+            "labels": {"sga_source": "mcp_gateway", "mcp.server": name}
+            | ({"sga_client_device": who["device"]} if who.get("device") else {}),
         }
 
     def _provider(self, name: str) -> dict[str, Any]:
@@ -331,24 +369,15 @@ class McpGatewayAdapter:
         """Input PEP (KISA agentic AI ZT guide 2.4, P6-7): a tool result with high or critical prompt-
         injection findings never reaches the model; it gets a notice instead (enforce mode). The full
         preview is kept with the event for security. Lower severities are recorded only."""
+        from ..plugin_api import MCP_GATEWAY, input_guard_hits, withheld_response
+
         result = ctx.evaluate(AgentEvent.model_validate(self._event(ctx, name, who, payload)))
-        hits = [
-            h for h in result.verdict.hits
-            if str(h.rule.category) == "prompt_injection" and str(h.rule.severity) in INPUT_GUARD_SEVERITIES
-        ]  # fmt: skip
+        hits = input_guard_hits(result.verdict)
         if not hits or not self.enforce:
             ctx.record(result)
             return msg
         titles = "; ".join(dict.fromkeys(h.rule.title for h in hits))
-        ctx.record(
-            result,
-            Enforcement(
-                action=ResponseAction.BLOCK,
-                enforced=True,
-                enforcer=SensorType.MCP_PROXY,
-                detail="input pep: tool result withheld from the model",
-            ),
-        )
+        ctx.record(result, withheld_response(MCP_GATEWAY, hits)[1])
         log.warning("mcp gateway: withheld %s result from %s (%s)", payload["tool"], name, titles)
         notice = (
             f"SG-Advance: the result of {payload['tool']} was withheld because it looks like a prompt "
@@ -433,9 +462,14 @@ class McpGatewayAdapter:
         try:
             path = url.path or "/"
             head = [f"{method} {path}{'?' + url.query if url.query else ''} HTTP/1.1", f"Host: {url.netloc}"]
-            head += [
-                f"{k}: {v}" for k, v in headers.items() if k not in _HOP and k != (self.user_header or "")
-            ]
+            dropped = set(_HOP) | IDENTITY_HEADERS | {self.user_header or "", self.device_header or ""}
+            if name in self.credentials:
+                dropped |= CLIENT_AUTH_HEADERS
+            head += [f"{k}: {v}" for k, v in headers.items() if k not in dropped]
+            if name in self.credentials:
+                head.append(f"Authorization: {self.credentials[name]}")
+            if self.forward_user:
+                head.append(f"{FORWARDED_USER_HEADER}: {who['user']}")
             head += [f"Content-Length: {len(body)}", "Connection: close", "", ""]
             up_w.write("\r\n".join(head).encode("latin-1") + body)
             await up_w.drain()
@@ -454,6 +488,19 @@ class McpGatewayAdapter:
                 writer.write(b"0\r\n\r\n")
             else:
                 data = await read_body(up_r, up_headers)
+                status = int(code_reason.split(" ", 1)[0]) if code_reason[:3].isdigit() else 502
+                if status in (401, 403) and "application/json" not in ctype:
+                    # The next gateway (LAN gateway / central gateway) refused this device: say so in a
+                    # form the agent understands instead of passing an HTML error page on.
+                    req = json.loads(body) if body else {}
+                    refusal = rpc_error(
+                        req.get("id") if isinstance(req, dict) else None,
+                        -32001,
+                        f"SG-Advance: the company MCP gateway refused this device (HTTP {status}): "
+                        "it may be revoked or not enrolled; ask security",
+                    )
+                    data, ctype, keep = json.dumps(refusal).encode(), "application/json", ""
+                    log.warning("mcp gateway: upstream for %s refused this device (HTTP %d)", name, status)
                 if "application/json" in ctype and data and pending:
                     doc = json.loads(data)
                     if isinstance(doc, list):

@@ -156,3 +156,22 @@ def test_revoking_a_device_or_an_enrollment_token(lan: TestClient, tmp_path: Pat
             SensorHome(tmp_path / "z"), LAN_URL, tok, transport=Gateway(lan),
             ca_file=tmp_path / "ca.pem",
         )  # fmt: skip
+
+
+def test_mcp_route_authz_follows_enrollment_and_revocation(lan: TestClient, tmp_path: Path) -> None:
+    """Zero trust (2026-11-13): nginx asks before every /mcp/ request. Enrolled device → 204 with its
+    id; no certificate, a stranger's certificate, or no proxy secret → 403; revoked → 403 at once."""
+    home = enroll_laptop(lan, tmp_path)
+
+    def ask(cert: Path | str | None, secret: str = SECRET) -> HttpResponse:
+        return Gateway(lan, cert, secret)("GET", f"{LAN_URL}/v1/gateway/authz", {}, None)
+
+    ok = ask(home.cert_path)
+    assert ok.status == 204 and ok.headers["x-sga-device"] == "laptop"
+    assert ask(None).status == 403
+    assert ask(home.cert_path, secret="wrong").status == 403
+    stranger, _ = CertificateAuthority.create().sign_server(["x"], days=1)
+    assert ask(cert_pem(stranger)).status == 403
+    r = lan.post("/v1/admin/devices/laptop/revoke", json=WHO, headers=CP_ADMIN)
+    assert r.status_code == 200, r.text
+    assert ask(home.cert_path).status == 403

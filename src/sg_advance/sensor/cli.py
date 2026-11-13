@@ -218,9 +218,29 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
         if not servers:
             print("--mcp-gateway needs at least one --mcp-server NAME=URL", file=sys.stderr)
             return 2
+        credentials: dict[str, str] = {}
+        for entry in args.mcp_credential:  # NAME=ENV_VAR: the token stays out of argv and logs
+            name, _, var = entry.partition("=")
+            value = os.environ.get(var, "")
+            if not value:
+                print(f"--mcp-credential {name}: environment variable {var} is empty", file=sys.stderr)
+                return 2
+            credentials[name] = value if " " in value else f"Bearer {value}"
+        secret = os.environ.get(args.mcp_proxy_secret_env, "") if args.mcp_proxy_secret_env else None
+        if args.mcp_proxy_secret_env and not secret:
+            print(f"--mcp-proxy-secret-env: {args.mcp_proxy_secret_env} is empty", file=sys.stderr)
+            return 2
         adapters.append(
             McpGatewayAdapter(
-                args.mcp_gateway, servers, enforce=not args.mcp_monitor, user_header=args.mcp_user_header
+                args.mcp_gateway,
+                servers,
+                enforce=not args.mcp_monitor,
+                user_header=args.mcp_user_header,
+                credentials=credentials,
+                proxy_secret=secret,
+                device_header=args.mcp_device_header,
+                upstream_ssl=home.ssl_context() if args.mcp_device_cert else None,
+                forward_user=args.mcp_device_cert,
             )
         )
     if args.openclaw_audit_proxy:  # team gateway: who approved / stopped what (M5b)
@@ -410,6 +430,18 @@ def main(argv: list[str] | None = None) -> int:
         help="an approved MCP server (repeatable)",
     )
     p.add_argument("--mcp-monitor", action="store_true", help="MCP gateway records only, never refuses")
+    p.add_argument(
+        "--mcp-credential", action="append", default=[], metavar="NAME=ENV_VAR",
+        help="the gateway holds this server's token (read from ENV_VAR); agents' own auth is dropped",
+    )  # fmt: skip
+    p.add_argument(
+        "--mcp-proxy-secret-env", metavar="ENV_VAR", help="accept only requests from the LAN gateway"
+    )
+    p.add_argument("--mcp-device-header", help="device id header the LAN gateway sets (e.g. x-sga-device)")
+    p.add_argument(
+        "--mcp-device-cert", action="store_true",
+        help="reach https upstreams (the central gateway) with this device's certificate and pass the user",
+    )  # fmt: skip
     p.add_argument(
         "--mcp-gateway-url",
         help="company MCP gateway agents should use, e.g. http://mcp.corp:18790/mcp/ (flags direct servers)",

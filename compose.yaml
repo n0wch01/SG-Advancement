@@ -139,6 +139,45 @@ services:
   # M12 LAN gateway: other PCs' sensors reach the control plane only here (mTLS with device
   # certificates; docs/multi-host.md). Opt-in: `docker compose --profile lan up -d`. Published on
   # the LAN (SGA_LAN_BIND, default all interfaces); admin API and dashboard are not reachable through it.
+  # Zero trust (2026-11-13, profile mcp): the company's MCP servers sit on crm-net (internal, no
+  # route anywhere); the central MCP gateway is the only thing on both sides. It holds corp-crm's token
+  # (agents hold none) and accepts only requests the LAN gateway forwards (device mTLS + revocation
+  # check per request, proxy secret). Employees' agents: https://<LAN>:18443/mcp/crm via their sensor.
+  mcp-gateway:
+    profiles: [mcp]
+    image: sg-advance-team-gateway:local
+    pull_policy: never
+    entrypoint: ["tini", "-s", "--", "/opt/sga-mcp/start.sh"]
+    healthcheck:
+      disable: true
+    environment:
+      SGA_SERVER: http://control-plane:8000
+      SGA_ENROLL_TOKEN: ${SGA_MCP_ENROLL_TOKEN:-}
+      CRM_TOKEN: ${SGA_CRM_TOKEN:-}
+      SGA_PROXY_SECRET: ${SGA_PROXY_SECRET:-}
+    volumes:
+      - ./deploy/mcp-gateway/start.sh:/opt/sga-mcp/start.sh:ro
+      - mcp-gateway:/home/node/.sg-advance
+    networks: [corp-net, crm-net]  # corp-net: LAN gateway and control plane; crm-net: the servers
+    depends_on: [control-plane]
+    restart: unless-stopped
+
+  # Demo company MCP server (CRM). Answers only with the token the central gateway holds.
+  corp-crm:
+    profiles: [mcp]
+    image: sg-advance-team-gateway:local
+    pull_policy: never
+    entrypoint: ["tini", "-s", "--", "/usr/local/bin/python3.12", "/demo/fake_mcp_server.py",
+                 "--host", "0.0.0.0", "--port", "18791", "--token-env", "CRM_TOKEN"]
+    healthcheck:
+      disable: true
+    environment:
+      CRM_TOKEN: ${SGA_CRM_TOKEN:-}
+    volumes:
+      - ./demo/fake_mcp_server.py:/demo/fake_mcp_server.py:ro
+    networks: [crm-net]
+    restart: unless-stopped
+
   lan-gateway:
     profiles: [lan]
     image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
@@ -158,6 +197,8 @@ networks:
   corp-net: {}
   internet-sim: {}
   team-edge: {}
+  crm-net:
+    internal: true  # company MCP servers: reachable only by the central MCP gateway
   team-net:
     internal: true  # the agent network: no route out except team-egress
     ipam:
@@ -172,3 +213,4 @@ volumes:
   team-audit: {}
   team-egress: {}
   carol-pc: {}
+  mcp-gateway: {}
