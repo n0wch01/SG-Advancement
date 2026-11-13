@@ -6,8 +6,10 @@
 #   2. makes a Python virtual environment under %LOCALAPPDATA%\SG-Advance and installs into it
 #      (every dependency must match a pinned hash: pip --require-hashes)
 #   3. enrolls this PC: a key is made here and never leaves; the control plane signs a device certificate
-#   4. if this PC runs OpenClaw: installs the SG-Advance gateway plugin (checks every tool call before
-#      it runs) and lets the sensor watch the gateway with the gateway's own token (copied, never printed)
+#   4. agents on this PC, each checked before every tool call runs:
+#      - Claude Code: the SG-Advance hook. From an administrator PowerShell it goes into Claude Code's
+#        managed settings (users cannot remove it, bypass mode off); otherwise into the user's settings
+#      - OpenClaw: the gateway plugin, and the sensor watches the gateway with its own token (copied, never printed)
 #   5. registers the sensor to start at sign-in (Task Scheduler, or the Startup folder if tasks are not allowed)
 # Inputs (environment): SGA_ENROLL_TOKEN (required), SGA_DEVICE_ID, SGA_USER.
 
@@ -88,8 +90,19 @@ if ($Enrolled) {
 Remove-Item Env:SGA_ENROLL_TOKEN -ErrorAction SilentlyContinue
 $Token = $null
 
-Write-Host '[4/5] OpenClaw on this PC'
+Write-Host '[4/5] AI agents on this PC'
 $RunArgs = @('--user', $User)
+$IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+if (Get-Command claude -ErrorAction SilentlyContinue) {
+    $ccArgs = @('--home', $SgaHome, 'claude-code', 'install', '--user', $User)
+    if ($IsAdmin) { $ccArgs += '--managed' }
+    & $Sga @ccArgs
+    if ($LASTEXITCODE) { throw 'putting the SG-Advance hook into Claude Code failed' }
+    if (-not $IsAdmin) { Write-Host '      (not administrator: the user can remove this hook; the sensor reports it if they do)' }
+} else {
+    Write-Host '      Claude Code is not installed: the sensor will still notice if it appears'
+}
 $OcConfig = Join-Path $env:USERPROFILE '.openclaw\openclaw.json'
 $Oc = Get-Command openclaw -ErrorAction SilentlyContinue
 if ($Oc -and $PluginSha256) {

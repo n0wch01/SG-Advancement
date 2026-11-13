@@ -184,6 +184,10 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
             adapters.append(
                 OpenClawIntegrityAdapter(interval=args.integrity_interval, quarantine=not args.observe_only)
             )
+    if not args.no_claude_code:  # Claude Code's guard hook in place? (M6; silent if not installed)
+        from .adapters.claude_code_config import ClaudeCodeConfigAdapter
+
+        adapters.append(ClaudeCodeConfigAdapter())
     if not args.no_discovery:  # agent installs on this endpoint, managed or shadow (M5d)
         from .adapters.agent_discovery import AgentDiscoveryAdapter
 
@@ -293,6 +297,26 @@ def _cmd_evaluate(home: SensorHome, args: argparse.Namespace) -> int:
         print(json.dumps({"ok": True}))
         return 0
     print(json.dumps(judge(ctx, req, labels={"sga_verdict": "degraded"})))
+    return 0
+
+
+def _cmd_claude_code(home: SensorHome, args: argparse.Namespace) -> int:
+    from . import claude_code_setup as cc
+
+    if args.action == "install":
+        try:
+            print(cc.install(home.root, args.user, managed=args.managed, dry_run=args.dry_run))
+        except (OSError, RuntimeError) as e:
+            hint = " (managed settings need administrator rights)" if args.managed else ""
+            print(f"error: {e}{hint}", file=sys.stderr)
+            return 1
+    elif args.action == "uninstall":
+        removed = cc.uninstall()
+        print("removed from " + ", ".join(removed) if removed else "not installed")
+    else:
+        st = cc.status()
+        print(f"guard hook   {st['guard']}  (managed: can't be removed; user: removable; missing: none)")
+        print(f"defaultMode  {st['default_mode'] or '-'}  bypass disabled: {st['bypass_disabled']}")
     return 0
 
 
@@ -411,6 +435,11 @@ def main(argv: list[str] | None = None) -> int:
         "--no-discovery", action="store_true", help="don't scan this endpoint for agent installs (shadow AI)"
     )
     p.add_argument("--discovery-interval", type=float, default=600.0, help="seconds between install scans")
+    p.add_argument(
+        "--no-claude-code",
+        action="store_true",
+        help="don't check Claude Code's hook settings on this endpoint",
+    )
     p.set_defaults(fn=_cmd_run)
 
     p = sub.add_parser("service", help="run the daemon as a background service (macOS launchd, Windows task)")
@@ -421,6 +450,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--user", default=os.environ.get("SGA_USER") or getpass.getuser(), help="employee id")
     p.add_argument("--dry-run", action="store_true", help="print the service definition, change nothing")
     p.set_defaults(fn=_cmd_service)
+
+    p = sub.add_parser("claude-code", help="put the SG-Advance hook into Claude Code's settings (M6)")
+    p.add_argument("action", choices=["install", "uninstall", "status"])
+    p.add_argument("--managed", action="store_true", help="company managed settings (needs administrator)")
+    p.add_argument("--user", default=os.environ.get("SGA_USER") or getpass.getuser(), help="employee id")
+    p.add_argument("--dry-run", action="store_true", help="print the settings, change nothing")
+    p.set_defaults(fn=_cmd_claude_code)
 
     p = sub.add_parser("evaluate", help="judge one plugin request from stdin with the cached policy")
     p.add_argument("--user", default=os.environ.get("SGA_USER") or getpass.getuser(), help="employee id")

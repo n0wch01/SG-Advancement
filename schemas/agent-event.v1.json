@@ -486,6 +486,49 @@
           "default": null,
           "title": "Guard Detail"
         },
+        "guard_scope": {
+          "anyOf": [
+            {
+              "enum": [
+                "managed",
+                "user"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Claude Code (M6): the guard hook is in managed settings (users cannot remove it) or only in the user's own settings (they can)",
+          "title": "Guard Scope"
+        },
+        "default_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent-native default permission mode, e.g. bypassPermissions (Claude Code)",
+          "title": "Default Mode"
+        },
+        "bypass_disabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Policy forbids the bypass-permissions mode (Claude Code managed settings)",
+          "title": "Bypass Disabled"
+        },
         "plugins": {
           "default": [],
           "items": {
@@ -1615,6 +1658,7 @@
         "openclaw_integrity",
         "openclaw_audit_proxy",
         "claude_code_hook",
+        "claude_code_config",
         "gemini_cli_hook",
         "codex_cli_hook",
         "langgraph_callback",

@@ -28,6 +28,7 @@ server = [
 sga-detect = "sg_advance.detect.cli:main"
 sga-server = "sg_advance.server.cli:main"
 sga-sensor = "sg_advance.sensor.cli:main"
+sga-hook = "sg_advance.sensor.hook:main"  # Claude Code hooks (M6): starts per tool call, stays light
 
 [dependency-groups]
 dev = [

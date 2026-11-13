@@ -1,0 +1,43 @@
+# Claude Code (M6): the sensor's config check reports where the SG-Advance hook is and the permission
+# settings that matter (config.snapshot, product claude-code). Decision 2026-11-13 ("둘 다 + 탐지"):
+# managed settings when installed by an administrator, user settings otherwise, and the sensor flags
+# a missing hook, a hook the user can remove, and bypass-permissions as the default mode.
+cases:
+  - name: Claude Code는 설치됐는데 SG-Advance hook이 없음
+    agent: claude_code
+    sensor: claude_code_config
+    events:
+      - {kind: config.snapshot, product: claude-code, path: "~/.claude/settings.json", guard_plugin: missing}
+    expect: [claude-code-guard-hook-missing]
+    expect_not: [openclaw-guard-plugin-disabled, claude-code-guard-hook-removable]
+
+  - name: hook이 사용자 설정에만 있음 (직원이 지울 수 있음)
+    agent: claude_code
+    sensor: claude_code_config
+    events:
+      - {kind: config.snapshot, product: claude-code, guard_plugin: enabled, guard_scope: user}
+    expect: [claude-code-guard-hook-removable]
+    expect_not: [claude-code-guard-hook-missing]
+
+  - name: 회사 관리 설정의 hook, 우회 모드 금지 → 정상
+    agent: claude_code
+    sensor: claude_code_config
+    events:
+      - {kind: config.snapshot, product: claude-code, guard_plugin: enabled, guard_scope: managed, bypass_disabled: true, default_mode: default}
+    expect_not: [claude-code-guard-hook-missing, claude-code-guard-hook-removable, claude-code-bypass-default]
+
+  - name: 기본 권한 모드가 권한 확인 끄기(bypassPermissions)
+    agent: claude_code
+    sensor: claude_code_config
+    events:
+      - {kind: config.snapshot, product: claude-code, guard_plugin: enabled, guard_scope: managed, default_mode: bypassPermissions}
+    expect: [claude-code-bypass-default]
+
+  # 같은 config.snapshot이라도 OpenClaw 플러그인 룰은 OpenClaw에만 (2026-11-13: 전에는 제품을 가리지 않았다).
+  - name: OpenClaw 플러그인 룰은 OpenClaw 설정에만
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, guard_plugin: missing}
+    expect: [openclaw-guard-plugin-disabled]
+    expect_not: [claude-code-guard-hook-missing]

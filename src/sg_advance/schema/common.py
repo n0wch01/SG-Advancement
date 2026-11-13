@@ -36,6 +36,7 @@ class SensorType(StrEnum):
     OPENCLAW_INTEGRITY = "openclaw_integrity"  # installed OpenClaw code vs. signed packages
     OPENCLAW_AUDIT_PROXY = "openclaw_audit_proxy"  # between identity proxy and gateway: who did what
     CLAUDE_CODE_HOOK = "claude_code_hook"  # PreToolUse / PostToolUse ... hooks
+    CLAUDE_CODE_CONFIG = "claude_code_config"  # where the guard hook is, permission settings (M6)
     GEMINI_CLI_HOOK = "gemini_cli_hook"
     CODEX_CLI_HOOK = "codex_cli_hook"
     LANGGRAPH_CALLBACK = "langgraph_callback"  # in-process callback handler

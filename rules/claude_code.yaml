@@ -1,0 +1,55 @@
+# Claude Code (M6). The SG-Advance hook (PreToolUse → local verdict, the same rules as every other
+# agent) is the control; these rules watch that the control is in place. The sensor's config check
+# sends config.snapshot (product claude-code) at start and when it changes.
+# Decision 2026-11-13 ("둘 다 + 탐지"): managed settings when an administrator installed it, user
+# settings otherwise; a missing hook, a removable hook and bypass-as-default are reported. Alerts only.
+# 정규식은 문자열만 보므로 불리언 조건은 when에 둔다.
+version: 1
+rules:
+  # 미탐 주의: Claude Code를 쓰지만 설치 흔적(PATH의 claude, ~/.claude)이 없으면 점검 자체가 돌지 않는다.
+  - id: claude-code-guard-hook-missing
+    severity: high
+    category: policy_violation
+    title: Claude Code에 실행 전 판정 hook이 없음
+    message: 이 장비의 Claude Code에 SG-Advance hook이 없습니다. Claude Code의 툴 실행이 회사 정책으로 판정·기록되지 않습니다.
+    recommended_action: 설치 명령을 다시 실행하거나(관리자 PowerShell이면 회사 관리 설정에 들어감) 사용자에게 hook을 지운 이유를 확인하세요.
+    response: alert
+    dedup: none
+    tags: [owasp-llm:LLM06, owasp-agentic:ASI03]
+    when: {payload.kind: config.snapshot, agent.type: claude_code}
+    match:
+      type: regex
+      fields: [payload.guard_plugin]
+      pattern: '^(missing|disabled)$'
+
+  # 오탐 주의: 관리자 권한 없이 설치한 PC는 모두 걸린다(의도: 회사 배포는 관리 설정이어야 함).
+  - id: claude-code-guard-hook-removable
+    severity: medium
+    category: policy_violation
+    title: Claude Code hook이 사용자 설정에만 있음
+    message: SG-Advance hook이 사용자 본인의 설정(~/.claude/settings.json)에만 있어 직원이 지울 수 있습니다.
+    recommended_action: 관리자 권한으로 설치 명령을 다시 실행해 회사 관리 설정(managed-settings.d)으로 옮기세요.
+    response: alert
+    dedup: none
+    tags: [owasp-agentic:ASI03]
+    when: {payload.kind: config.snapshot, agent.type: claude_code}
+    match:
+      type: regex
+      fields: [payload.guard_scope]
+      pattern: '^user$'
+
+  # 세션 시작 때의 권한 모드는 agent-safety-bypass(tool_misuse.yaml)가 본다. 이 룰은 기본값 자체가 우회인 설정.
+  - id: claude-code-bypass-default
+    severity: high
+    category: policy_violation
+    title: Claude Code 기본 권한 모드가 권한 확인 끄기
+    message: Claude Code의 기본 권한 모드가 bypassPermissions라서 모든 툴이 사람 확인 없이 실행됩니다.
+    recommended_action: 회사 관리 설정에 disableBypassPermissionsMode를 넣고(설치 스크립트가 관리 설정에 넣음) 사용자 설정을 되돌리게 하세요.
+    response: alert
+    dedup: none
+    tags: [owasp-llm:LLM06, incident:nx-s1ngularity-2025]
+    when: {payload.kind: config.snapshot, agent.type: claude_code}
+    match:
+      type: regex
+      fields: [payload.default_mode]
+      pattern: '^bypassPermissions$'

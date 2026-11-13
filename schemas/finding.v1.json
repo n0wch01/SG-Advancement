@@ -279,6 +279,7 @@
         "openclaw_integrity",
         "openclaw_audit_proxy",
         "claude_code_hook",
+        "claude_code_config",
         "gemini_cli_hook",
         "codex_cli_hook",
         "langgraph_callback",

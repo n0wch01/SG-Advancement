@@ -64,6 +64,7 @@ class Hold:
     registered: bool = False
     future: asyncio.Future[dict[str, Any]] | None = None
     early: dict[str, Any] | None = None  # resolved before anyone awaited it (cancel)
+    call_event: Any = None  # the held tool.call, for enforcement points that send full events (M6)
 
 
 class Holds:
@@ -75,13 +76,16 @@ class Holds:
     def waiting(self) -> bool:
         return any(h.registered for h in self._open.values())
 
-    def open(self, req: dict[str, Any], pending: dict[str, Any], summary: dict[str, Any]) -> Hold:
+    def open(
+        self, req: dict[str, Any], pending: dict[str, Any], summary: dict[str, Any], call_event: Any = None
+    ) -> Hold:
         hold = Hold(
             id=uuid4().hex,
             req=req,
             pending=pending,
             summary=summary,
             deadline=time.monotonic() + self.wait_seconds,
+            call_event=call_event,
         )
         self._open[hold.id] = hold
         return hold
@@ -147,14 +151,25 @@ class Holds:
         return {"ok": True, "decision": "block", "reason": msg, "outcome": result["outcome"]}
 
     async def _finish(self, ctx: AdapterContext, hold: Hold, result: dict[str, Any]) -> None:
-        from .plugin_api import resolution_event  # plugin_api imports this module
+        from .plugin_api import resolution_event, resolution_from_call  # plugin_api imports this module
 
         outcome = result["outcome"]
-        req = hold.req | {"decision": _OUTCOMES[outcome], "source": "daemon"}
-        event = resolution_event(ctx, req, hold.pending)
-        payload = event.payload.model_copy(update={"via": "security", "approver": result["by"]})
-        labels = event.labels | {"sga_security_hold": hold.id, "sga_security_outcome": outcome}
-        ctx.record(ctx.evaluate(event.model_copy(update={"payload": payload, "labels": labels})))
+        labels = {"sga_security_hold": hold.id, "sga_security_outcome": outcome}
+        if hold.call_event is not None:
+            event = resolution_from_call(
+                hold.call_event,
+                _OUTCOMES[outcome],
+                hold.pending,
+                approver=result["by"],
+                via="security",
+                labels=labels,
+            )
+        else:
+            req = hold.req | {"decision": _OUTCOMES[outcome], "source": "daemon"}
+            event = resolution_event(ctx, req, hold.pending)
+            payload = event.payload.model_copy(update={"via": "security", "approver": result["by"]})
+            event = event.model_copy(update={"payload": payload, "labels": event.labels | labels})
+        ctx.record(ctx.evaluate(event))
         log.warning("security approval %s: %s for %s", hold.id, outcome, hold.req.get("toolName"))
         if hold.registered:
             try:

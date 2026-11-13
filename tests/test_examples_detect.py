@@ -74,3 +74,10 @@ def test_shadow_openclaw_install_on_an_employee_pc() -> None:
     carol, alice = (set(v.rule_ids) for v in verdicts)
     assert carol == {"openclaw-unmanaged-install", "openclaw-gateway-network-exposed"}
     assert alice == set()
+
+
+def test_claude_code_guard_hook_settings_are_checked() -> None:
+    """M6: the hook only in the user's settings (removable) and bypass as the default mode."""
+    assert {"claude-code-guard-hook-removable", "claude-code-bypass-default"} <= hit_ids(
+        "claude_code_config.jsonl"
+    )

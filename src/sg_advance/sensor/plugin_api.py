@@ -37,12 +37,14 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from ..detect import Verdict
-from ..schema import AgentEvent, Enforcement, ResponseAction, SensorType
+from ..schema import AgentEvent, Enforcement, EventKind, ResponseAction, SensorType
+from ..schema.events import ApprovalResolution
 from .adapters.base import AdapterContext
 from .adapters.openclaw_people import OpenClawPeople
 from .security_hold import summary_for
@@ -136,18 +138,33 @@ def max_severity(verdict: Verdict) -> str | None:
     return max(sev, key=_SEVERITY_RANK.index) if sev else None
 
 
-def plugin_response(verdict: Verdict) -> tuple[dict[str, Any], Enforcement | None]:
-    """What the plugin should do, and the enforcement record that matches it."""
+@dataclass(frozen=True)
+class EnforcementPoint:
+    """Who applies the verdict before the tool runs, for the enforcement record."""
+
+    sensor: SensorType
+    name: str  # "openclaw plugin", "claude code hook"
+    asks: str  # where a require_approval verdict is answered
+
+
+OPENCLAW_PLUGIN = EnforcementPoint(SensorType.OPENCLAW_PLUGIN, "openclaw plugin", "OpenClaw")
+CLAUDE_CODE_HOOK = EnforcementPoint(SensorType.CLAUDE_CODE_HOOK, "claude code hook", "Claude Code")
+
+
+def plugin_response(
+    verdict: Verdict, point: EnforcementPoint = OPENCLAW_PLUGIN
+) -> tuple[dict[str, Any], Enforcement | None]:
+    """What the plugin (or hook) should do, and the enforcement record that matches it."""
     action = verdict.action
     rules = verdict.rule_ids
     titles = [h.rule.title for h in verdict.hits]
     reason = "; ".join(dict.fromkeys(titles)) or "policy"
-    sensor = SensorType.OPENCLAW_PLUGIN
+    sensor = point.sensor
     base = {"ok": True, "action": action.value, "rules": rules}
     if severity := max_severity(verdict):
         base["severity"] = severity
     if action in _BLOCKING:
-        detail = "pre-exec: openclaw plugin blocked the tool call"
+        detail = f"pre-exec: {point.name} blocked the tool call"
         return base | {"decision": "block", "reason": f"SG-Advance: {reason}"}, Enforcement(
             action=action, enforced=True, enforcer=sensor, detail=detail
         )
@@ -158,7 +175,7 @@ def plugin_response(verdict: Verdict) -> tuple[dict[str, Any], Enforcement | Non
             "reason": f"SG-Advance: 보안팀 승인이 필요한 호출이지만 센서 데몬이 없어 차단했습니다 ({reason})",
         }, Enforcement(action=ResponseAction.BLOCK, enforced=True, enforcer=sensor, detail=detail)
     if action is ResponseAction.REQUIRE_APPROVAL:
-        detail = "pre-exec: user approval requested through OpenClaw"
+        detail = f"pre-exec: user approval requested through {point.asks}"
         return base | {"decision": "approve", "title": "SG-Advance", "reason": reason}, Enforcement(
             action=action, enforced=True, enforcer=sensor, detail=detail
         )
@@ -205,6 +222,110 @@ def judge(
     if response.get("decision") == "approve":  # keep what asked, to link the person's answer
         ctx.plugins.remember_approval(call_id, pending)
     return response
+
+
+def resolution_from_call(
+    call: AgentEvent,
+    decision: str,
+    pending: dict[str, Any],
+    *,
+    approver: str | None = None,
+    via: str = "user",
+    labels: dict[str, str] | None = None,
+) -> AgentEvent:
+    """``approval.resolved`` in the same envelope (who, which agent, which conversation) as the
+    tool call that was held. For enforcement points that hand over a full event (Claude Code)."""
+    requested_at = pending.get("requested_at")
+    now = datetime.now(UTC)
+    wait_ms = int((now - requested_at).total_seconds() * 1000) if requested_at else None
+    p = call.payload
+    return call.model_copy(
+        update={
+            "event_id": AgentEvent.model_fields["event_id"].default_factory(),  # type: ignore[misc]
+            "ts": now,
+            "payload": ApprovalResolution(
+                call_id=p.call_id,  # type: ignore[union-attr]
+                tool=p.tool,  # type: ignore[union-attr]
+                decision=decision,  # type: ignore[arg-type]
+                approved=decision in ("allow-once", "allow-always"),
+                rule_ids=tuple(pending.get("rule_ids") or ()),
+                max_severity=pending.get("max_severity"),
+                request_event_id=pending.get("event_id"),
+                finding_ids=tuple(pending.get("finding_ids") or ()),
+                requested_at=requested_at,
+                wait_ms=max(wait_ms, 0) if wait_ms is not None else None,
+                approver=approver,
+                via=via,  # type: ignore[arg-type]
+            ),
+            "labels": call.labels | (labels or {}),
+        }
+    )
+
+
+def judge_event(
+    ctx: AdapterContext, doc: dict[str, Any], point: EnforcementPoint = CLAUDE_CODE_HOOK
+) -> dict[str, Any]:
+    """Judge and record an event an enforcement point built itself (Claude Code hooks, M6).
+
+    ``tool.call``: the same verdicts as the OpenClaw plugin (block / approve → the agent's own
+    prompt / hold for security / allow). ``prompt.user``: blocked only by a blocking verdict.
+    Anything else is recorded. A ``tool.result`` for a call that was sent to the person's own
+    prompt means they approved it: recorded as ``approval.resolved`` (a refusal leaves no result,
+    so it cannot be told apart from an abandoned call)."""
+    event = AgentEvent.model_validate(doc)
+    result = ctx.evaluate(event)
+    kind = result.event.kind
+    if kind is EventKind.TOOL_CALL:
+        response, enforcement = plugin_response(result.verdict, point)
+        pending = {
+            "event_id": result.event.event_id,
+            "finding_ids": [f.finding_id for f in result.verdict.findings],
+            "rule_ids": result.verdict.rule_ids,
+            "max_severity": response.get("severity"),
+            "requested_at": result.event.ts,
+            "call": result.event,
+        }
+        if result.verdict.action is ResponseAction.SECURITY_APPROVAL and ctx.holds is not None:
+            titles = "; ".join(dict.fromkeys(h.rule.title for h in result.verdict.hits)) or "policy"
+            response = {k: v for k, v in response.items() if k != "reason"} | {"reason": titles}
+            hold = ctx.holds.open(
+                {"toolName": result.event.payload.tool},
+                pending,  # type: ignore[union-attr]
+                summary_for(result.event, response, pending),
+                call_event=result.event,
+            )
+            response |= {
+                "decision": "hold",
+                "hold_id": hold.id,
+                "wait_ms": int(ctx.holds.wait_seconds * 1000),
+            }
+            enforcement = Enforcement(
+                action=ResponseAction.SECURITY_APPROVAL,
+                enforced=True,
+                enforcer=point.sensor,
+                detail="pre-exec: held for security approval in the console",
+            )
+        ctx.record(result, enforcement)
+        if response.get("decision") == "approve":
+            ctx.plugins.remember_approval(result.event.payload.call_id, pending)  # type: ignore[union-attr]
+        return response
+    ctx.record(result)
+    if kind is EventKind.TOOL_RESULT:
+        asked = ctx.plugins.take_approval(result.event.payload.call_id)  # type: ignore[union-attr]
+        if asked and isinstance(asked.get("call"), AgentEvent):
+            inferred = resolution_from_call(
+                asked["call"], "allow-once", asked, labels={"sga_approval_inferred": "tool_result"}
+            )
+            ctx.record(ctx.evaluate(inferred))
+    if kind is EventKind.PROMPT_USER and result.verdict.action in _BLOCKING:
+        reason = "; ".join(dict.fromkeys(h.rule.title for h in result.verdict.hits)) or "policy"
+        return {
+            "ok": True,
+            "decision": "block",
+            "reason": f"SG-Advance: {reason}",
+            "rules": result.verdict.rule_ids,
+        }
+    return {"ok": True, "decision": "allow"}
 
 
 DECISIONS = ("allow-once", "allow-always", "deny", "timeout", "cancelled")
@@ -388,6 +509,14 @@ class LocalApiServer:
             except Exception as e:  # the plugin falls back on its own; tell it why
                 log.exception("plugin request failed")
                 return {"ok": False, "error": str(e)}
+        if op == "event":  # Claude Code hooks (M6): a full AgentEvent built by the hook
+            if not isinstance(req.get("event"), dict):
+                return {"ok": False, "error": "event must be an object"}
+            try:
+                return judge_event(self.ctx, req["event"])
+            except Exception as e:  # validation errors included: the hook falls back on its own
+                log.exception("hook event failed")
+                return {"ok": False, "error": str(e)[:500]}
         if op == "cancel_hold":  # the run was aborted while security had not decided yet
             holds, hold_id = self.ctx.holds, str(req.get("hold_id") or "")
             found = holds is not None and holds.resolve(hold_id, "cancelled")

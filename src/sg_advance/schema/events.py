@@ -294,6 +294,17 @@ class ConfigSnapshot(StrictModel):
         default=None, description="The SG-Advance enforcement plugin as the config leaves it"
     )
     guard_detail: str | None = None
+    guard_scope: Literal["managed", "user"] | None = Field(
+        default=None,
+        description="Claude Code (M6): the guard hook is in managed settings (users cannot remove it) "
+        "or only in the user's own settings (they can)",
+    )
+    default_mode: str | None = Field(
+        default=None, description="Agent-native default permission mode, e.g. bypassPermissions (Claude Code)"
+    )
+    bypass_disabled: bool | None = Field(
+        default=None, description="Policy forbids the bypass-permissions mode (Claude Code managed settings)"
+    )
     plugins: tuple[PluginDescriptor, ...] = ()
     exec_policies: tuple[ExecPolicy, ...] = ()
     runtimes: tuple[RuntimePin, ...] = ()

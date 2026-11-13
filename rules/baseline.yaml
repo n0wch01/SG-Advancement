@@ -14,7 +14,7 @@ rules:
     response: alert
     dedup: none
     tags: [owasp-llm:LLM06]
-    when: {payload.kind: config.snapshot}
+    when: {payload.kind: config.snapshot, agent.type: openclaw}  # 2026-11-13: Claude Code는 claude_code.yaml
     match:
       type: regex
       fields: [payload.guard_plugin]
