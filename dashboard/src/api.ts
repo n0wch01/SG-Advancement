@@ -15,8 +15,7 @@ import type {
   SecurityApproval,
   Role,
   Summary,
-  Timeline,
-} from "./types";
+  Timeline, ApprovalMetrics } from "./types";
 
 const KEY = "sga-dashboard-token";
 
@@ -99,6 +98,10 @@ export class Api {
 
   approvals(q: { approved?: string; decision?: string; user_id?: string; since?: string | null; limit?: number; offset?: number }) {
     return this.get<Approval[]>("/approvals", q);
+  }
+
+  approvalMetrics(days: number) {
+    return this.get<ApprovalMetrics>("/approvals/metrics", { days });
   }
 
   timeline(q: { user_id?: string; session_id?: string; since?: string | null }) {

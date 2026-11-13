@@ -257,3 +257,25 @@ export interface RemoteAction {
   result_at: string | null;
   result_detail: string | null;
 }
+
+// Approval-fatigue metrics (2026-11-13, KISA ZT guide C2; 금융보안원 ⑭).
+export interface ChannelStats {
+  requests: number;
+  approved: number;
+  denied: number;
+  unanswered: number;
+  rejection_rate: number | null;
+  median_wait_s: number | null;
+  p90_wait_s: number | null;
+  fast_approvals: number;
+  fast_approval_rate: number | null;
+}
+
+export interface ApprovalMetrics {
+  window_days: number;
+  since: string;
+  user: ChannelStats;
+  security: ChannelStats;
+  repeated: { channel: string; tool: string; rule_ids: string[]; requests: number; approval_rate: number; people: number; automation_candidate: boolean }[];
+  people: { user_id: string; requests: number; busiest_day: number; fast_approval_rate: number | null }[];
+}

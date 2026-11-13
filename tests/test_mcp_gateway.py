@@ -172,3 +172,53 @@ async def test_monitor_mode_passes_everything_but_records(enrolled: Sensor) -> N
 def test_server_names_are_checked() -> None:
     with pytest.raises(ValueError):
         McpGatewayAdapter("127.0.0.1:0", {"../etc": "http://x"})
+
+
+async def test_degraded_device_cannot_reach_a_sensitive_server(enrolled: Sensor) -> None:
+    """Zero trust (2026-11-13): the policy lists crm as sensitive; a PC with an agent outside company
+    control is refused before the server sees the call, and is let through once it is fixed."""
+    upstream = FakeMcp(sse=False)
+    server = await upstream.start()
+    gw = McpGatewayAdapter("127.0.0.1:0", {"crm": f"http://127.0.0.1:{upstream.port}/mcp"})
+    await gw.start(AdapterContext(enrolled, "dev", "pc"))
+    try:
+        enrolled.set_posture("agent-discovery", ["cursor: no SG-Advance control for cursor"])
+        _, refused = await rpc(gw.port, "/mcp/crm", call(2, "query_customers", name="Kim"))
+        assert refused["result"]["isError"] and "보안 상태 미달" in refused["result"]["content"][0]["text"]
+        assert upstream.seen == []
+        enrolled.set_posture("agent-discovery", [])
+        _, ok = await rpc(gw.port, "/mcp/crm", call(3, "query_customers", name="Kim"))
+        assert ok["result"]["content"][0]["text"] == "query_customers ok"
+    finally:
+        await gw.close()
+        server.close()
+
+
+async def test_input_pep_withholds_injected_results_from_the_model(enrolled: Sensor) -> None:
+    """KISA ZT guide P6-7: a result with a high-severity injection never reaches the model (enforce);
+    monitor mode passes it and only records."""
+    for enforce in (True, False):
+        upstream = FakeMcp(sse=False)
+        server = await upstream.start()
+        gw = McpGatewayAdapter(
+            "127.0.0.1:0", {"crm": f"http://127.0.0.1:{upstream.port}/mcp"}, enforce=enforce
+        )
+        await gw.start(AdapterContext(enrolled, "dev", "pc"))
+        try:
+            _, out = await rpc(gw.port, "/mcp/crm", call(5, "read_doc", title="onboarding"))
+            text = out["result"]["content"][0]["text"]
+            if enforce:
+                assert out["result"]["isError"] and "withheld" in text and "Ignore all previous" not in text
+            else:
+                assert text.startswith("Ignore all previous")
+            _, fine = await rpc(gw.port, "/mcp/crm", call(6, "query_customers", name="Kim"))
+            assert fine["result"]["content"][0]["text"] == "query_customers ok"
+        finally:
+            await gw.close()
+            server.close()
+    held = [
+        f
+        for f in spooled(enrolled, "finding")
+        if (f.get("response") or {}).get("detail", "").startswith("input pep")
+    ]
+    assert held and all(f["response"]["enforced"] for f in held)

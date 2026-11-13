@@ -4,7 +4,7 @@ import type { Api } from "../api";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
 import { DECISION_LABEL, approvalsHref, approverText, clip, formatTime, relativeTime, sinceFor, waitText } from "../format";
-import type { Approval } from "../types";
+import type { Approval, ApprovalMetrics, ChannelStats } from "../types";
 
 const PAGE = 50;
 const RANGES: [string, string][] = [
@@ -94,6 +94,8 @@ export function Approvals({ api, query }: { api: Api; query: Record<string, stri
         )}
       </div>
 
+      <FatiguePanel api={api} range={range} />
+
       {error && <ErrorBox error={error} />}
       {!loading && !error && rows.length === 0 && <Empty>이 조건의 승인 기록이 없습니다.</Empty>}
       {rows.length > 0 && (
@@ -177,5 +179,87 @@ function ApprovalRow({ a }: { a: Approval }) {
       </td>
       <td className="num">{waitText(a.wait_ms)}</td>
     </tr>
+  );
+}
+
+const RANGE_DAYS: Record<string, number> = { "24h": 1, "7d": 7, "30d": 30, all: 90 };
+const pct = (x: number | null) => (x === null ? "–" : `${Math.round(x * 100)}%`);
+const secs = (x: number | null) => (x === null ? "–" : x < 60 ? `${x}초` : `${Math.round(x / 60)}분`);
+
+// Approval fatigue (KISA agentic AI ZT guide C2; 금융보안원 ⑭): asking too often turns approval into a reflex.
+function FatiguePanel({ api, range }: { api: Api; range: string }) {
+  const days = RANGE_DAYS[range] ?? 7;
+  const [m, setM] = useState<ApprovalMetrics | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+  useEffect(() => {
+    setM(null);
+    api.approvalMetrics(days).then(setM, setError);
+  }, [api, days]);
+  if (error) return <ErrorBox error={error} />;
+  if (!m) return <Loading />;
+  const candidates = m.repeated.filter((t) => t.automation_candidate);
+  return (
+    <div className="card">
+      <h2>승인 피로 지표 (최근 {m.window_days}일)</h2>
+      <p className="muted small">
+        승인 요청이 너무 잦으면 내용을 읽지 않고 누르게 됩니다. 5초 안에 승인한 비율이 높거나 거의 늘 승인되는 반복 요청은 룰을 조정할 후보입니다(조정은 직접 결정).
+      </p>
+      <ChannelTiles title="사용자 승인 (에이전트 확인 창)" s={m.user} />
+      <ChannelTiles title="보안팀 승인 (콘솔)" s={m.security} />
+      {candidates.length > 0 && (
+        <table className="small">
+          <thead>
+            <tr>
+              <th>자동화·룰 조정 후보</th>
+              <th>툴</th>
+              <th className="num">요청</th>
+              <th className="num">승인율</th>
+              <th className="num">사람</th>
+            </tr>
+          </thead>
+          <tbody>
+            {candidates.map((t) => (
+              <tr key={`${t.channel}-${t.tool}-${t.rule_ids.join(",")}`}>
+                <td>{t.rule_ids.join(", ") || "–"}</td>
+                <td>{t.tool}</td>
+                <td className="num">{t.requests}</td>
+                <td className="num">{pct(t.approval_rate)}</td>
+                <td className="num">{t.people}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function ChannelTiles({ title, s }: { title: string; s: ChannelStats }) {
+  const fastHigh = (s.fast_approval_rate ?? 0) >= 0.5 && s.approved >= 5;
+  return (
+    <>
+      <h3 className="small">{title}</h3>
+      <div className="tiles">
+        <div className="tile">
+          <div className="tile-label">요청</div>
+          <div className="tile-value">{s.requests.toLocaleString("ko-KR")}</div>
+          <div className="tile-note muted">승인 {s.approved} · 거절 {s.denied} · 무응답 {s.unanswered}</div>
+        </div>
+        <div className="tile">
+          <div className="tile-label">반려율</div>
+          <div className="tile-value">{pct(s.rejection_rate)}</div>
+        </div>
+        <div className="tile">
+          <div className="tile-label">승인 소요 시간 (중앙값)</div>
+          <div className="tile-value">{secs(s.median_wait_s)}</div>
+          <div className="tile-note muted">상위 10%: {secs(s.p90_wait_s)}</div>
+        </div>
+        <div className={`tile${fastHigh ? " tile-alert" : ""}`}>
+          <div className="tile-label">5초 안에 승인</div>
+          <div className="tile-value">{pct(s.fast_approval_rate)}</div>
+          <div className="tile-note muted">{s.fast_approvals}건</div>
+        </div>
+      </div>
+    </>
   );
 }
