@@ -522,6 +522,56 @@ sga-sensor run --openclaw          # 데몬이 <home>/sga.sock을 연다 (--sock
 `openclaw-unmanaged-install`과 `openclaw-gateway-network-exposed`가 carol 이름으로 관제 서버에 올라왔다. 같은 시각 팀 게이트웨이는
 `lan` 바인드지만 관리됨(플러그인 켜짐, 센서 감시)이라 경보가 없었고, 같은 이미지를 쓰는 egress·감사 프록시는 "설정 안 됨"으로 기록만 됐다.
 
+## Claude Code 어댑터 (M6)
+
+회사에서 가장 많이 쓰는 코딩 에이전트다. OpenClaw 플러그인과 **같은 로컬 판정 API, 같은 룰**을 쓴다(공통 스키마 덕분에 룰은 고치지 않았다).
+
+```
+Claude Code ─ PreToolUse 등 hook (JSON stdin) ─▶ sga-hook ─▶ 로컬 판정 API (유닉스 소켓 / Windows는 루프백 TCP+토큰)
+            ◀─ permissionDecision: deny | ask | (없음)      ◀─ 데몬 판정: block | approve | hold | allow
+```
+
+| hook | 이벤트 | 응답 |
+|---|---|---|
+| `PreToolUse` | `tool.call` (MCP 툴 `mcp__<서버>__<툴>`은 provider mcp) | block → `deny`(사유 표시), require_approval → `ask`(Claude Code 확인 창), security_approval → 보안팀 결정까지 대기 후 allow/deny, allow → **아무 말 안 함**(Claude Code 자체 권한 규칙이 그대로 결정: hook이 권한을 넓히지 않음) |
+| `PostToolUse` / `PostToolUseFailure` | `tool.result` | 기록. `ask`로 넘긴 호출의 결과가 오면 사람이 승인한 것: `approval.resolved`(`labels.sga_approval_inferred`) |
+| `UserPromptSubmit` | `prompt.user` | 차단 판정이면 프롬프트를 멈춤(exit 2) |
+| `SessionStart` / `SessionEnd` | `session.start`(권한 모드 포함) / `session.end` | 기록. 우회 모드로 시작하면 `agent-safety-bypass` |
+
+- **`sga-hook`은 가볍다**: 툴 호출마다 프로세스가 뜨므로 표준 라이브러리만 쓴다(가져오기 10ms, 데몬 판정 2~3ms, Mac 기준 전체 0.13~0.15초).
+- **데몬이 없으면**: 서명된 정책 캐시로 판정하고 이벤트를 전송 대기열에 넣는다(`labels.sga_verdict = degraded`). 캐시도 없으면 읽기 전용 툴만 통과,
+  나머지는 `ask`. PreToolUse hook은 `onFailure: block`이라 hook 자체가 없어지거나 깨지면 툴이 막힌다.
+- 거부한 `ask`는 결과가 없어서 "버려진 호출"과 구별되지 않는다(승인만 기록).
+
+### 설치 (`sga-sensor claude-code install`)
+
+결정(2026-11-13, "둘 다 + 탐지"):
+
+| 방식 | 위치 | 성질 |
+|---|---|---|
+| 회사 관리 설정 (`--managed`, 관리자 권한) | `managed-settings.d/sg-advance.json` (Windows `C:\Program Files\ClaudeCode\`, macOS `/Library/Application Support/ClaudeCode/`, Linux `/etc/claude-code/`) | 사용자가 지울 수 없다. `disableBypassPermissionsMode: disable`도 함께 |
+| 사용자 설정 | `~/.claude/settings.json`에 합침(다른 hook·설정 보존, 다시 실행해도 중복 없음, `.sga-backup` 남김) | 직원이 지울 수 있다 → 아래 점검 룰이 잡는다 |
+
+설치 스크립트(`install.ps1`)는 `claude`가 있으면 자동으로 넣는다. 관리자 PowerShell이면 관리 설정, 아니면 사용자 설정.
+
+### hook 위치 점검 (`claude_code_config`)
+
+센서가 1분마다 Claude Code 설정을 읽어 바뀔 때만 `config.snapshot`(product `claude-code`)을 보낸다. 보내는 값은 hook 위치(`guard_scope`),
+기본 권한 모드, 우회 금지 여부뿐이다. Claude Code가 없는 PC에서는 아무것도 보내지 않는다.
+
+| 룰 | 언제 |
+|---|---|
+| `claude-code-guard-hook-missing` (high) | Claude Code는 있는데 hook이 없음 |
+| `claude-code-guard-hook-removable` (medium) | hook이 사용자 설정에만 있음 |
+| `claude-code-bypass-default` (high) | 기본 권한 모드가 `bypassPermissions` |
+
+### 실환경 확인 (2026-11-13, Mac, Claude 실행 없이)
+
+시험 센서를 실제 관제 서버에 등록하고 데몬을 띄운 뒤 `sga-hook`에 PreToolUse JSON을 직접 넣었다.
+`rm -rf ~/projects` → `deny`(파괴적 셸 명령), `psql -c 'DELETE FROM users;'` → `ask`(파괴적 SQL), `ls -la` → 응답 없음(허용).
+관제 서버에 Finding 2건(에이전트 `claude_code`, 집행 주체 `claude_code_hook`)과 `tool.call` 3건이 들어왔다. 시험 장비 `m6-mac-test`는 폐기했다.
+실제 Claude Code 세션 확인은 노트북 실설치(M12 5단계)에서 한다.
+
 ## 어댑터 계약
 
 [adapters/base.py](../src/sg_advance/sensor/adapters/base.py)

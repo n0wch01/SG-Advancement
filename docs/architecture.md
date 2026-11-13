@@ -20,7 +20,7 @@
 | 에이전트 | 센서 | 차단 가능 시점 | 승인(`require_approval`) | 비고 |
 |---|---|---|---|---|
 | OpenClaw | `openclaw_plugin` (게이트웨이 플러그인) + `openclaw_gateway` (WS 관측) | **사전, 모든 툴**(`before_tool_call`에서 block). Codex 런타임 툴도 hook 중계로 차단. WS는 관측·탐지만(결정 B) | 플러그인이 `requireApproval`로 OpenClaw 승인 창에 넘긴다(한 번 허용·거절) | WS는 SG 코드 이전, [from-sg.md](from-sg.md). 상세 [sensor.md](sensor.md) |
-| Claude Code | `claude_code_hook` | **사전**(PreToolUse에서 deny) | PreToolUse가 `ask`를 돌려 Claude Code의 확인 창으로 넘긴다 | managed settings로 정책 강제 |
+| Claude Code | `claude_code_hook` (`sga-hook`) + `claude_code_config` (hook 위치 점검) | **사전, 모든 툴**(PreToolUse에서 deny, 보안팀 승인은 hook이 대기) | PreToolUse가 `ask`를 돌려 Claude Code의 확인 창으로 넘긴다. 그 툴의 PostToolUse가 오면 승인으로 기록 | 관리 설정(managed-settings.d)으로 강제, 권한 없으면 사용자 설정 + 점검 룰. M6 ✅ |
 | Gemini CLI | `gemini_cli_hook` | 사전(가능 시) | X1에서 확인. 안 되면 차단 + 콘솔 승인 큐 | hook 사양은 선택 과제 X1에서 확인 |
 | Codex CLI | `codex_cli_hook` | 확인 필요 | X1에서 확인. 안 되면 차단 + 콘솔 승인 큐 | 연동 지점은 선택 과제 X1에서 조사 |
 | LangGraph | `langgraph_callback` | 사전(callback에서 예외) | 그래프를 멈추고(사람 개입 단계) 승인을 기다린다. 가상 직원은 승인자도 시뮬레이션 | Ollama 로컬 모델로 가상 직원 다수 시뮬레이션 |
