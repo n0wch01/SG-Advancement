@@ -37,14 +37,16 @@ docker compose up -d --build
 | 관리자 토큰 | (자유) | 보안팀 CLI(`sga-server`) | 서버 설정값 |
 | 대시보드 토큰 | (자유) | SGA-Dashboard (웹 콘솔). GET만, 쓰기는 403 | 서버 설정값 |
 | 등록 토큰 | `set_` | 센서를 설치하는 사람 | 기본 1회용, 24시간 |
-| 장비 토큰 | `sdt_` | 등록을 마친 센서 | 폐기 전까지 (폐기는 M12) |
+| 장비 토큰 | `sdt_` | 등록을 마친 센서 | 폐기 전까지 (`sga-server device revoke`, M12) |
 
 - 서버에는 등록 토큰과 장비 토큰의 **sha256 해시만** 저장한다. DB가 유출돼도 토큰을 쓸 수 없다.
   토큰이 256비트 난수라서 bcrypt처럼 느린 해시는 필요 없다.
 - 센서는 **자기 장비에 대해서만** 보고할 수 있다. 배치 안의 `endpoint.device_id`가 하나라도
   인증된 장비와 다르면 배치 전체를 403으로 거부한다. 등록된 장비 하나가 다른 직원 PC를 사칭해
   가짜 이벤트를 넣는 것을 막는다.
-- 등록 토큰이 없거나, 다 썼거나, 만료됐으면 모두 같은 401 메시지를 준다. 어떤 토큰이 유효한지 추측할 단서를 주지 않기 위해서다.
+- 등록 토큰이 없거나, 다 썼거나, 만료됐거나, 폐기됐으면 모두 같은 401 메시지를 준다. 어떤 토큰이 유효한지 추측할 단서를 주지 않기 위해서다.
+- **장비 인증서(M12)**: LAN으로 등록한 장비는 장비 토큰과 함께 **자기 클라이언트 인증서**를 내야 한다(LAN 게이트웨이의 mTLS).
+  토큰만 새어 나가서는 쓸 수 없다(T11). 폐기된 장비는 토큰·인증서 모두 401. 자세한 구조는 [multi-host.md](multi-host.md).
 
 ## 흐름
 
@@ -59,11 +61,14 @@ docker compose up -d --build
 | 메서드 | 경로 | 인증 | 설명 |
 |---|---|---|---|
 | GET | `/healthz` | 없음 | 상태, 현재 정책 버전, 서명 키 지문(`policy_key_id`) |
-| POST | `/v1/enroll` | 등록 토큰 | 장비 등록. `device_id`를 생략하면 서버가 `dev-xxxxxxxx`로 만든다. 중복이면 409 |
+| POST | `/v1/enroll` | 등록 토큰 | 장비 등록. `device_id`를 생략하면 서버가 `dev-xxxxxxxx`로 만든다. 중복이면 409. `csr`을 보내면 장비 인증서를 서명해 준다(LAN으로 들어온 등록은 필수, M12) |
 | GET | `/v1/policy` | 장비 | 정책 묶음. `ETag`가 정책 버전이다 |
 | POST | `/v1/events` | 장비 | `{"events": [AgentEvent, ...]}` |
 | POST | `/v1/findings` | 장비 | `{"findings": [Finding, ...]}` |
-| POST | `/v1/admin/enrollment-tokens` | 관리자 | `{label, max_uses=1, ttl_hours=24}` |
+| POST | `/v1/admin/enrollment-tokens` | 관리자 | `{label, max_uses=1, ttl_hours=24, group}`. 응답에 `id` |
+| GET | `/v1/admin/enrollment-tokens` | 관리자 | 등록 토큰 목록(사용 횟수, 만료, 폐기, `usable`). 토큰 값은 없음 |
+| POST | `/v1/admin/enrollment-tokens/{id}/revoke` | 관리자(쓰기) | 아직 쓰지 않은 등록 토큰을 못 쓰게 함 |
+| POST | `/v1/admin/devices/{id}/revoke` | 관리자(쓰기) | `{by, reason}`. 장비 토큰과 인증서를 즉시 막음(M12) |
 | GET | `/v1/admin/devices` | 관리자 | 장비 목록. `policy_current`는 이 장비가 최신 정책을 받아 갔는지 여부 |
 | GET | `/v1/admin/events` | 관리자 | 필터: `device_id`, `user_id`, `session_id`, `kind`, `limit`, `offset`. 최신순 |
 | GET | `/v1/admin/findings` | 관리자 | 필터: 위 항목들 + `rule_id`, `category`, `min_severity` |
