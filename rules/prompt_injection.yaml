@@ -163,10 +163,11 @@ rules:
     recommended_action: 전달을 승인하기 전에 지시 내용의 출처(어떤 문서·툴 결과에서 왔는지)를 확인하세요.
     response: block
     tags: ["grade:2-1", campaign, owasp-llm:LLM01, threat:T18]
-    when: {payload.kind: tool.call, payload.tool: [sessions_spawn, sessions_send]}
+    # 2026-11-13: Claude Code 하위 에이전트(Task·Agent 툴의 prompt)도 위임으로 본다(미탐 수정, 케이스 claude_code.yaml).
+    when: {payload.kind: tool.call, payload.tool: [sessions_spawn, sessions_send, Task, Agent]}
     match:
       type: regex
       ignore_case: true
-      fields: [payload.arguments.task, payload.arguments.message]
+      fields: [payload.arguments.task, payload.arguments.message, payload.arguments.prompt]
       pattern: 'ignore (all )?(previous|prior|above) instructions|<important>|<\|im_start\|>system|<<SYS>>|send .{0,40}(\.env|credentials|secret|id_rsa)|upload .{0,40}(\.env|credentials|\.ssh|id_rsa)'
 

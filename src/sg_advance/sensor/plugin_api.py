@@ -153,6 +153,33 @@ CLAUDE_CODE_HOOK = EnforcementPoint(SensorType.CLAUDE_CODE_HOOK, "claude code ho
 MCP_GATEWAY = EnforcementPoint(SensorType.MCP_PROXY, "mcp gateway", "the agent's own approval prompt")
 
 
+# Input PEP (KISA agentic AI ZT guide 2.4, P6-7): tool results with injection findings this severe never
+# reach the model at the points that can rewrite a result (MCP gateway, Claude Code PostToolUse).
+INPUT_GUARD_SEVERITIES = frozenset({"high", "critical"})
+
+
+def input_guard_hits(verdict: Verdict) -> list[Any]:
+    return [
+        h for h in verdict.hits
+        if str(h.rule.category) == "prompt_injection" and str(h.rule.severity) in INPUT_GUARD_SEVERITIES
+    ]  # fmt: skip
+
+
+def withheld_response(point: EnforcementPoint, hits: list[Any]) -> tuple[dict[str, Any], Enforcement]:
+    titles = "; ".join(dict.fromkeys(h.rule.title for h in hits))
+    return {
+        "ok": True,
+        "decision": "withhold",
+        "reason": f"SG-Advance: tool result withheld, it looks like a prompt injection ({titles})",
+        "rules": [h.rule.id for h in hits],
+    }, Enforcement(
+        action=ResponseAction.BLOCK,
+        enforced=True,
+        enforcer=point.sensor,
+        detail=f"input pep: {point.name} withheld the tool result from the model",
+    )
+
+
 def plugin_response(
     verdict: Verdict, point: EnforcementPoint = OPENCLAW_PLUGIN
 ) -> tuple[dict[str, Any], Enforcement | None]:
@@ -312,7 +339,12 @@ def judge_event(
             # Claude Code asked the person: a later result means they approved. The MCP gateway asks no one.
             ctx.plugins.remember_approval(result.event.payload.call_id, pending)  # type: ignore[union-attr]
         return response
-    ctx.record(result)
+    withheld: dict[str, Any] | None = None
+    if kind is EventKind.TOOL_RESULT and (hits := input_guard_hits(result.verdict)):
+        withheld, enforcement = withheld_response(point, hits)
+        ctx.record(result, enforcement)
+    else:
+        ctx.record(result)
     if kind is EventKind.TOOL_RESULT:
         asked = ctx.plugins.take_approval(result.event.payload.call_id)  # type: ignore[union-attr]
         if asked and isinstance(asked.get("call"), AgentEvent):
@@ -320,6 +352,8 @@ def judge_event(
                 asked["call"], "allow-once", asked, labels={"sga_approval_inferred": "tool_result"}
             )
             ctx.record(ctx.evaluate(inferred))
+    if withheld is not None:
+        return withheld
     if kind is EventKind.PROMPT_USER and result.verdict.action in _BLOCKING:
         reason = "; ".join(dict.fromkeys(h.rule.title for h in result.verdict.hits)) or "policy"
         return {
