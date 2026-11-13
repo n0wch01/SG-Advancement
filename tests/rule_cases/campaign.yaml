@@ -41,3 +41,28 @@ cases:
       - {kind: tool.call, tool: exec, arguments: {command: "psql -c 'DELETE FROM users;'"}}
     expect: [destructive-sql]
     indicators: {destructive-sql: null}
+
+  # 변조 룰(2026-11-13): 매칭 값은 'mismatch'뿐이라 지표로 쓸 수 없다. 태그 campaign-key:<키>로 같은 목록 항목의
+  # 그 키 값(스킬 ref, 플러그인 component)을 지표로 쓴다. 서로 다른 스킬의 변조가 하나로 묶이지 않는다.
+  - name: 변조된 스킬 지표는 스킬 ref(여러 개면 각각)
+    agent: openclaw
+    events:
+      - kind: inventory.snapshot
+        skills:
+          - {name: deploy-notes, source: openclaw-workspace, ref: "openclaw-workspace:deploy-notes", digest: "b2", integrity: mismatch, trust: approved}
+          - {name: a, source: openclaw-managed, ref: "openclaw-managed:a", digest: "a1", integrity: verified, trust: approved}
+          - {name: Weather-Pro, source: openclaw-managed, ref: "openclaw-managed:Weather-Pro", digest: "c3", integrity: mismatch, trust: approved}
+    expect: [openclaw-skill-tampered]
+    indicators: {openclaw-skill-tampered: "openclaw-managed:weather-pro\nopenclaw-workspace:deploy-notes"}
+
+  - name: 변조된 플러그인 지표는 component
+    agent: openclaw
+    sensor: openclaw_integrity
+    events:
+      - kind: integrity.report
+        product: openclaw
+        plugins:
+          - {component: "plugin:ollama", package: openclaw, origin: bundled, digest: x, integrity: mismatch, trust: approved}
+          - {component: "plugin:memory-core", package: openclaw, origin: bundled, digest: m, integrity: verified, trust: approved}
+    expect: [openclaw-plugin-tampered]
+    indicators: {openclaw-plugin-tampered: "plugin:ollama"}

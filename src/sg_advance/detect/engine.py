@@ -42,6 +42,10 @@ EXCERPT_CONTEXT = 40
 # ``labels[INDICATOR]`` (normalised, newline-separated) so the control plane can tell when the same
 # thing reaches several people (server/campaigns.py).
 CAMPAIGN_TAG = "campaign"
+# ``campaign-key:<key>``: when the matched field sits in a list item (``payload.skills[].integrity``),
+# use that item's ``<key>`` (the skill's ``ref``) as the indicator instead of the matched text. A tag,
+# not a rule field, so sensors on an older version still load the policy.
+CAMPAIGN_KEY_TAG = "campaign-key:"
 INDICATOR = "indicator"
 INDICATOR_MAX = 200
 _ACTION_RANK = {a: i for i, a in enumerate(ResponseAction)}
@@ -332,7 +336,7 @@ class Engine:
             report = first_time or rule.dedup == "none"
             verdict.hits.append(Hit(rule, raw.key, raw.explanation, raw.evidence_event_ids, report))
             if report:
-                verdict.findings.append(self._finding(rule, event, raw))
+                verdict.findings.append(self._finding(rule, event, raw, doc))
         if event.kind is EventKind.SESSION_END:
             self._forget_session(session)
         return verdict
@@ -347,7 +351,7 @@ class Engine:
                 matcher.forget_session(session)
 
     @staticmethod
-    def _finding(rule: Rule, event: AgentEvent, raw: _RawHit) -> Finding:
+    def _finding(rule: Rule, event: AgentEvent, raw: _RawHit, doc: dict[str, Any]) -> Finding:
         return Finding.from_event(
             event,
             rule_id=rule.id,
@@ -361,7 +365,7 @@ class Engine:
             tags=rule.tags,
             explanation=raw.explanation,
             evidence_event_ids=raw.evidence_event_ids,
-            labels=_campaign_labels(rule, raw),
+            labels=_campaign_labels(rule, raw, doc),
             response=Enforcement(
                 action=rule.response,
                 enforced=False,
@@ -372,6 +376,26 @@ class Engine:
         )
 
 
-def _campaign_labels(rule: Rule, raw: _RawHit) -> dict[str, str]:
-    indicator = indicator_of(raw.values) if CAMPAIGN_TAG in rule.tags else None
+def _campaign_labels(rule: Rule, raw: _RawHit, doc: dict[str, Any]) -> dict[str, str]:
+    if CAMPAIGN_TAG not in rule.tags:
+        return {}
+    key = next((t.removeprefix(CAMPAIGN_KEY_TAG) for t in rule.tags if t.startswith(CAMPAIGN_KEY_TAG)), None)
+    values = _item_keys(doc, rule.match, key) if key and isinstance(rule.match, RegexMatch) else raw.values
+    indicator = indicator_of(values)
     return {INDICATOR: indicator} if indicator else {}
+
+
+def _item_keys(doc: dict[str, Any], spec: RegexMatch, key: str) -> list[str]:
+    """``key`` of every list item whose field matched (``a.items[].field`` → each item's ``key``)."""
+    cre = spec.compiled()
+    out: list[str] = []
+    for path in spec.fields:
+        if cre is None or "[]." not in path:
+            continue
+        parent, leaf = path.rsplit("[].", 1)
+        for item in resolve(doc, parent + "[]"):
+            if not isinstance(item, dict) or not isinstance(item.get(key), str):
+                continue
+            if any(cre.search(t) for v in resolve(item, leaf) for t in string_leaves(v)):
+                out.append(item[key])
+    return out

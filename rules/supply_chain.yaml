@@ -111,7 +111,8 @@ rules:
     message: 보안팀이 승인한 스킬의 파일이 승인 당시와 다릅니다.
     recommended_action: 스킬을 비활성화한 상태로 두고 바뀐 내용(SKILL.md, 스크립트)을 검토하세요. 정상 업데이트면 새 해시로 다시 승인하세요.
     response: quarantine
-    tags: [owasp-agentic:ASI04, incident:clawhavoc-2026]
+    # 캠페인 지표는 매칭 값(mismatch)이 아니라 변조된 스킬의 ref(campaign-key:ref, 2026-11-13)
+    tags: [campaign, "campaign-key:ref", owasp-agentic:ASI04, incident:clawhavoc-2026]
     when: {payload.kind: inventory.snapshot}
     match:
       type: regex
@@ -130,7 +131,7 @@ rules:
     recommended_action: 해당 장비를 조사하세요. 센서가 플러그인을 비활성화했다면 원인 확인 전까지 다시 켜지 마세요.
     response: quarantine
     dedup: none
-    tags: [owasp-llm:LLM03]
+    tags: [campaign, "campaign-key:component", owasp-llm:LLM03]   # 지표 = 변조된 플러그인(component)
     when: {payload.kind: integrity.report}
     match:
       type: regex
