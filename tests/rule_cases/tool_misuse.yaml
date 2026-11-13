@@ -68,6 +68,29 @@ cases:
       - {kind: tool.call, tool: execute_sql, arguments: {query: "SELECT * FROM drop_table_log"}}
     expect_not: [destructive-sql]
 
+  # 오탐 수정(2026-11-13): 셸 명령에 SQL 글자가 들어 있기만 하면 걸렸다. 셸에서는 DB 클라이언트로 가는 SQL만 본다.
+  - name: SQL을 출력·검색·커밋 메시지에 쓰기만 하면 정상
+    events:
+      - {kind: tool.call, tool: exec, arguments: {command: "echo 'DELETE FROM users;'"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "grep -rn 'DROP TABLE' migrations/"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "git commit -m 'fix: DELETE FROM sessions; had no WHERE'"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "printf 'TRUNCATE orders;\\n' > reset.sql"}}
+    expect_not: [destructive-sql]
+
+  - name: 파이프·히어독·컨테이너 안 DB 클라이언트로 가는 SQL은 그대로 잡음
+    events:
+      - {kind: tool.call, tool: Bash, arguments: {command: "echo 'DELETE FROM users;' | psql $DATABASE_URL"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "psql $DB <<'SQL'\nBEGIN;\nDROP TABLE accounts;\nCOMMIT;\nSQL"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "mysql -u root -e 'DROP DATABASE prod'"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "docker exec db psql -U app -c 'TRUNCATE orders'"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "sqlite3 app.db 'DELETE FROM sessions;'"}}
+    expect: [destructive-sql]
+
+  - name: DB 툴의 여러 문장 중 뒤쪽 DROP
+    events:
+      - {kind: tool.call, tool: execute_sql, arguments: {query: "SELECT count(*) FROM t;\n-- cleanup\nDROP TABLE t;"}}
+    expect: [destructive-sql]
+
   - name: 클라우드 자원 일괄 삭제 (Amazon Q 유형)
     events:
       - {kind: tool.call, tool: Bash, arguments: {command: "aws s3 rm s3://prod-backups --recursive"}}

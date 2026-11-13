@@ -18,6 +18,12 @@ rules:
   # T17 (docs/incidents.md: Replit, Amazon Q). 셸 룰이 못 보는 DB·클라우드 경로.
   # 오탐 주의: 개발 DB를 일부러 초기화하는 작업도 걸린다. 그래서 block이 아니라 require_approval.
   # 파일에 SQL을 쓰는 것(Write의 content)은 실행이 아니므로 보지 않는다: fields를 실행 인자로 한정했다.
+  # 어디서 잡나(2026-11-13 오탐 수정: 전에는 echo·grep·커밋 메시지 속 SQL 글자도 걸렸다):
+  #   1) 문장이 텍스트 맨 앞이나 ; 뒤에서 시작(DB 툴의 query·sql·statement, 주석 줄은 건너뜀)
+  #   2) 셸 명령에서 DB 클라이언트(psql, mysql, sqlite3 …) 뒤에 오는 SQL(-c, -e, 히어독, docker exec 안)
+  #   3) SQL을 파이프로 DB 클라이언트에 넘김(echo '…' | psql)
+  # 미탐 주의: 목록에 없는 클라이언트나 스크립트(python -c "cur.execute('DELETE …')", ./run_sql.sh)는 놓친다.
+  # 오탐 주의: 여러 문장을 파일로 쓰는 히어독(cat > x.sql <<EOF … ; DROP TABLE …)은 1)에 걸린다.
   - id: destructive-sql
     severity: high
     category: tool_misuse
@@ -34,7 +40,10 @@ rules:
       type: regex
       ignore_case: true
       fields: [payload.arguments.query, payload.arguments.sql, payload.arguments.statement, payload.arguments.command]
-      pattern: '\bdrop\s+(table|database|schema)\b|\btruncate\s+(table\s+)?[\w."]+|\bdelete\s+from\s+[\w."]+\s*(;|$|[''"])'
+      pattern: >-   # (?x): 줄바꿈·공백은 무시, 세 갈래는 위 주석의 1) 2) 3)
+        (?x)(?:^|;)(?:\s|--[^\n]*\n)*(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))
+        |\b(?:psql|mysql|mariadb|sqlite3|sqlcmd|clickhouse-client|duckdb|snowsql|mongosh|cqlsh|cockroach\s+sql|bq\s+query)\b[\s\S]*?\b(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))
+        |\b(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))[^|\n]*\|\s*(?:\S+\s+)*?(?:psql|mysql|mariadb|sqlite3|sqlcmd|clickhouse-client|duckdb|snowsql|mongosh|cqlsh|cockroach\s+sql|bq\s+query)\b
 
   # 오탐 주의: 단일 자원 삭제(kubectl delete pod 등)는 일부러 뺐다. gcloud/az의 delete는 범위가 넓어 아직 넣지 않았다.
   - id: destructive-cloud-command
