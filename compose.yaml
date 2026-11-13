@@ -15,6 +15,9 @@ services:
       SGA_DASHBOARD_DIR: /opt/sga-dashboard
       # M12: shared with lan-gateway; its client-certificate headers count only with this secret.
       SGA_PROXY_SECRET: ${SGA_PROXY_SECRET:-}
+      # What other PCs dial (install command, installer). SGA_LAN_HOST = this machine's LAN IP.
+      SGA_LAN_URL: ${SGA_LAN_HOST:+https://${SGA_LAN_HOST}:${SGA_LAN_TLS_PORT:-18443}}
+      SGA_INSTALL_URL: ${SGA_LAN_HOST:+http://${SGA_LAN_HOST}:${SGA_LAN_INSTALL_PORT:-18080}}
     volumes:
       - control-plane-data:/data
       - ./dashboard/dist:/opt/sga-dashboard:ro

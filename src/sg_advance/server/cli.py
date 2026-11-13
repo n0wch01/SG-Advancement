@@ -396,6 +396,14 @@ def device_main(argv: list[str]) -> int:
     p.add_argument("--label")
     p.add_argument("--group", help="policy group the device joins (M9)")
     p.add_argument("--ttl-hours", type=float, default=24)
+    p = sub.add_parser(
+        "install", help="one-time install command for a new Windows PC (paste into PowerShell)"
+    )
+    p.add_argument("--device-id", help="device id for that PC (default: its computer name)")
+    p.add_argument("--user", help="employee id the sensor reports as (default: the Windows user name)")
+    p.add_argument("--label")
+    p.add_argument("--group", help="policy group the device joins (M9)")
+    p.add_argument("--ttl-hours", type=float, default=24)
     sub.add_parser("tokens", help="enrollment tokens and whether they can still be used")
     p = sub.add_parser("revoke-token", help="make an unused enrollment token unusable")
     p.add_argument("id", type=int)
@@ -420,6 +428,26 @@ def device_main(argv: list[str]) -> int:
         t = _api(args.server, "POST", "/v1/admin/enrollment-tokens", body)
         print(t["token"])  # type: ignore[index]
         print(f"id {t['id']}, single use, expires {t['expires_at'][:19]}", file=sys.stderr)  # type: ignore[index]
+        return 0
+    if args.cmd == "install":
+        body = {
+            k: v
+            for k, v in {
+                "device_id": args.device_id,
+                "user": args.user,
+                "label": args.label,
+                "group": args.group,
+                "ttl_hours": args.ttl_hours,
+            }.items()
+            if v is not None
+        }
+        r = _api(args.server, "POST", "/v1/admin/install-command", body)
+        print(r["command"])  # type: ignore[index]
+        print(
+            f"(single use, expires {r['expires_at'][:19]}; installer sha256 {r['installer_sha256'][:16]}…, "  # type: ignore[index]
+            f"device CA {r['ca_fingerprint'][:16]}…)",  # type: ignore[index]
+            file=sys.stderr,
+        )
         return 0
     if args.cmd == "tokens":
         for t in _api(args.server, "GET", "/v1/admin/enrollment-tokens"):  # type: ignore[union-attr]

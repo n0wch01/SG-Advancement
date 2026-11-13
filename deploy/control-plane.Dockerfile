@@ -9,10 +9,16 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --extra server --no-install-project
 COPY src ./src
 COPY rules ./rules
+COPY integrations/openclaw-plugin ./integrations/openclaw-plugin
 RUN uv sync --frozen --no-dev --extra server
+# M12 one-line install: the sensor wheel and its dependencies pinned by hash, served at /install/.
+RUN uv build --wheel --out-dir /opt/sga-install \
+ && uv export --frozen --no-dev --extra openclaw --no-emit-project --format requirements-txt \
+      -o /opt/sga-install/requirements.txt
 
 ENV SGA_DB_URL=sqlite:////data/sga.db SGA_RULES_DIR=/app/rules \
-    SGA_SIGNING_KEY=/data/policy_signing_key.pem
+    SGA_SIGNING_KEY=/data/policy_signing_key.pem SGA_INSTALL_DIR=/opt/sga-install \
+    SGA_PLUGIN_DIR=/app/integrations/openclaw-plugin
 VOLUME /data
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 \

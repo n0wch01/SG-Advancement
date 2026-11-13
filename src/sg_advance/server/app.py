@@ -25,7 +25,17 @@ from ..pki import cert_pem, fingerprint
 from ..policy import PolicyBundle, key_id, load_or_create_signing_key, public_key_b64
 from ..redact import redact_event, redact_text
 from ..schema import AgentEvent, Finding, Severity
-from . import actions, audit, campaigns, dashboard, device_ca, manifests, policy_admin, security_approvals
+from . import (
+    actions,
+    audit,
+    campaigns,
+    dashboard,
+    device_ca,
+    install,
+    manifests,
+    policy_admin,
+    security_approvals,
+)
 from .auth import (
     DEVICE_PREFIX,
     ENROLL_PREFIX,
@@ -617,6 +627,8 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.include_router(policy_admin.router)
     app.include_router(actions.admin)
     app.include_router(actions.sensor)
+    app.include_router(install.router)
+    app.include_router(install.admin)
     app.include_router(security_approvals.admin)
     app.include_router(security_approvals.sensor)
     _mount_dashboard(app, settings)

@@ -32,6 +32,12 @@ class Settings:
     # Shared with the LAN gateway (nginx). Its client-certificate headers count only with this
     # secret, so nothing else on the internal network can claim a verified certificate.
     proxy_secret: str | None = None
+    # One-line install (M12): the sensor wheel + pinned requirements (built into the image), and the
+    # addresses other PCs use: the LAN gateway for the sensor, its plain-HTTP port for /install/.
+    install_dir: Path | None = None
+    lan_url: str | None = None  # e.g. https://192.168.0.9:18443
+    install_url: str | None = None  # e.g. http://192.168.0.9:18080
+    plugin_dir: Path | None = None  # integrations/openclaw-plugin, zipped for PCs that run OpenClaw
 
     @property
     def ca_path(self) -> Path:
@@ -53,4 +59,8 @@ class Settings:
             ca_dir=Path(d) if (d := os.environ.get("SGA_CA_DIR")) else None,
             device_cert_days=int(os.environ.get("SGA_DEVICE_CERT_DAYS", "365")),
             proxy_secret=os.environ.get("SGA_PROXY_SECRET") or None,
+            install_dir=Path(d) if (d := os.environ.get("SGA_INSTALL_DIR")) else None,
+            lan_url=os.environ.get("SGA_LAN_URL") or None,
+            install_url=os.environ.get("SGA_INSTALL_URL") or None,
+            plugin_dir=Path(d) if (d := os.environ.get("SGA_PLUGIN_DIR")) else None,
         )
