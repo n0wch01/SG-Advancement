@@ -65,7 +65,8 @@
 1. **탐지·차단은 로컬, 정책·가시성은 중앙.** 중앙과 연결이 끊겨도 마지막으로 받은 정책으로 계속 차단한다.
 2. **스키마 우선.** 모든 어댑터는 `AgentEvent` v1으로만 말한다. 탐지 룰은 에이전트별 원시 포맷을 모른다.
 3. **비밀은 엔드포인트를 떠나기 전에 마스킹한다.** 센서가 `arguments`/`output_preview`를 redact한 뒤 전송한다.
-4. **응답 단계는 점진적이다.** `allow < alert < require_approval < block < abort_session < quarantine`.
+4. **응답 단계는 점진적이다.** `allow < alert < require_approval < security_approval < block < abort_session < quarantine`.
+   `security_approval`(M11)은 툴 호출을 장비에서 멈추고 보안팀이 콘솔에서 결정하게 한다(5분 안에 없으면 거부, [response.md](response.md#보안팀-승인-큐)).
    정책이 그룹별로 단계를 정하고, `Finding.response.enforced`에 실제 집행 여부를 남긴다.
 5. **데모 재현성.** `docker compose up` 하나로 중앙 서버와 가상 직원 N명, 가상 외부망(악성 MCP, 유출 수신 서버)이 뜬다.
 

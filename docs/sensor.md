@@ -242,6 +242,7 @@ OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──
 | 데몬 판정 | 플러그인이 하는 일 | finding의 `response.detail` |
 |---|---|---|
 | `block` 이상 | `{block: true}` — 툴이 실행되지 않는다 | `pre-exec: openclaw plugin blocked the tool call` |
+| `security_approval` (M11) | 데몬이 `hold`로 답하고 플러그인이 `await_hold`로 **보안팀** 결정을 기다림(기본 5분, `securityWaitMs`). 승인이면 실행, 거부·시간 초과·관제 서버 연결 실패면 막음. 실행을 멈추면 `cancel_hold` | `pre-exec: held for security approval in the console` |
 | `require_approval` | `requireApproval` — OpenClaw 승인 창에서 **사용자**가 결정 (한 번 허용 / 거부만, 영구 허용은 막음) | `pre-exec: user approval requested through OpenClaw` |
 | `allow`, `alert` | 아무것도 하지 않음 | (alert면 기록만) |
 
@@ -253,7 +254,8 @@ OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──
 | 데몬이 응답 없음 | `sga-sensor evaluate` 실행 → 서명된 정책 캐시로 판정 (상태 없는 룰만) | `labels.sga_verdict = degraded` |
 | 캐시도 없음 | 읽기 전용 툴(`read`, `memory_search`, `memory_get`, `session_status`)만 통과, 나머지는 사용자 승인 | 기록 없음 (센서가 없으므로) |
 
-`before_tool_call`은 핸들러가 예외를 던지거나 15초를 넘기면 OpenClaw가 그 호출을 **막는다**. 플러그인은 예외를 밖으로 내지 않고 위 순서로 직접 처리한다.
+`before_tool_call`은 핸들러가 예외를 던지거나 정한 시간(플러그인이 등록 때 `securityWaitMs + 30초`로 정함, 기본 15초)을 넘기면 OpenClaw가 그 호출을 **막는다**(fail-closed).
+캐시된 정책으로 판정하는 경로는 기다릴 데몬이 없어서 `security_approval`을 차단으로 바꾼다. 플러그인은 예외를 밖으로 내지 않고 위 순서로 직접 처리한다.
 
 **우회 탐지**: 플러그인이 판정한 호출 ID는 데몬에 등록된다. WebSocket 어댑터는 등록된 호출을 다시 판정하지 않고(중복 방지),
 플러그인이 최근 5분 안에 연결된 상태인데 등록되지 않은 호출을 보면 `labels.sga_plugin = missing`을 붙인다.

@@ -36,7 +36,7 @@ rules:
     title: 민감 파일 접근
     message: ...
     recommended_action: ...
-    response: alert                  # allow | alert | require_approval | block | abort_session | quarantine
+    response: alert                  # allow | alert | require_approval | security_approval | block | abort_session | quarantine
     confidence: 1.0
     tags: [owasp-llm:LLM02, scenario:S2]
     dedup: session                   # session | none

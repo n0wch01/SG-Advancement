@@ -81,3 +81,45 @@ alice, bob, carol이 각자 같은 문장("…Ignore all previous instructions a
   `egress-unapproved-host` 캠페인이 생기지 않는다. 사람별 PC에서는 된다. egress를 원인이 된 툴 호출과 묶어야 풀린다.
 - 짧고 흔한 인젝션 문구는 서로 다른 공격이어도 하나로 묶일 수 있다(오탐 방향).
 - 이전에 쌓인 Finding에는 지표가 없다(소급하지 않음).
+
+## 보안팀 승인 큐
+
+룰(또는 정책 덮어쓰기)의 대응이 `security_approval`("보안팀 승인")이면 툴 호출이 그 장비에서 멈추고 보안팀 결정을 기다린다.
+사용자 승인(`require_approval`)보다 엄격하고 차단(`block`)보다는 느슨하다. 팀 정책은 "승인 요청 → 보안팀 승인"으로 올릴 수 있고,
+"차단 → 보안팀 승인"으로 내릴 수는 없다.
+
+- **결정(2026-11-12)**: 대응 단계를 새로 둔다. 5분 안에 아무도 결정하지 않으면 거부. 어떤 룰에 쓸지는 정책 화면에서 룰별로 정한다(기본 룰에는 없음).
+- **결정(2026-11-13)**: 관제 서버에 연결할 수 없거나 센서 데몬이 없으면(캐시된 정책 경로) 기다리지 않고 바로 거부한다. 승인해 줄 사람이 없어서다.
+
+```
+플러그인 ── tool_call ──▶ 데몬: security_approval → {"decision": "hold", "hold_id"}
+플러그인 ── await_hold ─▶ 데몬 ── POST /v1/security-approvals ──▶ 관제 서버 (보안 승인 화면)
+                           데몬 ── GET …/decisions (1초마다) ◀── 보안팀 승인·거부
+         ◀─ allow | block   데몬 ── POST …/{id}/outcome (실제 결과)
+```
+
+- 관제 서버는 장비가 기다림을 끝내기 2초 전부터 결정을 받지 않는다. 그래서 받아들인 결정은 항상 장비에 닿는다. 늦은 결정은 409.
+- 관제 서버는 **결정**(승인·거부)과 장비가 보고한 **실제 결과**(실행됨, 막힘, 시간 초과, 취소, 연결 실패)를 따로 남긴다.
+- 장비에는 `approval.resolved`(`via: security`, `approver` = 결정한 사람)가 남는다. 사용자 승인 감사 룰(`user-approved-high-risk`,
+  `approval-fatigue`)은 `via: user`만 본다. 보안팀 승인은 관제 서버의 결정 기록(누가·왜)이 감사 기록이다.
+- 거부 사유는 툴 결과로 에이전트에게 전달된다("SG-Advance: 보안팀이 거부했습니다 (누가: 사유)").
+- 실행을 멈추면(OpenClaw abort) 플러그인이 `cancel_hold`를 보내 대기를 끝낸다.
+- CLI: `sga-server security list [--all]`, `sga-server security approve|deny ID --by … --reason …`.
+
+### 실환경 확인 (2026-11-13, 팀 게이트웨이)
+
+정책 화면에서 `common`의 `destructive-sql`을 보안팀 승인으로 바꾼 뒤 alice가 `psql -c 'DELETE FROM users;'` 실행을 요청했다.
+
+| 시도 | 결과 |
+|---|---|
+| 승인 | 툴이 실행 전에 멈춤(Code Mode 안쪽 `exec`에서 한 번) → 112초 뒤 승인 → 즉시 실행(`psql: not found`). 결정 승인, 실제 결과 실행됨 |
+| 거부 | 14초 뒤 거부 → 툴 결과 "SG-Advance: 보안팀이 거부했습니다 (secops: nope)". 결정 거부, 실제 결과 막힘 |
+
+확인 뒤 덮어쓰기를 취소해 `destructive-sql`은 다시 승인 요청이다(변경 이력 #4, #5). 5분 시간 초과, 연결 실패, 취소는 자동 테스트로 확인했다.
+
+### 한계 (이후 과제)
+
+- 기다리는 동안 채팅에는 안내가 없다(툴이 실행 중인 것처럼 보인다). 거부되면 사유만 보인다.
+- 결정이 장비에 닿기까지 최대 약 1초(폴링). 대기 중인 요청은 데몬 메모리에만 있어서, 데몬이 재시작되면 그 호출은 막힌다(fail-closed).
+- OpenClaw 플러그인 경로만 지원한다. WebSocket 어댑터는 관측만 한다.
+
