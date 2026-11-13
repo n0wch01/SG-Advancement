@@ -50,3 +50,50 @@ rules:
       type: regex
       fields: [payload.bind_scope]
       pattern: '^network$'
+
+  # ── 다른 AI 에이전트 (2026-11-13 섀도 AI 확장) ──
+  # 회사가 통제하는 코딩 에이전트는 SG-Advance hook이 붙은 Claude Code다. Cursor·Codex·Gemini는 아직 통제 수단이 없어
+  # 설정만 돼 있어도 통제 밖으로 본다(그 MCP는 게이트웨이로 돌릴 수 있다).
+  # 오탐 주의: 회사가 Cursor 등을 공식 허용했다면 정책에서 이 룰을 끄거나 product 목록에서 뺀다.
+  # 미탐 주의: 현재 사용자 홈과 PATH만 본다. 포터블 설치나 다른 계정은 안 보인다.
+  - id: ai-agent-outside-control
+    severity: medium
+    category: policy_violation
+    title: 회사 통제 밖의 AI 에이전트
+    message: 이 장비에 SG-Advance의 실행 전 판정이 없는 AI 코딩 에이전트가 설정돼 있습니다. 툴 실행이 회사 정책으로 판정·기록되지 않습니다.
+    recommended_action: 회사 허용 에이전트(Claude Code + SG-Advance hook)로 옮기게 하거나, 최소한 MCP 연결을 회사 MCP 게이트웨이로 돌리세요.
+    response: alert
+    dedup: none
+    tags: [owasp-agentic:ASI03, shadow-ai]
+    when:
+      payload.kind: install.snapshot
+      payload.present: "true"
+      payload.configured: "true"
+      payload.managed: "false"
+      "payload.changed[]": [present, configured, managed]
+    match:
+      type: regex
+      fields: [payload.product]
+      pattern: '^(claude-code|cursor|codex|gemini)$'
+
+  # 원격 MCP 서버를 게이트웨이 없이 직접 붙임: 툴 설명 변조 검사·호출 전 판정을 모두 건너뛴다(M8).
+  # 게이트웨이를 모르는 장비(route unknown)와 로컬 stdio 서버는 대상이 아니다.
+  # 캠페인 지표는 서버 URL(같은 외부 MCP 서버가 여러 사람에게 퍼지면 캠페인).
+  - id: mcp-server-bypasses-gateway
+    severity: high
+    category: supply_chain
+    title: 게이트웨이를 거치지 않는 MCP 서버
+    message: AI 에이전트가 회사 MCP 게이트웨이를 거치지 않고 원격 MCP 서버에 직접 연결하도록 설정돼 있습니다. 툴 설명 검사와 호출 전 판정이 적용되지 않습니다.
+    recommended_action: 그 서버가 필요하면 게이트웨이에 등록하고 에이전트 설정을 게이트웨이 주소로 바꾸게 하세요. 출처를 모르는 서버는 제거하게 하세요.
+    response: alert
+    dedup: none
+    tags: [campaign, "campaign-key:url", owasp-agentic:T2, shadow-ai]
+    when:
+      payload.kind: install.snapshot
+      payload.present: "true"
+      "payload.changed[]": [present, mcp_servers]
+    match:
+      type: regex
+      fields: ["payload.mcp_servers[].route"]
+      pattern: '^direct$'
+

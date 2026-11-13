@@ -168,3 +168,90 @@ def test_windows_npm_install_task_and_startup_launcher_are_found(tmp_path: Path)
     [row] = rows
     assert row["version"] == "2026.11.3" and row["install_source"] == "npm-global"
     assert install_source(home / "AppData/Roaming/nvm/v22.12.0/node_modules/openclaw") == "nvm"
+
+
+# ── other coding agents and their MCP servers (2026-11-13) ──────────────────
+
+GATEWAY = "http://127.0.0.1:18790/mcp/"
+
+
+def fake_agents(home: Path, bin_dir: Path) -> None:
+    bin_dir.mkdir(parents=True)
+    for b in ("claude", "codex"):
+        (bin_dir / b).write_text("#!/bin/sh\necho 2.1.300\n")
+        (bin_dir / b).chmod(0o755)
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "crm": {"type": "http", "url": "http://127.0.0.1:18790/mcp/crm"},
+                    "notion": {"type": "http", "url": "https://mcp.notion.example/mcp?token=SECRET123"},
+                    "files": {"command": "/usr/local/bin/npx", "args": ["-y", "server-fs", "--key=SECRET456"],
+                              "env": {"API_KEY": "SECRET789"}},
+                },
+                "projects": {"/work/a": {"mcpServers": {"notion": {"type": "http", "url": "https://mcp.notion.example/mcp"}}}},
+            }
+        )
+    )  # fmt: skip
+    (home / ".cursor").mkdir()
+    (home / ".cursor" / "mcp.json").write_text(
+        json.dumps({"mcpServers": {"gh": {"url": "https://api.gh.example/mcp"}}})
+    )
+    (home / ".codex").mkdir()
+    (home / ".codex" / "config.toml").write_text('[mcp_servers.docs]\ncommand = "uvx"\nargs = ["docs-mcp"]\n')
+
+
+def test_coding_agents_and_their_mcp_servers_are_found(tmp_path: Path) -> None:
+    home, bin_dir = tmp_path / "dev", tmp_path / "bin"
+    fake_agents(home, bin_dir)
+    rows = {r["product"]: r for r in scan(home, path_env=str(bin_dir), probe=up, platform="linux", roots=(),
+                                          gateway_url=GATEWAY, version_of=lambda exe: "2.1.300")}  # fmt: skip
+    assert set(rows) == {"claude-code", "cursor", "codex"}  # no gemini traces
+    cc = rows["claude-code"]
+    assert cc["version"] == "2.1.300" and cc["configured"] and cc["managed"] is False
+    assert cc["unmanaged_reasons"] == ["no SG-Advance hook in Claude Code"]
+    routes = {(s["name"], s["route"]) for s in cc["mcp_servers"]}
+    assert routes == {
+        ("crm", "gateway"),
+        ("notion", "direct"),
+        ("files", "local"),
+    }  # project duplicate merged
+    notion = next(s for s in cc["mcp_servers"] if s["name"] == "notion")
+    assert notion["url"] == "https://mcp.notion.example/mcp"
+    assert "SECRET" not in json.dumps(rows)  # no query string, arguments or environment leave the endpoint
+    assert next(s for s in cc["mcp_servers"] if s["name"] == "files")["command"] == "npx"
+    assert rows["cursor"]["install_path"] is None and rows["cursor"]["mcp_servers"][0]["route"] == "direct"
+    assert rows["codex"]["mcp_servers"] == [
+        {"name": "docs", "scope": "user", "transport": "stdio", "command": "uvx", "route": "local"}
+    ]
+    # Without a gateway configured on this sensor, remote servers are "unknown", not "direct".
+    plain = {r["product"]: r for r in scan(home, path_env=str(bin_dir), probe=up, platform="linux", roots=(),
+                                           version_of=lambda exe: None)}  # fmt: skip
+    assert {s["route"] for s in plain["claude-code"]["mcp_servers"] if s["transport"] == "http"} == {
+        "unknown"
+    }
+
+
+def test_shadow_agents_raise_findings_and_the_hook_makes_claude_code_managed(
+    enrolled: Sensor, tmp_path: Path
+) -> None:
+    from sg_advance.sensor import claude_code_setup
+
+    home, bin_dir = tmp_path / "dev", tmp_path / "bin"
+    fake_agents(home, bin_dir)
+    adapter = AgentDiscoveryAdapter(home=home, path_env=str(bin_dir), probe=up, roots=(), gateway_url=GATEWAY,
+                                    version_of=lambda exe: "2.1.300", platform="linux")  # fmt: skip
+    ctx = AdapterContext(enrolled, user_id="dev", hostname="dev-pc")
+    assert adapter.poll(ctx) == 3
+    found = findings(enrolled)
+    assert found.count("ai-agent-outside-control") == 3  # claude-code without hook, cursor, codex
+    assert found.count("mcp-server-bypasses-gateway") == 2  # notion (claude-code), gh (cursor)
+
+    claude_code_setup.install(
+        Path("/sga"), "dev", managed=False, exe="/v/sga-hook", platform="linux", home=home
+    )
+    assert adapter.poll(ctx) == 1
+    cc = [e for e in install_events(enrolled) if e["payload"]["product"] == "claude-code"][-1]["payload"]
+    assert cc["managed"] is True and "managed" in cc["changed"]
+    assert findings(enrolled).count("ai-agent-outside-control") == 3  # becoming managed raises nothing

@@ -192,7 +192,14 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
         from .adapters.agent_discovery import AgentDiscoveryAdapter
 
         watched = [args.openclaw_config] if args.openclaw and not args.no_openclaw_config else []
-        adapters.append(AgentDiscoveryAdapter(watched_configs=watched, interval=args.discovery_interval))
+        gateway_url = args.mcp_gateway_url or (
+            f"http://{args.mcp_gateway}/mcp/" if args.mcp_gateway else None
+        )
+        adapters.append(
+            AgentDiscoveryAdapter(
+                watched_configs=watched, interval=args.discovery_interval, gateway_url=gateway_url
+            )
+        )
     if args.egress_proxy:  # the agent network's only way out, judged by the policy (M5d)
         from .adapters.egress_proxy import EgressProxyAdapter
 
@@ -403,6 +410,10 @@ def main(argv: list[str] | None = None) -> int:
         help="an approved MCP server (repeatable)",
     )
     p.add_argument("--mcp-monitor", action="store_true", help="MCP gateway records only, never refuses")
+    p.add_argument(
+        "--mcp-gateway-url",
+        help="company MCP gateway agents should use, e.g. http://mcp.corp:18790/mcp/ (flags direct servers)",
+    )
     p.add_argument(
         "--mcp-user-header", help="trusted identity header on a shared MCP gateway (e.g. x-forwarded-user)"
     )

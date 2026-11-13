@@ -880,6 +880,15 @@
           },
           "title": "Unmanaged Reasons",
           "type": "array"
+        },
+        "mcp_servers": {
+          "default": [],
+          "description": "MCP servers this agent is configured with (M8 shadow AI discovery)",
+          "items": {
+            "$ref": "#/$defs/McpServerRef"
+          },
+          "title": "Mcp Servers",
+          "type": "array"
         }
       },
       "required": [
@@ -1132,6 +1141,83 @@
         "model"
       ],
       "title": "LlmCall",
+      "type": "object"
+    },
+    "McpServerRef": {
+      "additionalProperties": false,
+      "description": "An MCP server an agent is configured to use (shadow AI discovery). Only what identifies it\nleaves the endpoint: no arguments, no environment, no query string (they can hold tokens).",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "transport": {
+          "default": "unknown",
+          "enum": [
+            "http",
+            "sse",
+            "stdio",
+            "unknown"
+          ],
+          "title": "Transport",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Remote servers: scheme://host/path, query removed",
+          "title": "Url"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Local (stdio) servers: the executable's name only",
+          "title": "Command"
+        },
+        "route": {
+          "default": "unknown",
+          "description": "gateway: through the company MCP gateway; direct: a remote server reached around it; local: a stdio process on the endpoint; unknown: no gateway configured on this sensor",
+          "enum": [
+            "gateway",
+            "direct",
+            "local",
+            "unknown"
+          ],
+          "title": "Route",
+          "type": "string"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "user | project (where the agent's config lists it)",
+          "title": "Scope"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "McpServerRef",
       "type": "object"
     },
     "ModelRuntime": {

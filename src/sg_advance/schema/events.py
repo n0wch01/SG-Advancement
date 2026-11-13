@@ -415,6 +415,22 @@ class OperatorAction(StrictModel):
     )
 
 
+class McpServerRef(StrictModel):
+    """An MCP server an agent is configured to use (shadow AI discovery). Only what identifies it
+    leaves the endpoint: no arguments, no environment, no query string (they can hold tokens)."""
+
+    name: str
+    transport: Literal["http", "sse", "stdio", "unknown"] = "unknown"
+    url: str | None = Field(default=None, description="Remote servers: scheme://host/path, query removed")
+    command: str | None = Field(default=None, description="Local (stdio) servers: the executable's name only")
+    route: Literal["gateway", "direct", "local", "unknown"] = Field(
+        default="unknown",
+        description="gateway: through the company MCP gateway; direct: a remote server reached around it; "
+        "local: a stdio process on the endpoint; unknown: no gateway configured on this sensor",
+    )
+    scope: str | None = Field(default=None, description="user | project (where the agent's config lists it)")
+
+
 class InstallSnapshot(StrictModel):
     """One agent installation found on the endpoint, managed or not (shadow AI discovery).
 
@@ -446,6 +462,9 @@ class InstallSnapshot(StrictModel):
     watched: bool = Field(default=False, description="This sensor watches the install's config and gateway")
     managed: bool = Field(default=False, description="configured, guard plugin enabled and watched")
     unmanaged_reasons: tuple[str, ...] = ()
+    mcp_servers: tuple[McpServerRef, ...] = Field(
+        default=(), description="MCP servers this agent is configured with (M8 shadow AI discovery)"
+    )
 
 
 Payload = Annotated[

@@ -10,6 +10,9 @@ for OpenClaw's *own* traces only, in the current user's home and the usual packa
   tasks named like OpenClaw (``OpenClaw Gateway``) and OpenClaw launchers in the user's Startup folder;
 - running: the instance's gateway port answers on 127.0.0.1 (no process listing, no other ports).
 
+The other coding agents (Claude Code, Cursor, Codex, Gemini) and the MCP servers they are configured
+with come from ``coding_agents.py`` (2026-11-13).
+
 Each instance becomes one ``install.snapshot``: configured, gateway bind (loopback or network),
 SG-Advance plugin state (``openclaw_config.guard_state``), whether this sensor watches it, and
 ``managed`` = configured + plugin enabled + watched. Code found without any state dir is reported as
@@ -236,7 +239,14 @@ def scan(
     probe: Probe = port_open,
     platform: str = sys.platform,
     roots: Iterable[str] = GLOBAL_ROOTS,
+    gateway_url: str | None = None,
+    version_of: Any = None,
 ) -> list[dict[str, Any]]:
+    """OpenClaw installs, then the other coding agents (coding_agents.py). Empty ``roots`` also
+    skips system-wide app locations (tests, containers)."""
+    from .coding_agents import cli_version, scan_agents
+
+    roots = list(roots)
     code = find_code(home, path_env, roots)
     instances = find_instances(home)
     services = find_services(home, platform)
@@ -245,6 +255,14 @@ def scan(
     rows = [describe(i, primary, services=services, watched_configs=watched, probe=probe) for i in instances]
     if not instances:  # installed but never set up: one row per copy of the code
         rows += [describe(None, c, services=services, watched_configs=watched, probe=probe) for c in code]
+    rows += scan_agents(
+        home,
+        path_env=path_env,
+        gateway_url=gateway_url,
+        version_of=version_of or cli_version,
+        platform=platform,
+        check_apps=bool(roots),
+    )
     return rows
 
 
@@ -263,9 +281,13 @@ class AgentDiscoveryAdapter:
         probe: Probe = port_open,
         platform: str = sys.platform,
         roots: Iterable[str] = GLOBAL_ROOTS,
+        gateway_url: str | None = None,
+        version_of: Any = None,
     ) -> None:
         self.home = home or Path.home()
         self.roots = tuple(roots)
+        self.gateway_url = gateway_url  # the MCP gateway agents should use (route gateway/direct)
+        self.version_of = version_of
         self.watched_configs = [Path(p) for p in watched_configs]
         self.interval = interval
         self.path_env = path_env
@@ -282,6 +304,8 @@ class AgentDiscoveryAdapter:
             probe=self.probe,
             platform=self.platform,
             roots=self.roots,
+            gateway_url=self.gateway_url,
+            version_of=self.version_of,
         )
 
     def poll(self, ctx: AdapterContext, rows: list[dict[str, Any]] | None = None) -> int:

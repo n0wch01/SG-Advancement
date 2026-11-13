@@ -88,3 +88,66 @@ cases:
       - {kind: install.snapshot, product: openclaw, instance: "/home/carol/.openclaw", present: false,
          configured: true, managed: false}
     expect_not: [openclaw-unmanaged-install]
+
+  # ── 다른 AI 에이전트 (2026-11-13, 섀도 AI 확장) ──
+  # 회사가 통제하는 것은 SG-Advance hook이 붙은 Claude Code. 통제 수단이 없는 에이전트(Cursor, Codex, Gemini)는 회사 통제 밖이다.
+  - name: Cursor가 설치·설정됨 (회사 통제 수단 없음)
+    agent: unknown
+    sensor: agent_discovery
+    events:
+      - {kind: install.snapshot, product: cursor, instance: "cursor:/home/dev/.cursor", configured: true, managed: false,
+         changed: [present], unmanaged_reasons: ["no SG-Advance control for cursor (route its MCP through the gateway)"]}
+    expect: [ai-agent-outside-control]
+
+  - name: hook이 붙은 Claude Code는 통제 안
+    agent: claude_code
+    sensor: agent_discovery
+    events:
+      - {kind: install.snapshot, product: claude-code, instance: "claude-code:/home/dev/.claude", configured: true,
+         guard_plugin: enabled, managed: true, changed: [present]}
+    expect_not: [ai-agent-outside-control, mcp-server-bypasses-gateway]
+
+  - name: hook이 없는 Claude Code도 통제 밖, 재시작류 변화(버전만 바뀜)는 다시 경보 안 함
+    agent: claude_code
+    sensor: agent_discovery
+    events:
+      - {kind: install.snapshot, product: claude-code, instance: "claude-code:/home/dev/.claude", configured: true,
+         guard_plugin: missing, managed: false, changed: [present]}
+      - {kind: install.snapshot, product: claude-code, instance: "claude-code:/home/dev/.claude", configured: true,
+         guard_plugin: missing, managed: false, version: "2.1.300", changed: [version]}
+    expect: [ai-agent-outside-control]
+
+  # 게이트웨이를 거치지 않고 직접 붙은 원격 MCP 서버. 로컬(stdio) 서버와 게이트웨이를 모르는 장비(unknown)는 대상 아님.
+  - name: 게이트웨이를 거치지 않는 원격 MCP 서버
+    agent: claude_code
+    sensor: agent_discovery
+    events:
+      - kind: install.snapshot
+        product: claude-code
+        instance: "claude-code:/home/dev/.claude"
+        configured: true
+        guard_plugin: enabled
+        managed: true
+        changed: [present]
+        mcp_servers:
+          - {name: crm, transport: http, url: "http://127.0.0.1:18790/mcp/crm", route: gateway}
+          - {name: notion, transport: http, url: "https://mcp.notion.example/mcp", route: direct}
+          - {name: files, transport: stdio, command: npx, route: local}
+    expect: [mcp-server-bypasses-gateway]
+    indicators: {mcp-server-bypasses-gateway: "https://mcp.notion.example/mcp"}
+
+  - name: 게이트웨이·로컬·게이트웨이 미설정 장비는 정상
+    agent: claude_code
+    sensor: agent_discovery
+    events:
+      - kind: install.snapshot
+        product: claude-code
+        instance: "claude-code:/home/dev/.claude"
+        configured: true
+        managed: true
+        changed: [present]
+        mcp_servers:
+          - {name: crm, transport: http, url: "http://127.0.0.1:18790/mcp/crm", route: gateway}
+          - {name: files, transport: stdio, command: npx, route: local}
+          - {name: wiki, transport: http, url: "https://wiki.corp/mcp", route: unknown}
+    expect_not: [mcp-server-bypasses-gateway]
