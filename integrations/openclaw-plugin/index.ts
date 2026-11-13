@@ -6,7 +6,7 @@
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
-import { cliAsk, decide, settingsFrom, socketAsk, startHeartbeat } from "./policy.ts";
+import { cliAsk, decide, hookTimeoutMs, settingsFrom, socketAsk, startHeartbeat } from "./policy.ts";
 
 const VERSION = "0.1.0";
 
@@ -18,6 +18,8 @@ export default definePluginEntry({
     const s = settingsFrom(api.pluginConfig);
     const askDaemon = socketAsk(s.socketPath, s.daemonTimeoutMs);
     const askCli = cliAsk(s.sensorCli, s.sensorHome, s.cliTimeoutMs);
+    // Security approval (M11): the daemon answers once security decided or its wait ended.
+    const askHold = socketAsk(s.socketPath, s.securityWaitMs + 15_000);
     const log = (level: "info" | "warn", msg: string) => api.logger?.[level]?.(msg);
 
     // Announce ourselves: the daemon only treats unjudged tool calls as a bypass while we're around.
@@ -29,12 +31,13 @@ export default definePluginEntry({
     api.on(
       "before_tool_call",
       async (event: any, ctx: any) => {
-        const { result, source } = await decide(event, ctx, s, { askDaemon, askCli, log });
+        const { result, source } = await decide(event, ctx, s, { askDaemon, askCli, askHold, log });
         if (result && "block" in result) log("info", `blocked ${event?.toolName} (${source})`);
         return result;
       },
-      // Run before other policy plugins; a block from us is terminal.
-      { priority: 1000, timeoutMs: s.daemonTimeoutMs + s.cliTimeoutMs + 2000 },
+      // Run before other policy plugins; a block from us is terminal. Long enough for a security
+      // approval wait (before_tool_call is fail-closed: a timeout blocks the call).
+      { priority: 1000, timeoutMs: hookTimeoutMs(s) },
     );
   },
 });

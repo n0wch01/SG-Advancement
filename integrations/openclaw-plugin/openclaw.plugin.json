@@ -12,7 +12,8 @@
       "readOnlyTools": { "type": "array", "items": { "type": "string" } },
       "daemonTimeoutMs": { "type": "integer", "minimum": 100 },
       "cliTimeoutMs": { "type": "integer", "minimum": 500 },
-      "approvalTimeoutMs": { "type": "integer", "minimum": 1000 }
+      "approvalTimeoutMs": { "type": "integer", "minimum": 1000 },
+      "securityWaitMs": { "type": "integer", "minimum": 1000, "description": "How long a call held for security approval waits before it is denied (default 300000)" }
     }
   }
 }

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { buildRequest, cliAsk, decide, settingsFrom, socketAsk, startHeartbeat, type Verdict } from "./policy.ts";
+import { buildRequest, cliAsk, decide, hookTimeoutMs, settingsFrom, socketAsk, startHeartbeat, type Verdict } from "./policy.ts";
 
 const s = settingsFrom({ sensorHome: "/tmp/x" }, {});
 const event = { toolName: "exec", toolCallId: "c1", runId: "r1", params: { command: "rm -rf ~/x" } };
@@ -198,4 +198,52 @@ test("risk-tier fallback approvals are recorded too", async () => {
   assert.equal(cli.length, 1);
   assert.equal(cli[0].source, "fallback");
   assert.deepEqual(cli[0].rules, []);
+});
+
+// ── security approval (M11) ─────────────────────────────────────────────────
+
+const held = ok({ decision: "hold", hold_id: "h1", wait_ms: 300_000, action: "security_approval", rules: ["destructive-sql"] });
+
+test("hold -> wait for security; approved runs, denied blocks with the reason", async () => {
+  const asked: object[] = [];
+  const approve = async (req: object) => (asked.push(req), { ok: true, decision: "allow" }) as Verdict;
+  const r1 = await decide(event, ctx, s, { askDaemon: held, askCli: down, askHold: approve });
+  assert.equal(r1.result, undefined);
+  assert.deepEqual(asked, [{ op: "await_hold", hold_id: "h1" }]);
+
+  const deny = ok({ decision: "block", reason: "SG-Advance: 보안팀이 거부했습니다 (lead: no)" });
+  const r2 = await decide(event, ctx, s, { askDaemon: held, askCli: down, askHold: deny });
+  assert.deepEqual(r2.result, { block: true, blockReason: "SG-Advance: 보안팀이 거부했습니다 (lead: no)" });
+});
+
+test("hold -> losing the daemon while waiting blocks (nobody approved)", async () => {
+  const { result } = await decide(event, ctx, s, { askDaemon: held, askCli: down, askHold: down });
+  assert.equal((result as any).block, true);
+  assert.match((result as any).blockReason, /연결이 끊겨/);
+  const none = await decide(event, ctx, s, { askDaemon: held, askCli: down });
+  assert.equal((none.result as any).block, true);
+});
+
+test("hold -> aborting the run cancels the hold", async () => {
+  const sent: any[] = [];
+  const controller = new AbortController();
+  let release: (v: Verdict) => void = () => {};
+  const askDaemon = async (req: any) => {
+    sent.push(req);
+    return req.op === "tool_call" ? ({ ok: true, decision: "hold", hold_id: "h9" } as Verdict) : ({ ok: true } as Verdict);
+  };
+  const askHold = () => new Promise<Verdict>((r) => (release = r));
+  const pending = decide(event, { ...ctx, abortSignal: controller.signal }, s, { askDaemon, askCli: down, askHold });
+  await new Promise((r) => setTimeout(r, 10));
+  controller.abort();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(sent.at(-1), { op: "cancel_hold", hold_id: "h9" });
+  release({ ok: true, decision: "block", reason: "SG-Advance: 보안팀 승인 대기 중 실행이 취소됐습니다" });
+  assert.equal(((await pending).result as any).block, true);
+});
+
+test("the hook may wait past the security wait (fail-closed after that)", () => {
+  assert.equal(s.securityWaitMs, 300_000);
+  assert.equal(hookTimeoutMs(s), 330_000);
+  assert.equal(hookTimeoutMs(settingsFrom({ securityWaitMs: 1000 }, {})), 31_000);
 });
