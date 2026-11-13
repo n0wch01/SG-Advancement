@@ -13,9 +13,12 @@ services:
       # SGA-Dashboard (M7): read-only login token; the built console (cd dashboard && npm run build).
       SGA_DASHBOARD_TOKEN: ${SGA_DASHBOARD_TOKEN:-}
       SGA_DASHBOARD_DIR: /opt/sga-dashboard
+      # M12: shared with lan-gateway; its client-certificate headers count only with this secret.
+      SGA_PROXY_SECRET: ${SGA_PROXY_SECRET:-}
     volumes:
       - control-plane-data:/data
       - ./dashboard/dist:/opt/sga-dashboard:ro
+      - lan-tls:/lan-tls  # `sga-server tls server-cert --out /lan-tls` writes the gateway's certificate
     ports:
       - "127.0.0.1:${SGA_PORT:-8000}:8000"
     networks: [corp-net, team-net]  # team-net: sensors on the isolated agent network report here
@@ -130,6 +133,24 @@ services:
     depends_on: [team-gateway, team-audit]
     restart: unless-stopped
 
+  # M12 LAN gateway: other PCs' sensors reach the control plane only here (mTLS with device
+  # certificates; docs/multi-host.md). Opt-in: `docker compose --profile lan up -d`. Published on
+  # the LAN (SGA_LAN_BIND, default all interfaces); admin API and dashboard are not reachable through it.
+  lan-gateway:
+    profiles: [lan]
+    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    environment:
+      SGA_PROXY_SECRET: ${SGA_PROXY_SECRET:-}
+    volumes:
+      - ./deploy/lan-gateway/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - lan-tls:/etc/sga-tls:ro
+    ports:
+      - "${SGA_LAN_BIND:-0.0.0.0}:${SGA_LAN_TLS_PORT:-18443}:8443"
+      - "${SGA_LAN_BIND:-0.0.0.0}:${SGA_LAN_INSTALL_PORT:-18080}:8080"
+    networks: [corp-net]
+    depends_on: [control-plane]
+    restart: unless-stopped
+
 networks:
   corp-net: {}
   internet-sim: {}
@@ -142,6 +163,7 @@ networks:
 
 volumes:
   control-plane-data: {}
+  lan-tls: {}
   team-openclaw: {}
   team-sga: {}
   team-audit: {}

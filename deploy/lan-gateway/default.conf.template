@@ -1,0 +1,56 @@
+# LAN gateway (M12): the only door other PCs use to reach the control plane.
+# - 8443 (TLS; published as SGA_LAN_TLS_PORT, default 18443): sensors. A client certificate from the device CA is required for every sensor route
+#   except enrollment (which uses a one-time enrollment token and sends a CSR). nginx verifies the
+#   certificate and forwards it with the shared proxy secret; the control plane ties it to the device.
+# - 8080 (plain HTTP; SGA_LAN_INSTALL_PORT, default 18080): /install/ only (sensor wheel, install script, CA certificate). Nothing secret;
+#   the install command pins their SHA-256, so tampering on the way is detected.
+# Admin API and dashboard are never reachable from the LAN (they stay on the Mac's 127.0.0.1).
+# ${SGA_PROXY_SECRET} is filled in by the nginx image (envsubst) at start; nginx's own $vars stay.
+
+server {
+    listen 8443 ssl;
+    http2 on;
+    server_name _;
+
+    ssl_certificate        /etc/sga-tls/server.pem;
+    ssl_certificate_key    /etc/sga-tls/server-key.pem;
+    ssl_client_certificate /etc/sga-tls/ca.pem;
+    ssl_verify_client      optional;   # enrollment comes without one; every other route demands it
+    ssl_verify_depth       1;
+    ssl_protocols          TLSv1.2 TLSv1.3;
+    ssl_session_cache      shared:sga:1m;
+
+    client_max_body_size 5m;
+    proxy_http_version 1.1;
+    proxy_read_timeout 30s;
+    # Set (never passed through from the client): the control plane trusts these only with the secret.
+    proxy_set_header X-SGA-Proxy-Secret "${SGA_PROXY_SECRET}";
+    proxy_set_header X-SGA-Entry        "lan";
+    proxy_set_header X-SGA-Client-Cert  $ssl_client_escaped_cert;
+    proxy_set_header X-Forwarded-For    $remote_addr;
+    proxy_set_header Host               $host;
+
+    location = /healthz   { proxy_pass http://control-plane:8000; }
+    location = /v1/enroll { proxy_pass http://control-plane:8000; }
+
+    location /v1/admin/ { return 403; }
+
+    location /v1/ {
+        if ($ssl_client_verify != SUCCESS) { return 403; }
+        proxy_pass http://control-plane:8000;
+    }
+
+    location / { return 404; }
+}
+
+server {
+    listen 8080;
+    server_name _;
+    location /install/ {
+        limit_except GET HEAD { deny all; }
+        proxy_set_header X-SGA-Proxy-Secret "${SGA_PROXY_SECRET}";
+        proxy_set_header X-SGA-Entry        "lan-install";
+        proxy_pass http://control-plane:8000;
+    }
+    location / { return 404; }
+}
