@@ -506,6 +506,7 @@ def test_verdict_actions_cover_openclaw_enforcement() -> None:
         ResponseAction.ALLOW,
         ResponseAction.ALERT,
         ResponseAction.REQUIRE_APPROVAL,
+        ResponseAction.SECURITY_APPROVAL,  # held by the gateway plugin (security_hold); WS only observes
     }
     assert handled == set(ResponseAction)
 

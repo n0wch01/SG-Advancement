@@ -24,7 +24,7 @@ from .. import __version__
 from ..policy import PolicyBundle, key_id, load_or_create_signing_key, public_key_b64
 from ..redact import redact_event, redact_text
 from ..schema import AgentEvent, Finding, Severity
-from . import actions, audit, campaigns, dashboard, manifests, policy_admin
+from . import actions, audit, campaigns, dashboard, manifests, policy_admin, security_approvals
 from .auth import (
     DEVICE_PREFIX,
     ENROLL_PREFIX,
@@ -506,6 +506,8 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.include_router(policy_admin.router)
     app.include_router(actions.admin)
     app.include_router(actions.sensor)
+    app.include_router(security_approvals.admin)
+    app.include_router(security_approvals.sensor)
     _mount_dashboard(app, settings)
     return app
 
@@ -517,6 +519,9 @@ DASHBOARD_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
 }
+
+
+CACHE_FOREVER = "public, max-age=31536000, immutable"
 
 
 def _mount_dashboard(app: FastAPI, settings: Settings) -> None:
@@ -540,6 +545,12 @@ def _mount_dashboard(app: FastAPI, settings: Settings) -> None:
     @app.middleware("http")
     async def dashboard_headers(request: Request, call_next: Any) -> Response:
         response: Response = await call_next(request)
-        if request.url.path.startswith("/dashboard"):
+        path = request.url.path
+        if path.startswith("/dashboard"):
             response.headers.update(DASHBOARD_HEADERS)
+            # Vite names built assets by content hash: cache them for good. Everything else (the
+            # index.html that points at them) must be revalidated, or a browser keeps running the
+            # previous build after an upgrade (a new response level missing from the policy screen).
+            hashed = path.startswith("/dashboard/assets/")
+            response.headers["Cache-Control"] = CACHE_FOREVER if hashed else "no-cache"
         return response

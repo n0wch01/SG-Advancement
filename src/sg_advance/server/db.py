@@ -235,6 +235,37 @@ class FindingIndicator(Base):
     ts: Mapped[datetime] = mapped_column(UTCDateTime)
 
 
+class SecurityApproval(Base):
+    """A tool call held on a device until security decides (M11 ``security_approval``).
+
+    ``status`` is security's decision (pending → approved | denied); ``outcome`` is what the sensor
+    reports actually happened to the call (allowed, denied, timeout, cancelled, unreachable), since a
+    decision can land after the device already gave up waiting."""
+
+    __tablename__ = "security_approvals"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    user_id: Mapped[str] = mapped_column(String(200), index=True)
+    session_id: Mapped[str] = mapped_column(String(200))
+    tool: Mapped[str] = mapped_column(String(200))
+    arguments_preview: Mapped[str] = mapped_column(String(2000), default="")
+    reason: Mapped[str] = mapped_column(String(1000), default="")  # titles of the rules that held it
+    rule_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    severity: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    event_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    finding_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    decision_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    outcome_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
 def make_engine(url: str) -> Engine:
     if url.startswith("sqlite"):
         path = url.split("///", 1)[-1]

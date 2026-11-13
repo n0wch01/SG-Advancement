@@ -334,7 +334,7 @@ class IntegrityReport(StrictModel):
 
 
 class ApprovalResolution(StrictModel):
-    """A person's answer to a pre-execution approval prompt (``require_approval``).
+    """An answer to a pre-execution approval prompt (``require_approval`` or ``security_approval``).
 
     Links back to the ``tool.call`` event and findings that asked for it, so security can audit
     what users approved after the fact. ``approver`` is who pressed the button when the agent
@@ -356,6 +356,11 @@ class ApprovalResolution(StrictModel):
         default="daemon", description="Which path asked: daemon, cached-policy CLI, or risk-tier fallback"
     )
     approver: str | None = None
+    via: Literal["user", "security"] = Field(
+        default="user",
+        description="Who was asked: the person in the agent UI (require_approval), or security in the "
+        "console (security_approval, M11; approver = who decided there)",
+    )
 
 
 class OperatorAction(StrictModel):

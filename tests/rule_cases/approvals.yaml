@@ -49,3 +49,16 @@ cases:
       - {at: 700, kind: approval.resolved, call_id: c5, tool: exec, decision: allow-once, approved: true}
       - {at: 900, kind: approval.resolved, call_id: c6, tool: exec, decision: allow-once, approved: true}
     expect_not: [approval-fatigue]
+
+  # 보안팀 승인(M11): 보안팀이 대시보드에서 승인한 것은 사용자 승인 감사 대상이 아니다(via: security).
+  # 그 승인은 관제 서버의 보안 승인 기록(누가·왜)이 감사 기록이다.
+  - name: 보안팀이 승인한 고위험 행동은 사용자 승인 감사에 걸리지 않음
+    agent: openclaw
+    sensor: openclaw_plugin
+    events:
+      - {at: 0, kind: approval.resolved, call_id: c1, tool: exec, decision: allow-once, approved: true, max_severity: critical, via: security, approver: secops@corp.test}
+      - {at: 60, kind: approval.resolved, call_id: c2, tool: exec, decision: allow-once, approved: true, via: security}
+      - {at: 120, kind: approval.resolved, call_id: c3, tool: exec, decision: allow-once, approved: true, via: security}
+      - {at: 180, kind: approval.resolved, call_id: c4, tool: exec, decision: allow-once, approved: true, via: security}
+      - {at: 240, kind: approval.resolved, call_id: c5, tool: exec, decision: allow-once, approved: true, via: security}
+    expect_not: [user-approved-high-risk, approval-fatigue]

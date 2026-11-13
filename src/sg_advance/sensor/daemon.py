@@ -59,6 +59,10 @@ class Daemon:
         from .response import install_core_handlers
 
         install_core_handlers(ctx)  # remote block/unblock (M11); adapters add their own on run
+        if ctx.holds is None:
+            from .security_hold import Holds
+
+            ctx.holds = Holds()  # security approval waits (M11)
         self.sync_interval = sync_interval
         self.flush_interval = flush_interval
         self.local_api = local_api
@@ -144,6 +148,19 @@ class Daemon:
             except Exception:  # noqa: BLE001 - never let remote response take the daemon down
                 log.exception("remote actions failed")
 
+    async def _holds_loop(self) -> None:
+        """Security approval (M11): while a tool call is held, ask for the decision every second."""
+        from .security_hold import POLL_SECONDS
+
+        while True:
+            await asyncio.sleep(POLL_SECONDS)
+            if self.ctx.holds is None:
+                continue
+            try:
+                await self.ctx.holds.poll(self.ctx)
+            except Exception:  # noqa: BLE001
+                log.exception("security approval poll failed")
+
     async def _run_adapter(self, adapter: Adapter) -> None:
         try:
             await adapter.run(self.ctx)
@@ -162,6 +179,7 @@ class Daemon:
             asyncio.create_task(self._flush_loop()),
             asyncio.create_task(self._health_loop()),
             asyncio.create_task(self._actions_loop()),
+            asyncio.create_task(self._holds_loop()),
         ]
         tasks += [asyncio.create_task(self._run_adapter(a), name=f"adapter:{a.name}") for a in self.adapters]
         self.ready.set()

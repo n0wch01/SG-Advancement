@@ -262,6 +262,7 @@
         "allow",
         "alert",
         "require_approval",
+        "security_approval",
         "block",
         "abort_session",
         "quarantine"

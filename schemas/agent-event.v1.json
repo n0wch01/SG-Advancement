@@ -125,7 +125,7 @@
     },
     "ApprovalResolution": {
       "additionalProperties": false,
-      "description": "A person's answer to a pre-execution approval prompt (``require_approval``).\n\nLinks back to the ``tool.call`` event and findings that asked for it, so security can audit\nwhat users approved after the fact. ``approver`` is who pressed the button when the agent\nreports it; OpenClaw plugin approvals do not, so it is usually ``None`` (see the requester labels).",
+      "description": "An answer to a pre-execution approval prompt (``require_approval`` or ``security_approval``).\n\nLinks back to the ``tool.call`` event and findings that asked for it, so security can audit\nwhat users approved after the fact. ``approver`` is who pressed the button when the agent\nreports it; OpenClaw plugin approvals do not, so it is usually ``None`` (see the requester labels).",
       "properties": {
         "kind": {
           "const": "approval.resolved",
@@ -249,6 +249,16 @@
           ],
           "default": null,
           "title": "Approver"
+        },
+        "via": {
+          "default": "user",
+          "description": "Who was asked: the person in the agent UI (require_approval), or security in the console (security_approval, M11; approver = who decided there)",
+          "enum": [
+            "user",
+            "security"
+          ],
+          "title": "Via",
+          "type": "string"
         }
       },
       "required": [

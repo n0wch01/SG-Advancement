@@ -98,7 +98,9 @@ def test_built_dashboard_is_served_with_strict_headers(cp: TestClient, tmp_path)
         assert r.status_code == 200 and "SGA-Dashboard" in r.text
         assert "default-src 'self'" in r.headers["content-security-policy"]
         assert r.headers["x-content-type-options"] == "nosniff"
-        assert c.get("/dashboard/assets/app.js").status_code == 200
+        assert r.headers["cache-control"] == "no-cache"  # a new build reaches open browsers on reload
+        asset = c.get("/dashboard/assets/app.js")
+        assert asset.status_code == 200 and "immutable" in asset.headers["cache-control"]
         assert c.get("/", follow_redirects=False).headers["location"] == "/dashboard/"
         assert "content-security-policy" not in c.get("/healthz").headers
     with TestClient(create_app(dataclasses.replace(settings, dashboard_dir=tmp_path / "missing"))) as c:

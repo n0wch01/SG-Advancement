@@ -50,6 +50,8 @@ class ResponseAction(StrEnum):
     ALLOW = "allow"
     ALERT = "alert"
     REQUIRE_APPROVAL = "require_approval"
+    # Hold the call until security decides in the console (M11); denied if nobody does in time.
+    SECURITY_APPROVAL = "security_approval"
     BLOCK = "block"  # deny this single tool call / request
     ABORT_SESSION = "abort_session"  # stop the whole agent run
     QUARANTINE = "quarantine"  # disable plugin / MCP server on the endpoint

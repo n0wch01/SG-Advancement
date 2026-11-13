@@ -13,7 +13,11 @@ Protocol: one JSON object per line, one response line per request.
     being unloaded; a loss is reported unless a new instance says hello within 30s.
 ``{"op": "tool_call", "agentId", "sessionKey", "sessionId", "runId", "toolCallId", "toolName",
    "toolKind", "params", "requester": {...}}``
-    → ``{"ok": true, "decision": "allow"|"block"|"approve", "action", "rules", "title", "reason"}``
+    → ``{"ok": true, "decision": "allow"|"block"|"approve"|"hold", "action", "rules", "title", "reason"}``
+    ``hold`` (M11 ``security_approval``) adds ``hold_id`` and ``wait_ms``: the plugin then asks
+``{"op": "await_hold", "hold_id"}`` → ``{"ok": true, "decision": "allow"|"block", "reason"}`` once
+    security decided or the wait ended (sensor/security_hold.py); ``{"op": "cancel_hold", "hold_id"}``
+    when the run was aborted meanwhile.
 
 The daemon judges with its stateful engine (sequence/rate rules see every adapter's events) and
 records the event with the enforcement the plugin is about to apply. When the daemon is down the
@@ -37,6 +41,7 @@ from ..detect import Verdict
 from ..schema import AgentEvent, Enforcement, ResponseAction, SensorType
 from .adapters.base import AdapterContext
 from .adapters.openclaw_people import OpenClawPeople
+from .security_hold import summary_for
 
 log = logging.getLogger(__name__)
 
@@ -142,6 +147,12 @@ def plugin_response(verdict: Verdict) -> tuple[dict[str, Any], Enforcement | Non
         return base | {"decision": "block", "reason": f"SG-Advance: {reason}"}, Enforcement(
             action=action, enforced=True, enforcer=sensor, detail=detail
         )
+    if action is ResponseAction.SECURITY_APPROVAL:  # no daemon to wait with (cached-policy CLI)
+        detail = "pre-exec: security approval needs the sensor daemon; blocked"
+        return base | {
+            "decision": "block",
+            "reason": f"SG-Advance: 보안팀 승인이 필요한 호출이지만 센서 데몬이 없어 차단했습니다 ({reason})",
+        }, Enforcement(action=ResponseAction.BLOCK, enforced=True, enforcer=sensor, detail=detail)
     if action is ResponseAction.REQUIRE_APPROVAL:
         detail = "pre-exec: user approval requested through OpenClaw"
         return base | {"decision": "approve", "title": "SG-Advance", "reason": reason}, Enforcement(
@@ -165,20 +176,30 @@ def judge(
         event = event.model_copy(update={"labels": event.labels | labels})
     result = ctx.evaluate(event)
     response, enforcement = plugin_response(result.verdict)
+    pending = {
+        "event_id": result.event.event_id,
+        "finding_ids": [f.finding_id for f in result.verdict.findings],
+        "rule_ids": result.verdict.rule_ids,
+        "max_severity": response.get("severity"),
+        "requested_at": result.event.ts,
+    }
+    hold = None
+    if result.verdict.action is ResponseAction.SECURITY_APPROVAL and ctx.holds is not None:
+        titles = "; ".join(dict.fromkeys(h.rule.title for h in result.verdict.hits)) or "policy"
+        response = {k: v for k, v in response.items() if k != "reason"} | {"reason": titles}
+        hold = ctx.holds.open(req, pending, summary_for(result.event, response, pending))
+        response |= {"decision": "hold", "hold_id": hold.id, "wait_ms": int(ctx.holds.wait_seconds * 1000)}
+        enforcement = Enforcement(
+            action=ResponseAction.SECURITY_APPROVAL,
+            enforced=True,
+            enforcer=SensorType.OPENCLAW_PLUGIN,
+            detail="pre-exec: held for security approval in the console",
+        )
     ctx.record(result, enforcement)
     call_id = event.payload.call_id  # type: ignore[union-attr]
     ctx.plugins.mark(call_id)
     if response.get("decision") == "approve":  # keep what asked, to link the person's answer
-        ctx.plugins.remember_approval(
-            call_id,
-            {
-                "event_id": result.event.event_id,
-                "finding_ids": [f.finding_id for f in result.verdict.findings],
-                "rule_ids": result.verdict.rule_ids,
-                "max_severity": response.get("severity"),
-                "requested_at": result.event.ts,
-            },
-        )
+        ctx.plugins.remember_approval(call_id, pending)
     return response
 
 
@@ -286,7 +307,7 @@ class LocalApiServer:
     async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             while line := await reader.readline():
-                writer.write((json.dumps(self.handle(line)) + "\n").encode())
+                writer.write((json.dumps(await self.handle_async(line)) + "\n").encode())
                 await writer.drain()
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
@@ -294,6 +315,19 @@ class LocalApiServer:
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
+
+    async def handle_async(self, line: bytes) -> dict[str, Any]:
+        """``await_hold`` waits (up to minutes) for security; everything else answers at once."""
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError:
+            req = None
+        if isinstance(req, dict) and req.get("op") == "await_hold":
+            if self.ctx.holds is None:
+                return {"ok": False, "error": "security approval is not available"}
+            self.ctx.plugins.touch()
+            return await self.ctx.holds.wait(self.ctx, str(req.get("hold_id") or ""))
+        return self.handle(line)
 
     def handle(self, line: bytes) -> dict[str, Any]:
         try:
@@ -320,6 +354,10 @@ class LocalApiServer:
             except Exception as e:  # the plugin falls back on its own; tell it why
                 log.exception("plugin request failed")
                 return {"ok": False, "error": str(e)}
+        if op == "cancel_hold":  # the run was aborted while security had not decided yet
+            holds, hold_id = self.ctx.holds, str(req.get("hold_id") or "")
+            found = holds is not None and holds.resolve(hold_id, "cancelled")
+            return {"ok": True, "found": found}
         if op == "resolution":  # a person's answer to a requireApproval prompt (audit trail)
             try:
                 record_resolution(self.ctx, req)

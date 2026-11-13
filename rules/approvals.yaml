@@ -13,7 +13,7 @@ rules:
     response: alert
     dedup: none
     tags: [owasp-llm:LLM06]
-    when: {payload.kind: approval.resolved, payload.approved: "true"}
+    when: {payload.kind: approval.resolved, payload.approved: "true", payload.via: user}  # 보안팀 승인(via security)은 제외
     match:
       type: regex
       fields: [payload.max_severity]
@@ -29,7 +29,7 @@ rules:
     recommended_action: 해당 사용자의 최근 승인 목록을 확인하고, 에이전트가 같은 위험 행동을 반복 시도하는지 보세요.
     response: alert
     tags: [owasp-llm:LLM06]
-    when: {payload.kind: approval.resolved, payload.approved: "true"}
+    when: {payload.kind: approval.resolved, payload.approved: "true", payload.via: user}  # 보안팀 승인(via security)은 제외
     match:
       type: rate
       window_seconds: 600

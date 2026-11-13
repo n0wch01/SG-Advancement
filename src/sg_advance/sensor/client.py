@@ -120,6 +120,18 @@ class ControlPlaneClient:
         if r.status != 204:
             raise ControlPlaneError(r.status, _detail(r))
 
+    def create_security_approval(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Register a held tool call for security to decide (M11 security approval)."""
+        return self._ok(self._call("POST", "/v1/security-approvals", body), 201)
+
+    def get_security_decisions(self) -> list[dict[str, Any]]:
+        return list(self._ok(self._call("GET", "/v1/security-approvals/decisions"), 200))
+
+    def report_security_outcome(self, hold_id: str, outcome: str) -> None:
+        r = self._call("POST", f"/v1/security-approvals/{hold_id}/outcome", {"outcome": outcome})
+        if r.status != 204:
+            raise ControlPlaneError(r.status, _detail(r))
+
     def post(self, path: str, body: Any) -> dict[str, Any]:
         """Raw POST for the spool; it interprets status codes itself."""
         r = self._call("POST", path, body)
