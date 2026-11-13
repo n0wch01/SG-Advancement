@@ -19,9 +19,9 @@
 
 | 순서 | 작업 | 내용 |
 |---|---|---|
-| 1 | M6 Claude Code 어댑터 | hook(PreToolUse 등) → 로컬 판정 API(이미 있음) → deny/ask/allow. 데몬이 없으면 캐시 정책. 회사 배포 방식(관리 설정) |
-| 2 | M8 MCP 게이트웨이 | 에이전트와 상관없는 길목: 허용 MCP 서버, 툴 설명 변조, `tools/call` 실행 전 판정 |
-| 3 | 섀도 AI 탐지 확장 | OpenClaw 외 Claude Code·Cursor·Codex 설치와 위험한 설정(권한 확인 끄기) 탐지 |
+| 1 | M6 Claude Code 어댑터 ✅ | hook(PreToolUse 등) → 로컬 판정 API(이미 있음) → deny/ask/allow. 데몬이 없으면 캐시 정책. 회사 배포 방식(관리 설정) |
+| 2 | M8 MCP 게이트웨이 ✅ | 에이전트와 상관없는 길목: 허용 MCP 서버, 툴 설명 변조, `tools/call` 실행 전 판정 |
+| 3 | 섀도 AI 탐지 확장 ✅ | OpenClaw 외 Claude Code·Cursor·Codex·Gemini 설치, 관리 여부(Claude Code hook), 게이트웨이를 거치지 않는 MCP 서버 탐지 |
 | 4 | 노트북 실설치 (M12 5단계) | Windows 노트북에 한 줄 설치 + Claude Code 연결, 실환경 확인 |
 | 5 | 평가 (M13 일부) | 같은 공격을 OpenClaw·Claude Code·MCP에 넣은 탐지·차단 표, 물량·오탐 측정, 금융보안원 실행 계층 항목 대응표 |
 | 6 | 마감 | README·문서 정리, 데모 시나리오 |

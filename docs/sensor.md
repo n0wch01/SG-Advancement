@@ -515,12 +515,33 @@ sga-sensor run --openclaw          # 데몬이 <home>/sga.sock을 연다 (--sock
 - 룰([shadow_ai.yaml](../rules/shadow_ai.yaml), 알림만): `openclaw-unmanaged-install`(medium, 설정된 비관리 설치),
   `openclaw-gateway-network-exposed`(high, 비관리 설치가 loopback이 아닌 주소로 실행 중, T20).
 - 결정(2026-11-12, 사용자 확정): 알림만, 관리됨 기준에 버전 승인은 넣지 않음, OpenClaw 흔적만 본다.
-- 알려진 문제(이후 과제): 게이트웨이가 꺼졌다 켜지면 `running`이 바뀌어 같은 비관리 경보가 다시 난다.
+- (2026-11-13 해결) 게이트웨이 재시작마다 같은 비관리 경보가 다시 나던 문제: 관리 상태(present·configured·managed)가 바뀐 스냅샷에서만 경보한다.
 - 한계: 현재 사용자 홈만 본다. 설정한 적 없는 설치(코드만)는 기록만 하고 경보하지 않는다. 다른 버전 사본이 여럿이면 PATH가 실행하는 것의 버전만 적는다.
 
 실환경(2026-11-12, compose `--profile shadow`의 `carol-pc`: 개인 설정 + `bind: lan` + 플러그인 없음):
 `openclaw-unmanaged-install`과 `openclaw-gateway-network-exposed`가 carol 이름으로 관제 서버에 올라왔다. 같은 시각 팀 게이트웨이는
 `lan` 바인드지만 관리됨(플러그인 켜짐, 센서 감시)이라 경보가 없었고, 같은 이미지를 쓰는 egress·감사 프록시는 "설정 안 됨"으로 기록만 됐다.
+
+### 다른 AI 에이전트와 MCP 서버 (2026-11-13 확장)
+
+회사가 실제로 마주치는 코딩 에이전트까지 같은 방식으로 찾는다([coding_agents.py](../src/sg_advance/sensor/adapters/coding_agents.py)).
+
+| 제품 | 흔적 | MCP 서버 목록 |
+|---|---|---|
+| `claude-code` | PATH의 `claude`, `~/.claude/` | `~/.claude.json`(`mcpServers`, 프로젝트별 포함) |
+| `cursor` | Cursor 앱, `~/.cursor/` | `~/.cursor/mcp.json` |
+| `codex` | PATH의 `codex`, `~/.codex/` | `~/.codex/config.toml`(`[mcp_servers.*]`) |
+| `gemini` | PATH의 `gemini`, `~/.gemini/` | `~/.gemini/settings.json` |
+
+- **관리됨**: Claude Code는 SG-Advance hook이 있으면(관리 설정이든 사용자 설정이든). Cursor·Codex·Gemini는 아직 통제 수단이 없어 설정만 돼 있어도 통제 밖.
+- **MCP 서버의 경로**: `gateway`(이 센서가 아는 MCP 게이트웨이 주소 아래), `direct`(그 밖의 원격 주소), `local`(stdio 명령), `unknown`(게이트웨이를 모르는 장비).
+  게이트웨이 주소는 `--mcp-gateway`를 같이 띄우면 자동, 공용 게이트웨이면 `--mcp-gateway-url`.
+- **개인정보**: 서버 이름, 주소(쿼리 문자열·계정 정보 제거), 명령의 실행 파일 이름만 보낸다. 인자와 환경 변수는 MCP 설정이 토큰을 두는 곳이라 보내지 않는다.
+- 룰: `ai-agent-outside-control`(medium, 통제 밖 에이전트가 설정됨), `mcp-server-bypasses-gateway`(high, 게이트웨이를 거치지 않는 원격 MCP 서버,
+  캠페인 대상: 지표는 서버 주소). 둘 다 관리 상태나 MCP 목록이 바뀐 스냅샷에서만 경보한다.
+
+실환경(2026-11-13, 이 Mac에서 읽기만): Claude Code(hook 없음), Cursor, Codex가 설정돼 있었고, Codex의 MCP 서버 하나가 게이트웨이 없이 원격에 직접 붙어 있었다
+(개수만 확인, 내용은 출력하지 않음).
 
 ## Claude Code 어댑터 (M6)
 
