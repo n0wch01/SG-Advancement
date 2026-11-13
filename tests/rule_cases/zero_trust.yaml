@@ -67,3 +67,12 @@ cases:
       - {kind: tool.call, user: alice, tool: mcp__crm__export, provider: {kind: mcp, mcp_server: crm}}
       - {kind: tool.call, user: mallory, tool: mcp__wiki__search, provider: {kind: mcp, mcp_server: wiki}}
     expect_not: [sensitive-resource-by-elevated-risk-user]
+
+  # 작업 범위 프로필 (안내서 P5-7·최소권한 에이전트, 2026-11-13 결정: 행동 기반 + 작업 범위 프로필, LLM 의도 판정은 쓰지 않음).
+  # 공통 정책에서는 꺼져 있고(모두 허용), 팀 정책이 켜고 그 팀의 업무 툴로 좁힌다(tests/test_zero_trust.py에서 팀 정책으로 확인).
+  - name: 작업 범위 프로필은 기본으로 꺼져 있음
+    agent: claude_code
+    sensor: claude_code_hook
+    events:
+      - {kind: tool.call, tool: Bash, arguments: {command: "git push"}}
+    expect_not: [task-scope-outside-profile]

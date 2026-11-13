@@ -146,3 +146,33 @@ def test_device_configuration_findings_do_not_make_a_person_risky(enrolled: Sens
     enrolled.flush()
     people = {p["user_id"]: p for p in cp.get("/v1/admin/risk", headers=CP_ADMIN).json()}
     assert "carol" not in people or not people["carol"]["elevated"]
+
+
+def test_a_team_turns_on_its_task_scope_profile(enrolled: Sensor, cp) -> None:
+    """Task scope profile (KISA ZT guide P5-7, decision 2026-11-13): off in the common policy; the CRM
+    analysts' team turns it on and narrows it to their tools. Their agent may read and query the CRM;
+    anything else asks the person first. Other teams are unaffected."""
+    from conftest import CP_ADMIN
+
+    who = {"by": "secops@corp.test", "reason": "CRM analysts: agents only read and query customers"}
+    assert (
+        cp.post("/v1/admin/policy/groups", json={"name": "crm-analysts"} | who, headers=CP_ADMIN).status_code
+        == 201
+    )
+    allow = ["Read", "Grep", "Glob", "LS", "mcp__crm__query_customers"]
+    r = cp.put("/v1/admin/policy/overrides", headers=CP_ADMIN,
+               json={"scope": "crm-analysts", "rule_id": "task-scope-outside-profile", "enabled": True,
+                     "allow": allow} | who)  # fmt: skip
+    assert r.status_code == 200, r.text
+    assert (
+        enrolled.evaluate(call("Bash", command="git push")).verdict.action is ResponseAction.ALLOW
+    )  # common
+    r = cp.put("/v1/admin/devices/dev-alice/group", json={"group": "crm-analysts"} | who, headers=CP_ADMIN)
+    assert r.status_code == 200, r.text
+    enrolled.sync_policy()
+    out = enrolled.evaluate(call("Bash", command="git push"))
+    assert out.verdict.rule_ids == ["task-scope-outside-profile"]
+    assert out.verdict.action is ResponseAction.REQUIRE_APPROVAL
+    assert enrolled.evaluate(call("Read", file_path="notes.md")).verdict.action is ResponseAction.ALLOW
+    q = enrolled.evaluate(mcp_call("mcp__crm__query_customers", "crm"))
+    assert "task-scope-outside-profile" not in q.verdict.rule_ids
