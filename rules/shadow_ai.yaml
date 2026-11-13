@@ -5,7 +5,8 @@
 #   - 관리됨의 기준에 버전 승인은 넣지 않는다. 관리되는 설치는 무결성 검사가 버전을 본다(openclaw-version-unapproved).
 #   - 수집은 OpenClaw 자신의 흔적만(실행 파일, 상태 폴더, 서비스 파일, 127.0.0.1의 게이트웨이 포트). 프로세스 목록 전체는 보지 않는다.
 # install.snapshot은 처음 볼 때와 상태가 바뀔 때만 오므로 dedup: none.
-# 알려진 문제(이후 과제): running이 바뀔 때마다(게이트웨이 재시작) 같은 비관리 경보가 다시 난다.
+# 비관리 경보는 관리 상태가 바뀐 스냅샷에서만 낸다(changed에 present·configured·managed). 처음 본 설치는 changed: [present].
+#   2026-11-13 수정: 전에는 running이 바뀔 때마다(게이트웨이 재시작) 같은 경보가 다시 났다.
 # 정규식은 문자열만 보므로 불리언 조건(managed 등)은 when에 둔다.
 version: 1
 rules:
@@ -21,7 +22,12 @@ rules:
     response: alert
     dedup: none
     tags: [owasp-llm:LLM06, owasp-agentic:ASI03]
-    when: {payload.kind: install.snapshot, payload.present: "true", payload.configured: "true", payload.managed: "false"}
+    when:
+      payload.kind: install.snapshot
+      payload.present: "true"
+      payload.configured: "true"
+      payload.managed: "false"
+      "payload.changed[]": [present, configured, managed]   # 재시작(running만 바뀜)은 다시 경보하지 않음
     match:
       type: regex
       fields: [payload.product]

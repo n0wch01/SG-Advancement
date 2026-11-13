@@ -142,4 +142,5 @@ def test_adapter_emits_on_change_only_and_reports_removal(enrolled: Sensor, tmp_
     assert adapter.poll(ctx) == 1
     gone = install_events(enrolled)[-1]["payload"]
     assert gone["present"] is False and gone["changed"] == ["present"]
-    assert findings(enrolled).count("openclaw-unmanaged-install") == 2  # first sight + plugin-only state
+    # First sight only: adding the plugin left it unmanaged (still unwatched), so no repeat (2026-11-13).
+    assert findings(enrolled).count("openclaw-unmanaged-install") == 1

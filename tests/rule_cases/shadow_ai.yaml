@@ -3,6 +3,7 @@
 # Decisions (2026-11-12, confirmed by the user: all recommended defaults): alert only; managed does not
 # require an approved version yet (the integrity scan covers managed installs); the scan only looks
 # for OpenClaw's own traces (binary, state dir, service file, its gateway port on 127.0.0.1).
+# First sighting = changed: [present] (it went from absent to present; removal is changed: [present] too).
 cases:
   # ── 비관리 설치 ──
   - name: 개인이 설치·설정한 OpenClaw (플러그인 없음, 센서 감시 없음)
@@ -10,17 +11,38 @@ cases:
     sensor: agent_discovery
     events:
       - {kind: install.snapshot, product: openclaw, instance: "/home/carol/.openclaw", configured: true, running: true,
-         bind_scope: loopback, guard_plugin: missing, watched: false, managed: false,
+         bind_scope: loopback, guard_plugin: missing, watched: false, managed: false, changed: [present],
          unmanaged_reasons: ["guard plugin missing", "no SG-Advance sensor watches this config"]}
     expect: [openclaw-unmanaged-install]
     expect_not: [openclaw-gateway-network-exposed]
+
+  # 알림 반복 문제(2026-11-13 수정): 게이트웨이 재시작은 running만 바뀐다. 관리 상태는 그대로라 다시 경보하지 않는다.
+  - name: 비관리 설치의 게이트웨이 재시작은 다시 경보하지 않음
+    agent: openclaw
+    sensor: agent_discovery
+    events:
+      - {kind: install.snapshot, product: openclaw, instance: "/home/carol/.openclaw", configured: true, running: false,
+         bind_scope: loopback, guard_plugin: missing, watched: false, managed: false, changed: [running]}
+      - {kind: install.snapshot, product: openclaw, instance: "/home/carol/.openclaw", configured: true, running: true,
+         bind_scope: loopback, guard_plugin: missing, watched: false, managed: false, changed: [running]}
+    expect_not: [openclaw-unmanaged-install]
+
+  # 미탐 방지: 재시작과 함께 관리 밖으로 나가면(플러그인 제거) 한 스캔에 함께 바뀌어도 경보한다.
+  - name: 관리되던 설치가 재시작하면서 플러그인이 빠짐
+    agent: openclaw
+    sensor: agent_discovery
+    events:
+      - {kind: install.snapshot, product: openclaw, instance: "/Users/alice/.openclaw", configured: true, running: true,
+         bind_scope: loopback, guard_plugin: missing, watched: true, managed: false,
+         changed: [guard_plugin, managed, running, unmanaged_reasons]}
+    expect: [openclaw-unmanaged-install]
 
   - name: 플러그인은 켜져 있지만 센서가 보지 않는 두 번째 프로필
     agent: openclaw
     sensor: agent_discovery
     events:
       - {kind: install.snapshot, product: openclaw, instance: "/home/carol/.openclaw-dev", configured: true,
-         guard_plugin: enabled, watched: false, managed: false}
+         guard_plugin: enabled, watched: false, managed: false, changed: [present]}
     expect: [openclaw-unmanaged-install]
 
   - name: 비관리 게이트웨이가 네트워크에 열려 있음 (토큰이 새면 같은 망에서 전권 접속, T20)
@@ -28,7 +50,7 @@ cases:
     sensor: agent_discovery
     events:
       - {kind: install.snapshot, product: openclaw, instance: "/home/carol/.openclaw", configured: true, running: true,
-         bind: lan, bind_scope: network, guard_plugin: missing, watched: false, managed: false}
+         bind: lan, bind_scope: network, guard_plugin: missing, watched: false, managed: false, changed: [present]}
     expect: [openclaw-unmanaged-install, openclaw-gateway-network-exposed]
 
   # ── 정상: 관리되는 설치 ──

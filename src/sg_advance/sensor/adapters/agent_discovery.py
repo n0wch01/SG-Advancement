@@ -262,7 +262,8 @@ class AgentDiscoveryAdapter:
             before = self._last.get(key)
             if row == before:
                 continue
-            changed = [] if before is None else sorted(k for k in row if before.get(k) != row.get(k))
+            # First sighting: it went from absent to present (removal below says the same).
+            changed = ["present"] if before is None else sorted(k for k in row if before.get(k) != row.get(k))
             self._emit(ctx, {**row, "changed": changed})
             sent += 1
         for key, row in self._last.items():
