@@ -134,7 +134,8 @@ def _gateway_secret(home: SensorHome, file: Path | None, env: str, default_name:
         return os.environ[env]
     path = file or home.root / default_name
     if path.exists():
-        if path.stat().st_mode & 0o077:
+        # Windows has no mode bits (files in the user's profile are private by ACL): POSIX only.
+        if sys.platform != "win32" and path.stat().st_mode & 0o077:
             raise SensorError(f"{path} must not be readable by others (chmod 600)")
         return path.read_text("utf-8").strip()
     return ""
@@ -144,8 +145,13 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
     from .adapters.base import AdapterContext
     from .daemon import Daemon
 
+    if args.log_file:  # a windowless service (Windows pythonw) has no console to write to
+        args.log_file.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
-        level=args.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+        level=args.log_level.upper(),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        filename=str(args.log_file) if args.log_file else None,
+        encoding="utf-8" if args.log_file else None,
     )
     sensor = Sensor(home)
     sensor.keep_chat_text = args.keep_chat_text
@@ -222,7 +228,12 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
         sensor, user_id=args.user, hostname=socket.gethostname(), plugins=plugins, people=people
     )
     local_api = None
-    if not args.no_local_api:
+    if not args.no_local_api and sys.platform == "win32":
+        from .plugin_api import ENDPOINT_FILE, LocalApiServer
+
+        # No unix sockets in asyncio on Windows: loopback TCP + a token in the user's profile (M12).
+        local_api = LocalApiServer(ctx, home.root / ENDPOINT_FILE, tcp=True)
+    elif not args.no_local_api:
         from .plugin_api import LocalApiServer
 
         sock = args.socket or home.root / "sga.sock"
@@ -343,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--flush-interval", type=float, default=5.0)
     p.add_argument("--duration", type=float, default=0.0, help="stop after N seconds (0 = run until Ctrl+C)")
     p.add_argument("--log-level", default="info")
+    p.add_argument("--log-file", type=Path, help="write the log here instead of stderr")
     p.add_argument("--socket", type=Path, help="local verdict API socket (default: <home>/sga.sock)")
     p.add_argument("--no-local-api", action="store_true", help="don't serve verdicts to gateway plugins")
     p.add_argument("--egress-proxy", metavar="HOST:PORT", help="run the egress proxy (HTTP + CONNECT)")
@@ -401,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--discovery-interval", type=float, default=600.0, help="seconds between install scans")
     p.set_defaults(fn=_cmd_run)
 
-    p = sub.add_parser("service", help="run the daemon as a background service (macOS launchd)")
+    p = sub.add_parser("service", help="run the daemon as a background service (macOS launchd, Windows task)")
     p.add_argument("action", choices=["install", "uninstall", "status"])
     p.add_argument(
         "--openclaw", nargs="?", const="ws://127.0.0.1:18789", metavar="URL", help="watch an OpenClaw gateway"

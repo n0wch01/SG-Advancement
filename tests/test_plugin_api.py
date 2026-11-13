@@ -414,3 +414,32 @@ def test_service_definition_keeps_secrets_out(tmp_path) -> None:
     assert set(doc["EnvironmentVariables"]) == {"PATH"}
     assert "/opt/homebrew/bin" in doc["EnvironmentVariables"]["PATH"].split(":")
     assert "Restart=always" in systemd_unit(tmp_path, ["--openclaw"], exe="/v/bin/sga-sensor")
+
+
+async def test_windows_loopback_tcp_needs_the_endpoint_token(enrolled: Sensor, tmp_path) -> None:
+    """M12: no unix sockets on Windows. The daemon listens on 127.0.0.1 and writes the port and a
+    per-run token to the sensor home; requests without that token are refused."""
+    endpoint = tmp_path / "sga-api.json"
+    server = LocalApiServer(AdapterContext(enrolled, "alice", "laptop"), endpoint, tcp=True)
+    await server.start()
+    try:
+        ep = json.loads(endpoint.read_text())
+        assert ep["host"] == "127.0.0.1" and ep["port"] > 0 and len(ep["token"]) > 30
+        assert (endpoint.stat().st_mode & 0o777) == 0o600
+
+        async def send(msg: dict[str, Any]) -> dict[str, Any]:
+            reader, writer = await asyncio.open_connection(ep["host"], ep["port"])
+            writer.write((json.dumps(msg) + "\n").encode())
+            await writer.drain()
+            out = json.loads(await reader.readline())
+            writer.close()
+            return out
+
+        assert await send({"op": "hello", "plugin": "sg-advance"}) == {"ok": False, "error": "unauthorized"}
+        assert (await send({"op": "hello", "auth": "wrong"}))["error"] == "unauthorized"
+        assert await send({"op": "hello", "plugin": "sg-advance", "auth": ep["token"]}) == {"ok": True}
+        verdict = await send({**req("w1", command="rm -rf ~/projects"), "auth": ep["token"]})
+        assert verdict["decision"] == "block"
+    finally:
+        await server.close()
+    assert not endpoint.exists()

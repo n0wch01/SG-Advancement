@@ -6,7 +6,8 @@ for OpenClaw's *own* traces only, in the current user's home and the usual packa
 
 - code: the ``openclaw`` executable on PATH and well-known global package dirs → version, path;
 - instances: state dirs ``~/.openclaw`` and ``~/.openclaw-<profile>`` holding ``openclaw.json``;
-- services: launchd / systemd user units whose name contains ``openclaw``;
+- services: launchd / systemd user units whose name contains ``openclaw``; on Windows (M12) scheduled
+  tasks named like OpenClaw (``OpenClaw Gateway``) and OpenClaw launchers in the user's Startup folder;
 - running: the instance's gateway port answers on 127.0.0.1 (no process listing, no other ports).
 
 Each instance becomes one ``install.snapshot``: configured, gateway bind (loopback or network),
@@ -53,7 +54,12 @@ HOME_ROOTS = (
     ".local/share/pnpm/global/*/node_modules/openclaw",
     "Library/pnpm/global/*/node_modules/openclaw",
     ".volta/tools/image/packages/openclaw/lib/node_modules/openclaw",
+    # Windows (M12): npm global prefix, nvm-windows, pnpm
+    "AppData/Roaming/npm/node_modules/openclaw",
+    "AppData/Roaming/nvm/*/node_modules/openclaw",
+    "AppData/Local/pnpm/global/*/node_modules/openclaw",
 )
+STARTUP_DIR = "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"
 
 
 def port_open(host: str, port: int, timeout: float = 0.5) -> bool:
@@ -86,7 +92,7 @@ def _version(root: Path) -> str | None:
 
 def install_source(path: Path) -> str:
     p = path.as_posix()
-    if "/.nvm/" in p:
+    if "/.nvm/" in p or "/AppData/Roaming/nvm/" in p:
         return "nvm"
     if "/pnpm/" in p:
         return "pnpm"
@@ -123,7 +129,32 @@ def find_instances(home: Path) -> list[Path]:
     return [d for d in dirs if (d / "openclaw.json").is_file()]
 
 
-def find_services(home: Path, platform: str = sys.platform) -> list[str]:
+def windows_tasks() -> list[str]:
+    """Scheduled task names of this user's session (``schtasks /Query``); empty if unavailable."""
+    import csv
+    import subprocess
+
+    try:
+        res = subprocess.run(
+            ["schtasks", "/Query", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return [row[0].lstrip("\\") for row in csv.reader(res.stdout.splitlines()) if row]
+
+
+def find_services(
+    home: Path, platform: str = sys.platform, tasks: Callable[[], list[str]] | None = None
+) -> list[str]:
+    if platform == "win32":
+        names = [t for t in (tasks or windows_tasks)() if "openclaw" in t.lower()]
+        names += [f.stem for f in home.glob(f"{STARTUP_DIR}/*") if "openclaw" in f.name.lower()]
+        return sorted(set(names))
     if platform == "darwin":
         units = home.glob("Library/LaunchAgents/*.plist")
     else:

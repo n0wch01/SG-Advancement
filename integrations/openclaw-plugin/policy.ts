@@ -11,6 +11,7 @@
 // the call (its failure policy), which is stricter than the policy we chose.
 
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import net from "node:net";
 
 export type Verdict = {
@@ -43,6 +44,10 @@ export type HookResult =
 
 export type PluginSettings = {
   socketPath: string;
+  // Windows (M12): no unix socket there; the daemon listens on loopback TCP and writes
+  // {host, port, token} to endpointFile in the user's profile. Every request carries the token.
+  transport: "unix" | "tcp";
+  endpointFile: string;
   sensorCli: string;
   sensorHome?: string;
   readOnlyTools: string[];
@@ -63,11 +68,17 @@ export type Deps = {
 // query string can carry data out.
 export const DEFAULT_READ_ONLY = ["read", "memory_search", "memory_get", "session_status"];
 
-export function settingsFrom(config: Record<string, unknown> | undefined, env = process.env): PluginSettings {
+export function settingsFrom(
+  config: Record<string, unknown> | undefined,
+  env = process.env,
+  platform: string = process.platform,
+): PluginSettings {
   const c = config ?? {};
-  const home = (c.sensorHome as string) || env.SGA_HOME || `${env.HOME ?? ""}/.sg-advance`;
+  const home = (c.sensorHome as string) || env.SGA_HOME || `${env.HOME ?? env.USERPROFILE ?? ""}/.sg-advance`;
   return {
     socketPath: (c.socketPath as string) || `${home}/sga.sock`,
+    transport: c.transport === "tcp" || c.transport === "unix" ? c.transport : platform === "win32" ? "tcp" : "unix",
+    endpointFile: (c.endpointFile as string) || `${home}/sga-api.json`,
     sensorCli: (c.sensorCli as string) || "sga-sensor",
     sensorHome: home,
     readOnlyTools: Array.isArray(c.readOnlyTools) ? (c.readOnlyTools as string[]) : DEFAULT_READ_ONLY,
@@ -261,10 +272,36 @@ export function startHeartbeat(
   return cleanup;
 }
 
+/** The daemon on whichever transport this platform uses. */
+export function daemonAsk(s: PluginSettings, timeoutMs: number) {
+  return s.transport === "tcp" ? endpointAsk(s.endpointFile, timeoutMs) : socketAsk(s.socketPath, timeoutMs);
+}
+
+/** Loopback TCP (Windows): read the endpoint each time (the port changes when the daemon restarts). */
+export function endpointAsk(file: string, timeoutMs: number) {
+  return (req: object): Promise<Verdict> => {
+    let ep: { host?: string; port?: number; token?: string };
+    try {
+      ep = JSON.parse(readFileSync(file, "utf8"));
+    } catch (e) {
+      return Promise.reject(new Error(`sensor endpoint ${file} unreadable: ${(e as Error).message}`));
+    }
+    if (typeof ep.port !== "number" || typeof ep.token !== "string") {
+      return Promise.reject(new Error(`sensor endpoint ${file} is incomplete`));
+    }
+    const connect = () => net.createConnection({ host: ep.host || "127.0.0.1", port: ep.port as number });
+    return lineAsk(connect, timeoutMs)({ ...req, auth: ep.token });
+  };
+}
+
 export function socketAsk(path: string, timeoutMs: number) {
+  return lineAsk(() => net.createConnection(path), timeoutMs);
+}
+
+function lineAsk(connect: () => net.Socket, timeoutMs: number) {
   return (req: object): Promise<Verdict> =>
     new Promise((resolve, reject) => {
-      const sock = net.createConnection(path);
+      const sock = connect();
       let buf = "";
       const timer = setTimeout(() => {
         sock.destroy();

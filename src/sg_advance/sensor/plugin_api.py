@@ -23,6 +23,10 @@ The daemon judges with its stateful engine (sequence/rate rules see every adapte
 records the event with the enforcement the plugin is about to apply. When the daemon is down the
 plugin runs ``sga-sensor evaluate`` instead: same request on stdin, stateless judgement from
 the signed policy cache, recorded with ``labels.sga_verdict = "degraded"``.
+
+Windows (M12) has no unix socket server in asyncio: the daemon listens on 127.0.0.1 (a random port)
+and writes ``SGA_HOME/sga-api.json`` ``{"host", "port", "token"}`` in the user's profile. Every request
+must carry ``"auth": token``; anything else on the PC that can reach loopback but not that file is refused.
 """
 
 from __future__ import annotations
@@ -280,14 +284,34 @@ def record_health(ctx: AdapterContext, status: str, detail: str, last_seen: floa
 # ── unix socket server ──────────────────────────────────────────────────────
 
 
+ENDPOINT_FILE = "sga-api.json"
+
+
 class LocalApiServer:
-    def __init__(self, ctx: AdapterContext, path: Path) -> None:
+    """``path``: a unix socket (macOS, Linux). ``tcp=True``: loopback TCP + token, the endpoint
+    written to ``path`` instead (Windows)."""
+
+    def __init__(self, ctx: AdapterContext, path: Path, *, tcp: bool = False) -> None:
         self.ctx = ctx
         self.path = path
+        self.tcp = tcp
+        self.token: str | None = None
         self._server: asyncio.base_events.Server | None = None
 
     async def start(self) -> None:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if self.tcp:
+            import secrets
+
+            from .state import write_private
+
+            self.token = secrets.token_urlsafe(32)
+            self._server = await asyncio.start_server(self._client, host="127.0.0.1", port=0)
+            port = self._server.sockets[0].getsockname()[1]
+            endpoint = {"host": "127.0.0.1", "port": port, "token": self.token, "pid": os.getpid()}
+            write_private(self.path, json.dumps(endpoint))
+            log.info("local verdict API listening on 127.0.0.1:%d (endpoint %s)", port, self.path)
+            return
         with contextlib.suppress(FileNotFoundError):
             self.path.unlink()  # stale socket from a previous run
         old = os.umask(0o177)  # socket created 0600: only this user's processes may ask
@@ -316,12 +340,22 @@ class LocalApiServer:
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
 
+    def _authorized(self, req: object) -> bool:
+        if self.token is None:  # unix socket: the 0600 file is the access control
+            return True
+        import hmac
+
+        given = req.get("auth") if isinstance(req, dict) else None
+        return isinstance(given, str) and hmac.compare_digest(given, self.token)
+
     async def handle_async(self, line: bytes) -> dict[str, Any]:
         """``await_hold`` waits (up to minutes) for security; everything else answers at once."""
         try:
             req = json.loads(line)
         except json.JSONDecodeError:
             req = None
+        if self.token is not None and not self._authorized(req):
+            return {"ok": False, "error": "unauthorized"}
         if isinstance(req, dict) and req.get("op") == "await_hold":
             if self.ctx.holds is None:
                 return {"ok": False, "error": "security approval is not available"}

@@ -144,3 +144,27 @@ def test_adapter_emits_on_change_only_and_reports_removal(enrolled: Sensor, tmp_
     assert gone["present"] is False and gone["changed"] == ["present"]
     # First sight only: adding the plugin left it unmanaged (still unwatched), so no repeat (2026-11-13).
     assert findings(enrolled).count("openclaw-unmanaged-install") == 1
+
+
+# ── Windows (M12) ───────────────────────────────────────────────────────────
+
+
+def test_windows_npm_install_task_and_startup_launcher_are_found(tmp_path: Path) -> None:
+    home = tmp_path / "gamer"
+    pkg = home / "AppData/Roaming/npm/node_modules/openclaw"  # npm's global prefix on Windows
+    pkg.mkdir(parents=True)
+    (pkg / "package.json").write_text(json.dumps({"name": "openclaw", "version": "2026.11.3"}))
+    fake_instance(home, cfg=GUARDED)
+    startup = home / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"
+    startup.mkdir(parents=True)
+    (startup / "OpenClaw Gateway.cmd").write_text("@echo off\n")
+    (startup / "other.lnk").write_text("")
+
+    def tasks() -> list[str]:
+        return ["OpenClaw Gateway", "Microsoft\\Windows\\Defrag", "GoogleUpdate"]
+
+    assert find_services(home, "win32", tasks) == ["OpenClaw Gateway"]
+    rows = scan(home, path_env="", probe=up, platform="linux", roots=())
+    [row] = rows
+    assert row["version"] == "2026.11.3" and row["install_source"] == "npm-global"
+    assert install_source(home / "AppData/Roaming/nvm/v22.12.0/node_modules/openclaw") == "nvm"

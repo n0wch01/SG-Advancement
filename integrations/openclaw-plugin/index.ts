@@ -6,7 +6,7 @@
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
-import { cliAsk, decide, hookTimeoutMs, settingsFrom, socketAsk, startHeartbeat } from "./policy.ts";
+import { cliAsk, daemonAsk, decide, hookTimeoutMs, settingsFrom, startHeartbeat } from "./policy.ts";
 
 const VERSION = "0.1.0";
 
@@ -16,16 +16,16 @@ export default definePluginEntry({
   description: "Pre-execution policy check for every tool call via the local SG-Advance sensor.",
   register(api: any) {
     const s = settingsFrom(api.pluginConfig);
-    const askDaemon = socketAsk(s.socketPath, s.daemonTimeoutMs);
+    const askDaemon = daemonAsk(s, s.daemonTimeoutMs);
     const askCli = cliAsk(s.sensorCli, s.sensorHome, s.cliTimeoutMs);
     // Security approval (M11): the daemon answers once security decided or its wait ended.
-    const askHold = socketAsk(s.socketPath, s.securityWaitMs + 15_000);
+    const askHold = daemonAsk(s, s.securityWaitMs + 15_000);
     const log = (level: "info" | "warn", msg: string) => api.logger?.[level]?.(msg);
 
     // Announce ourselves: the daemon only treats unjudged tool calls as a bypass while we're around.
     // On dispose (plugin disabled/removed/replaced) the heartbeat stops and the daemon hears "bye".
     startHeartbeat(askDaemon, api.lifecycle, { plugin: "sg-advance", version: VERSION }, (e: Error) =>
-      log("warn", `SG-Advance daemon not reachable at ${s.socketPath}: ${e.message}`),
+      log("warn", `SG-Advance daemon not reachable at ${s.transport === "tcp" ? s.endpointFile : s.socketPath}: ${e.message}`),
     );
 
     api.on(

@@ -42,7 +42,15 @@ Disabler = Callable[[str], tuple[bool, str]]
 
 def _cli(openclaw: str, *args: str, timeout: float = 90.0) -> subprocess.CompletedProcess[str]:
     exe = shutil.which(openclaw) or openclaw
-    return subprocess.run([exe, *args], capture_output=True, text=True, timeout=timeout, check=False)
+    return subprocess.run(
+        [exe, *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        check=False,
+    )
 
 
 def cli_lister(openclaw: str = "openclaw") -> Lister:

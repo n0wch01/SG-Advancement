@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { buildRequest, cliAsk, decide, hookTimeoutMs, settingsFrom, socketAsk, startHeartbeat, type Verdict } from "./policy.ts";
+import { buildRequest, cliAsk, decide, endpointAsk, hookTimeoutMs, settingsFrom, socketAsk, startHeartbeat, type Verdict } from "./policy.ts";
 
 const s = settingsFrom({ sensorHome: "/tmp/x" }, {});
 const event = { toolName: "exec", toolCallId: "c1", runId: "r1", params: { command: "rm -rf ~/x" } };
@@ -246,4 +246,39 @@ test("the hook may wait past the security wait (fail-closed after that)", () => 
   assert.equal(s.securityWaitMs, 300_000);
   assert.equal(hookTimeoutMs(s), 330_000);
   assert.equal(hookTimeoutMs(settingsFrom({ securityWaitMs: 1000 }, {})), 31_000);
+});
+
+// ── Windows transport (M12) ─────────────────────────────────────────────────
+
+test("Windows defaults to loopback TCP with the endpoint file in the sensor home", () => {
+  const w = settingsFrom({}, { USERPROFILE: "C:/Users/gamer" }, "win32");
+  assert.equal(w.transport, "tcp");
+  assert.equal(w.endpointFile, "C:/Users/gamer/.sg-advance/sga-api.json");
+  assert.equal(settingsFrom({}, { HOME: "/home/a" }, "linux").transport, "unix");
+  assert.equal(settingsFrom({ transport: "tcp" }, {}, "darwin").transport, "tcp");
+});
+
+test("TCP endpoint round trip sends the token; a missing endpoint file fails cleanly", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ep-"));
+  const seen: any[] = [];
+  const server = net.createServer((c) =>
+    c.on("data", (d) => {
+      const req = JSON.parse(d.toString().trim());
+      seen.push(req);
+      c.write(`${JSON.stringify(req.auth === "tok" ? { ok: true, decision: "allow" } : { ok: false, error: "unauthorized" })}\n`);
+    }),
+  );
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const port = (server.address() as net.AddressInfo).port;
+  const file = join(dir, "sga-api.json");
+  writeFileSync(file, JSON.stringify({ host: "127.0.0.1", port, token: "tok" }));
+  try {
+    const v = await endpointAsk(file, 1000)(buildRequest(event, ctx));
+    assert.equal(v.decision, "allow");
+    assert.equal(seen[0].auth, "tok");
+    assert.equal(seen[0].toolCallId, "c1");
+  } finally {
+    server.close();
+  }
+  await assert.rejects(endpointAsk(join(dir, "missing.json"), 500)({}), /unreadable/);
 });

@@ -75,7 +75,9 @@ def cli_skill_disabler(openclaw: str = "openclaw") -> SkillDisabler:
     def run(skill_key: str) -> tuple[bool, str]:
         exe = shutil.which(openclaw) or openclaw
         args = [exe, "config", "set", f"skills.entries.{skill_key}.enabled", "false"]
-        res = subprocess.run(args, capture_output=True, text=True, timeout=60, check=False)
+        res = subprocess.run(
+            args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False
+        )
         return res.returncode == 0, (res.stderr or res.stdout).strip()[:200]
 
     return run
