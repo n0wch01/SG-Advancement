@@ -78,11 +78,52 @@ sga-server device tokens | revoke-token ID           # 아직 안 쓴 등록 토
 
 시험 장비 `m12-mac-test`는 폐기된 상태로 목록에 남아 있다.
 
+## 한 줄 설치 (3단계)
+
+관제 서버가 설치에 필요한 것을 직접 준다(이미지를 만들 때 함께 빌드). LAN 게이트웨이의 18080(평문 HTTP)으로 받는다.
+
+| 파일 | 내용 |
+|---|---|
+| `/install/install.ps1` | Windows 설치 스크립트. 이 서버의 주소와 아래 파일들의 SHA-256, CA 지문이 박혀 있다(ASCII, CRLF) |
+| `/install/sg_advance-*.whl` | 센서 |
+| `/install/requirements.txt` | 센서 의존성 전부, **해시 고정**(`uv export`). `pip --require-hashes --only-binary=:all:` |
+| `/install/ca.pem` | 장비 CA |
+| `/install/sg-advance-plugin.zip` | OpenClaw 플러그인(같은 파일이면 같은 바이트로 압축: 해시가 안 바뀜) |
+
+**믿음의 사슬**: 설치 명령(관리자가 전달) → `install.ps1`의 SHA-256 → 나머지 파일의 SHA-256과 CA 지문 → 그 CA로만 서버 인증 → 등록 때 장비 인증서.
+평문 HTTP 구간에서 무엇이 바뀌어도 해시가 달라 설치가 멈춘다. 등록 토큰은 평문으로 오가지 않는다(설치 명령 안에서 환경 변수로만 쓰고, 등록은 TLS).
+
+```bash
+# Mac (관리자): 노트북에 붙여 넣을 한 줄을 만든다. 1회용 등록 토큰이 들어 있다(24시간).
+docker compose exec -e SGA_SERVER=http://127.0.0.1:8000 control-plane \
+  sga-server device install --device-id laptop --user <직원 ID>
+```
+
+노트북의 PowerShell(관리자 권한 필요 없음)에 그 한 줄을 붙여 넣으면 `install.ps1`이 이렇게 한다.
+
+1. 파일을 받아 해시 확인
+2. `%LOCALAPPDATA%\SG-Advance\venv`에 Python 가상환경(3.12 이상: `py -3.13`/`py -3.12`/`python` 순서로 찾음)을 만들고 설치
+3. 등록: 키를 노트북에서 만들고 CSR로 장비 인증서를 받음. 상태는 `%USERPROFILE%\.sg-advance`
+4. OpenClaw가 있으면 플러그인 설치(`openclaw plugins install --link`), `sensorCli`를 venv의 `sga-sensor.exe`로 설정,
+   `openclaw.json`의 게이트웨이 토큰을 `.sg-advance\openclaw-token`에 복사(출력하지 않음)해 센서가 게이트웨이도 보게 함, 게이트웨이 재시작
+5. 로그인할 때 시작하게 등록(아래 4단계)
+
+다시 실행하면 등록은 건너뛰고 센서·플러그인만 갱신한다(OpenClaw를 나중에 설치했을 때). 관제 서버를 다시 빌드하면 휠 해시가
+바뀔 수 있으니 설치 명령은 마지막 빌드 뒤에 만든다(해시가 다르면 설치가 멈춘다: 안전한 쪽).
+
+## Windows 이식 (4단계)
+
+| 항목 | macOS·Linux | Windows |
+|---|---|---|
+| 서비스 | launchd LaunchAgent | 작업 스케줄러 작업 "SG-Advance Sensor"(로그온 시, 그 사용자로, 권한 상승 없음, 실패 시 1분마다 재시작), `pythonw`로 창 없이, 로그 `.sg-advance\logs\sensor.log`. 작업을 만들 수 없는 PC면 시작프로그램 폴더의 숨김 실행기 |
+| 플러그인 ↔ 데몬 | 유닉스 소켓(0600) | 127.0.0.1의 임의 포트 + 실행마다 바뀌는 토큰. `.sg-advance\sga-api.json`에 `{host, port, token}`. 토큰 없는 요청은 거부 |
+| 설치 탐지 | npm·nvm·pnpm·volta, launchd/systemd | `%APPDATA%\npm`, nvm-windows, pnpm, 작업 스케줄러의 OpenClaw 작업(`OpenClaw Gateway`), 시작프로그램 폴더 |
+| 비밀 파일 권한 | 0600 확인 | 모드 비트가 없어 확인 생략(사용자 프로필 ACL에 맡김) |
+| 문자 인코딩 | UTF-8 | OpenClaw 출력은 UTF-8로, `schtasks` 출력은 콘솔 코드 페이지로 읽음(한국어 Windows는 cp949) |
+
 ## 남은 단계
 
-1. ~~장비 인증서~~ ✅, 2. ~~LAN 게이트웨이~~ ✅
-3. 관제 서버가 센서 wheel·`install.ps1`·CA를 `/install/`로 제공, PowerShell 한 줄 설치(해시 고정)
-4. Windows 이식: 플러그인 연결(유닉스 소켓 대신), 설치 탐지 경로, 로그온 작업 등록
+1. ~~장비 인증서~~ ✅, 2. ~~LAN 게이트웨이~~ ✅, 3. ~~한 줄 설치~~ ✅, 4. ~~Windows 이식~~ ✅ (자동 테스트만, 실기기 확인 전)
 5. 노트북에 실제 설치, 노트북 OpenClaw 연결
 
 ## 한계
