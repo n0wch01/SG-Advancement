@@ -33,7 +33,8 @@ def pre(tool: str, **tool_input: Any) -> dict[str, Any]:
 
 def spooled(sensor: Sensor, kind: str = "event") -> list[dict[str, Any]]:
     with sqlite3.connect(sensor.spool.path) as db:
-        return [json.loads(d) for (d,) in db.execute("SELECT doc FROM outbox WHERE kind = ? ORDER BY rowid", (kind,))]
+        rows = db.execute("SELECT doc FROM outbox WHERE kind = ? ORDER BY rowid", (kind,))
+        return [json.loads(d) for (d,) in rows]
 
 
 def test_hook_input_maps_to_agent_events() -> None:
