@@ -56,6 +56,9 @@ allowlist는 허용 목록 밖의 값, in_set은 집합에 든 값이다. 값은
 값이 여러 개면 줄바꿈으로 나눈다. 관제 서버는 같은 룰 + 같은 지표가 24시간 안에 서로 다른 사람 3명 이상에게서 나오면
 캠페인 Finding을 만든다([response.md](response.md#캠페인-탐지)). rate·repeat·sequence 룰은 지표가 없다.
 
+매칭 값 자체가 지표로 쓸모없으면(변조 룰의 `mismatch`) `campaign-key:<키>` 태그를 함께 단다. 매칭된 필드가 목록 항목 안에 있을 때
+(`payload.skills[].integrity`) 그 항목의 `<키>` 값(스킬 `ref`, 플러그인 `component`)이 지표가 된다. 룰 필드가 아니라 태그라서 이전 버전 센서도 정책을 그대로 읽는다.
+
 태그는 "여러 사람에게 같은 값이 나오면 공통 출처가 있다"는 룰에만 단다(인젝션 문구, 미허가 호스트, 플러그인, MCP URL, 스킬).
 파괴적 SQL처럼 여럿이 같은 값을 쓰는 게 평범한 룰에는 달지 않는다. 케이스는 `indicators: {룰: 값}`으로 지표까지 고정한다
 (`tests/rule_cases/campaign.yaml`).
@@ -148,6 +151,9 @@ uv run pytest tests/test_rule_cases.py     # 방금 추가한 케이스가 실�
 - `sequence`는 세션마다 진행 상태를 하나만 추적한다. 첫 단계가 다시 나오면 시작 시각을 갱신한다.
 - `sensitive-file-exfil-command`: 한 명령 안에 민감 파일과 보내는 동작(curl `-d`/`-F`/`-T`/POST, `wget --post-file`, `scp`, `rsync host:`, `nc`)이 같이 있을 때만 걸린다. 내려받기(`curl -o .env`)는 제외했다. 변수로 감싼 경로나 두 단계로 나눈 명령은 놓친다(미탐). 사내 비밀 저장소로 일부러 올리는 스크립트는 걸린다(오탐, M9 허용 목록 후보).
 - `destructive-sql`: 개발 DB를 일부러 초기화하는 작업도 걸린다(그래서 require_approval). 실행 인자(`query`, `sql`, `statement`, `command`)만 보므로, 파일에 SQL을 쓰는 것은 걸리지 않는다. 다른 이름의 인자로 SQL을 받는 DB 툴은 놓친다.
+  셸 명령에서는 SQL이 DB 클라이언트(`psql`, `mysql`, `sqlite3`, `sqlcmd` 등)로 갈 때만 본다(`-c`/`-e`, 히어독, 파이프, `docker exec` 안).
+  2026-11-13 수정 전에는 `echo 'DELETE FROM …'`, `grep 'DROP TABLE'`, 커밋 메시지 속 SQL도 걸렸다. 목록에 없는 클라이언트나 스크립트(`python -c "…execute('DELETE …')"`)는 놓친다(미탐).
+  여러 문장을 파일로 쓰는 히어독(`cat > x.sql <<EOF … ; DROP TABLE …`)은 걸린다(오탐).
 - `destructive-cloud-command`: `gcloud`/`az`의 delete는 범위가 넓어 아직 넣지 않았다(미탐). 단일 자원 삭제(`kubectl delete pod`)도 뺐다.
 - `agent-safety-bypass`, `agent-unattended-safety-bypass`: 샌드박스나 CI에서 일부러 확인을 끄는 정상 사용이 있다. 그룹별 예외는 M9 정책에서 다룬다. 센서가 `permission_mode`를 채우지 않으면 아예 동작하지 않는다.
 - 허용목록은 아직 룰 파일에 직접 적혀 있다. M9에서 중앙 정책(그룹별 대상, 버전)으로 옮긴다.

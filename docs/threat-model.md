@@ -56,7 +56,7 @@
 | T15 | 다른 프로세스가 안전장치를 끄고 에이전트 실행 | ② | `agent-safety-bypass`, `agent-unattended-safety-bypass` 룰 (스키마 필드 추가) | 룰 초안, 수집은 M6 |
 | T16 | 정상 툴(PR 생성, 티켓 작성)을 통한 데이터 유출 | ② | 툴 인자의 출처·목적지 판단 (비공개 → 공개) | M8 |
 | T17 | 셸 밖 파괴적 행동 (SQL `DROP`, 클라우드 API 삭제) | ② | `destructive-sql`, `destructive-cloud-command` 룰 (require_approval) | 룰 초안 |
-| T18 | 에이전트 간 위임을 통한 인젝션 전파 (하위 에이전트가 읽은 문서 → 총괄 → 다른 에이전트의 행동) | ①② | 위임 사슬 추적(부모·뿌리 세션), 위임 트리 단위 시퀀스(`cross-agent-injection-propagation`, 다른 세션 간에만), 인젝션 문구를 작업 지시로 넘기면 실행 전 승인(`injection-relayed-to-agent`) | M5b ✅ (패턴 기반, 센서가 아는 위임만) |
+| T18 | 에이전트 간 위임을 통한 인젝션 전파 (하위 에이전트가 읽은 문서 → 총괄 → 다른 에이전트의 행동) | ①② | 위임 사슬 추적(부모·뿌리 세션), 위임 트리 단위 시퀀스(`cross-agent-injection-propagation`, 다른 세션 간에만), 인젝션 문구를 작업 지시로 넘기면 실행 전 차단(`injection-relayed-to-agent`) | M5b ✅ (패턴 기반, 센서가 아는 위임만) |
 | T19 | 네이티브 런타임(Codex 등)이 OpenClaw 승인을 거치지 않음 (Codex 기본값 `yolo`, `approvalPolicy: never`). **실환경 확인**: 런타임 고정은 모델별이라 화면에서 모델만 바꿔도 Codex로 넘어가고, 이미 Codex에 묶인 세션은 설정 변경 뒤에도 남는다 | ② | 모든 모델의 런타임 고정과 묶인 세션 점검(M5d 기준선), 플러그인 hook으로 Codex 네이티브 툴 차단(M5c, **실환경 확인**) | 차단 M5c ✅, 런타임 고정 감시 M5d ✅, 게이트웨이 시각의 미고정 모델·묶인 대화 탐지 M5d ✅ (2026-11-12 실환경, 알림만) |
 | T20 | 게이트웨이 공용 토큰 유출 → 페어링 없이 전권 접속 (v4에서 확인: 루프백 + 공용 토큰이면 요청한 권한을 그대로 받음) | ④ | 공용 토큰은 최초 페어링에만 쓰고 이후 `deviceToken`, 공용 게이트웨이는 비밀 저장소로 토큰 관리 | M5b·M5d |
 | T21 | 통제 장치를 끔: 사용자·악성코드가 판정 플러그인을 비활성화하거나 exec 정책을 `full`로 완화. **실환경 확인**: `plugins disable`은 재시작 없이 hook을 즉시 빼지만 플러그인 타이머는 남아 인사가 계속 갔다 | ② | 설정 기준선 감시(끄는 순간 finding), 플러그인 `onDispose`에서 `bye` → 30초 안에 끊김 finding, 그 사이 툴은 WS 우회 finding | M5d ✅ (탐지만, 되돌리기 없음) |

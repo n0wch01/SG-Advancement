@@ -118,7 +118,7 @@ docker compose exec team-gateway /opt/sga/venv/bin/python /opt/sga/set-role.py b
 | 룰 | 언제 | 응답 |
 |---|---|---|
 | `cross-agent-injection-propagation` (critical) | 같은 위임 트리 안에서 한 세션이 인젝션 의심 텍스트를 읽고, **다른 세션**이 10분 안에 민감 파일 접근이나 외부 전송을 시도 | block |
-| `injection-relayed-to-agent` (high) | `sessions_spawn`의 작업 지시나 `sessions_send` 메시지에 인젝션 문구가 실림 (넘기는 순간, 실행 전) | 사람 승인 |
+| `injection-relayed-to-agent` (high) | `sessions_spawn`의 작업 지시나 `sessions_send` 메시지에 인젝션 문구가 실림 (넘기는 순간, 실행 전) | 차단 (2026-11-13, 전에는 사람 승인) |
 
 예시: [openclaw_team.jsonl](../examples/events/openclaw_team.jsonl)에서는 하위 에이전트가 오염된 위키 페이지를 읽고, 위임한 총괄 에이전트가 `.env`를 보낸다.
 

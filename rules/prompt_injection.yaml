@@ -150,14 +150,17 @@ rules:
           pattern: '(^|[^\w.])\.env\b(?!\.example)|id_rsa|\.ssh/|\.aws/credentials|\bcurl\b|\bwget\b|\bnc\s|invoke-webrequest'
 
   # T18 넘기는 순간: 인젝션 문구가 하위 에이전트의 작업 지시나 다른 세션으로 보내는 메시지에 실린다.
-  # 플러그인이 실행 전에 보므로 넘기기 전에 사람에게 묻는다. 오탐 주의: 인젝션 샘플 분석을 일부러 맡기는 보안 업무.
+  # 플러그인이 실행 전에 보므로 넘기기 전에 막는다. 오탐 주의: 인젝션 샘플 분석을 일부러 맡기는 보안 업무.
+  # 결정(2026-11-13): 승인 요청 → 차단. 오염된 에이전트를 쓰던 사람의 승인은 판단 근거가 약하고, 위임 내용에
+  #   인젝션 문구가 그대로 실린 것은 신호가 강하다. 보안 업무로 필요하면 그 팀만 정책에서 낮출 수는 없으니(팀은 더 엄격하게만)
+  #   공통 정책에서 보안팀이 조정한다.
   - id: injection-relayed-to-agent
     severity: high
     category: prompt_injection
     title: 인젝션 문구를 다른 에이전트에 전달
     message: 하위 에이전트 작업 지시나 다른 세션으로 보내는 메시지에 인젝션 의심 문구가 들어 있습니다.
     recommended_action: 전달을 승인하기 전에 지시 내용의 출처(어떤 문서·툴 결과에서 왔는지)를 확인하세요.
-    response: require_approval
+    response: block
     tags: [campaign, owasp-llm:LLM01, threat:T18]
     when: {payload.kind: tool.call, payload.tool: [sessions_spawn, sessions_send]}
     match:

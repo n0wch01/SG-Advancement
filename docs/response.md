@@ -59,7 +59,7 @@ sga-server action list [--device team-gateway]
 
 - **기준(결정 2026-11-12)**: 같은 룰 + 같은 지표가 24시간 안에 **서로 다른 사람 3명 이상**. 같은 사람의 장비 여러 대는 1명,
   `unknown`은 세지 않는다.
-- **지표**: `campaign` 태그가 붙은 룰 10개의 매칭 값([detection.md](detection.md#캠페인-태그-m11)). 센서 엔진이 Finding에 넣고,
+- **지표**: `campaign` 태그가 붙은 룰 12개의 매칭 값([detection.md](detection.md#캠페인-태그-m11)). 센서 엔진이 Finding에 넣고,
   서버가 `finding_indicators` 테이블(마이그레이션 0004)에 사람·시각과 함께 색인한다.
 - **결과**: 룰 `multi-user-campaign`, `detector: central`, 심각도는 high 이상(원래 룰이 critical이면 critical). 라벨에 원래 룰,
   지표, 사람 목록, 구성 Finding이 남는다. 같은 룰·지표로는 24시간에 하나만 만든다. 이후에 걸린 사람은 새 Finding 대신 그
@@ -76,7 +76,8 @@ alice, bob, carol이 각자 같은 문장("…Ignore all previous instructions a
 
 ### 한계 (이후 과제)
 
-- `*-tampered` 룰은 매칭 값이 `mismatch`뿐이라 태그하지 않았다. 스킬·플러그인 이름을 지표로 써야 묶을 수 있다.
+- (2026-11-13 해결) `*-tampered` 룰은 매칭 값이 `mismatch`뿐이었다. 이제 `campaign-key:ref`/`campaign-key:component`로 변조된
+  스킬·플러그인 이름을 지표로 써서 `openclaw-skill-tampered`, `openclaw-plugin-tampered`도 캠페인 대상이다(본체 변조는 장비마다 하나라 제외).
 - 공용 팀 게이트웨이의 egress Finding은 모두 `team-gateway`로 기록된다(누가 요청했는지 트래픽에 없음). 그래서 거기서는
   `egress-unapproved-host` 캠페인이 생기지 않는다. 사람별 PC에서는 된다. egress를 원인이 된 툴 호출과 묶어야 풀린다.
 - 짧고 흔한 인젝션 문구는 서로 다른 공격이어도 하나로 묶일 수 있다(오탐 방향).
