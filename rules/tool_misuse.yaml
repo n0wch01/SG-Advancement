@@ -136,8 +136,8 @@ rules:
   - id: run-downloaded-file
     severity: critical
     category: tool_misuse
-    title: 임시 경로에 내려받은 파일 실행
-    message: 외부에서 임시 경로로 내려받은 파일을 실행하려 해 사용자 승인을 받습니다.
+    title: 임시 경로·다운로드 폴더에 내려받은 파일 실행
+    message: 외부에서 임시 경로나 다운로드 폴더로 내려받은 파일을 실행하려 해 사용자 승인을 받습니다.
     recommended_action: 사용자가 승인했다면 보안팀 검토 큐에서 내려받은 곳(라벨의 호스트)과 파일을 확인하세요. 처음 보는 곳이면 그 PC의 실행 흔적을 조사하세요.
     response: require_approval
     tags: ["grade:3-1", owasp-llm:LLM06, scenario:F2]
@@ -145,8 +145,8 @@ rules:
     match:
       type: regex
       fields: [labels.sga_runs_downloaded]
-      # "<호스트> <경로>": 호스트가 사내(*.corp.internal)가 아니고 경로가 임시 경로
-      pattern: '(?i)^(?![^ ]*\.corp\.internal )\S+ (?:/tmp/|/var/tmp/|/private/tmp/|/private/var/folders/|/dev/shm/|\$TMPDIR|\$\{TMPDIR|%TEMP%|%TMP%|\$env:TEMP|\$env:TMP|.*[\\/]AppData[\\/]Local[\\/]Temp[\\/])'
+      # "<호스트> <경로>": 호스트가 사내(*.corp.internal)가 아니고 경로가 임시 경로 또는 다운로드 폴더(결정 2026-11-14)
+      pattern: '(?i)^(?![^ ]*\.corp\.internal )\S+ (?:/tmp/|/var/tmp/|/private/tmp/|/private/var/folders/|/dev/shm/|\$TMPDIR|\$\{TMPDIR|%TEMP%|%TMP%|\$env:TEMP|\$env:TMP|.*[\\/]AppData[\\/]Local[\\/]Temp[\\/]|(?:~|\$HOME|\$\{HOME\}|%USERPROFILE%|\$env:USERPROFILE|/Users/[^/]+|/home/[^/]+|[a-z]:\\Users\\[^\\]+)[\\/]Downloads[\\/])'
 
   # 파일을 남기지 않고 내려받은 것을 바로 실행. 상태가 필요 없어 데몬 없이(hook 단독)도 잡힌다.
   # 오탐 주의: 공식 설치 스크립트(rustup, Homebrew 등)도 묻는다(의도: 공급망 경로). 미탐 주의: 내려받은 뒤 다른 명령에서 실행은 위 룰.

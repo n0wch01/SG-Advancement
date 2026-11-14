@@ -221,6 +221,20 @@ cases:
       - {kind: tool.call, tool: Bash, arguments: {command: "/private/var/folders/x/T/a.bin"}, labels: {sga_runs_downloaded: "1.2.3.4 /private/var/folders/x/T/a.bin"}}
     expect: [run-downloaded-file]
 
+  # 결정(2026-11-14): 다운로드 폴더도 임시 경로처럼 본다.
+  - name: 외부에서 다운로드 폴더에 받은 파일 실행 → 사용자 승인
+    events:
+      - {kind: tool.call, tool: Bash, arguments: {command: "bash ~/Downloads/setup.sh"}, labels: {sga_runs_downloaded: "get.internet-sim ~/Downloads/setup.sh"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "/Users/bob/Downloads/tool"}, labels: {sga_runs_downloaded: "get.internet-sim /Users/bob/Downloads/tool"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "sh $HOME/Downloads/i.sh"}, labels: {sga_runs_downloaded: "get.internet-sim $HOME/Downloads/i.sh"}}
+      - {kind: tool.call, tool: exec, arguments: {command: "& C:\\Users\\bob\\Downloads\\t.exe"}, labels: {sga_runs_downloaded: "dl.internet-sim C:\\Users\\bob\\Downloads\\t.exe"}}
+    expect: [run-downloaded-file]
+
+  - name: 이름에 Downloads가 들어간 프로젝트 폴더는 아님
+    events:
+      - {kind: tool.call, tool: Bash, arguments: {command: "bash work/DownloadsService/run.sh"}, labels: {sga_runs_downloaded: "get.internet-sim work/DownloadsService/run.sh"}}
+    expect_not: [run-downloaded-file]
+
   - name: 사내 저장소에서 받았거나 임시 경로가 아니면 아님
     events:
       - {kind: tool.call, tool: Bash, arguments: {command: "bash /tmp/build.sh"}, labels: {sga_runs_downloaded: "artifacts.corp.internal /tmp/build.sh"}}
