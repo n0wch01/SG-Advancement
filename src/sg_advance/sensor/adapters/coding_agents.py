@@ -17,12 +17,16 @@ outside company control (their MCP traffic can still be routed through the MCP g
 Each MCP server becomes a ``McpServerRef`` with its route: ``gateway`` (URL under this sensor's MCP
 gateway), ``direct`` (any other remote URL), ``local`` (stdio command), ``unknown`` (no gateway
 configured here, so nothing can be said). Arguments, environment and query strings never leave the
-endpoint: they are where MCP configs keep tokens.
+endpoint: they are where MCP configs keep tokens. One exception: when a local server runs through a
+package launcher (``npx -y postmark-mcp``), the package spec it runs is kept (``package``) so known
+malicious packages can be matched (threat intelligence, KISA C1-5). Only that one argument, and only
+if it has the shape of a package name.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -84,6 +88,63 @@ def _clean_url(url: str) -> str:
     return urlunsplit((p.scheme, netloc, p.path, "", ""))
 
 
+# Launchers that fetch and run a package named on the command line: (subcommand words, value flags).
+# The package is the first non-flag argument after the subcommand; ``-p``/``--package``/``--from``
+# name it explicitly. Anything else (a server's own flags, a token passed as an argument) is ignored.
+_LAUNCHERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "npx": ((), ("-p", "--package")),
+    "pnpx": ((), ()),
+    "bunx": ((), ()),
+    "uvx": ((), ("--from",)),
+    "pipx": (("run",), ("--spec",)),
+    "npm": (("exec", "x"), ("-p", "--package")),
+    "pnpm": (("dlx",), ()),
+    "yarn": (("dlx",), ("-p", "--package")),
+}
+# npm / PyPI package spec: optional @scope/, a name, an optional version or range after @ / ==.
+# Launcher options that take a value that is not the package (skipped with their value).
+_SKIP_VALUE = {"--with", "--python", "--registry", "--cache", "--index-url", "--pip-args"}
+_PACKAGE = re.compile(r"^(@[a-z0-9][\w.-]*/)?[a-z0-9][\w.-]*((@|==)[\w.^~<>=*+-]+)?$", re.I)
+
+
+def launcher_package(command: str, args: Any) -> str | None:
+    """The package a launcher command runs (``npx -y postmark-mcp@1.0.16`` → ``postmark-mcp@1.0.16``),
+    or None if ``command`` is not a known launcher or no argument looks like a package."""
+    spec = _LAUNCHERS.get(Path(command).name.lower().removesuffix(".cmd").removesuffix(".exe"))
+    if spec is None or not isinstance(args, list):
+        return None
+    subcommands, value_flags = spec
+    words = [a for a in args if isinstance(a, str)]
+    if subcommands:
+        if not words or words[0] not in subcommands:
+            return None
+        words = words[1:]
+    found: str | None = None
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if w == "--":
+            break
+        if w in value_flags and i + 1 < len(words):
+            found = words[i + 1]
+            break
+        if w.split("=", 1)[0] in value_flags and "=" in w:
+            found = w.split("=", 1)[1]
+            break
+        if w in _SKIP_VALUE:
+            i += 2
+            continue
+        if w.startswith("-"):
+            i += 1
+            continue
+        found = w
+        break
+    if found is None and "--" in words:  # npx -- pkg
+        rest = words[words.index("--") + 1:]
+        found = rest[0] if rest else None
+    return found if found and len(found) <= 214 and _PACKAGE.match(found) else None
+
+
 def server_ref(name: str, entry: Any, gateway_url: str | None, scope: str | None) -> dict[str, Any]:
     """One MCP server entry (any agent's format) → McpServerRef payload."""
     e = entry if isinstance(entry, dict) else {}
@@ -101,6 +162,8 @@ def server_ref(name: str, entry: Any, gateway_url: str | None, scope: str | None
             )
     elif isinstance(e.get("command"), str):
         ref |= {"transport": "stdio", "command": Path(e["command"]).name, "route": "local"}
+        if pkg := launcher_package(e["command"], e.get("args")):
+            ref["package"] = pkg
     else:
         ref |= {"transport": "unknown", "route": "unknown"}
     return ref

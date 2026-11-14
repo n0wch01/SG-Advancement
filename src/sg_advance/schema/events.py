@@ -434,6 +434,11 @@ class McpServerRef(StrictModel):
     transport: Literal["http", "sse", "stdio", "unknown"] = "unknown"
     url: str | None = Field(default=None, description="Remote servers: scheme://host/path, query removed")
     command: str | None = Field(default=None, description="Local (stdio) servers: the executable's name only")
+    package: str | None = Field(
+        default=None,
+        description="Local servers run through a package launcher (npx, uvx, pipx run, …): the package spec "
+        "it runs, e.g. postmark-mcp@1.0.16. Only that one argument, and only if it looks like a package name",
+    )
     route: Literal["gateway", "direct", "local", "unknown"] = Field(
         default="unknown",
         description="gateway: through the company MCP gateway; direct: a remote server reached around it; "

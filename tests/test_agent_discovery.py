@@ -7,6 +7,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from sg_advance.sensor import Sensor
 from sg_advance.sensor.adapters import AdapterContext
 from sg_advance.sensor.adapters.agent_discovery import (
@@ -220,10 +222,12 @@ def test_coding_agents_and_their_mcp_servers_are_found(tmp_path: Path) -> None:
     notion = next(s for s in cc["mcp_servers"] if s["name"] == "notion")
     assert notion["url"] == "https://mcp.notion.example/mcp"
     assert "SECRET" not in json.dumps(rows)  # no query string, arguments or environment leave the endpoint
-    assert next(s for s in cc["mcp_servers"] if s["name"] == "files")["command"] == "npx"
+    files = next(s for s in cc["mcp_servers"] if s["name"] == "files")
+    assert files["command"] == "npx" and files["package"] == "server-fs"  # the package only, not --key=…
     assert rows["cursor"]["install_path"] is None and rows["cursor"]["mcp_servers"][0]["route"] == "direct"
     assert rows["codex"]["mcp_servers"] == [
-        {"name": "docs", "scope": "user", "transport": "stdio", "command": "uvx", "route": "local"}
+        {"name": "docs", "scope": "user", "transport": "stdio", "command": "uvx", "route": "local",
+         "package": "docs-mcp"}
     ]
     # Without a gateway configured on this sensor, remote servers are "unknown", not "direct".
     plain = {r["product"]: r for r in scan(home, path_env=str(bin_dir), probe=up, platform="linux", roots=(),
@@ -255,3 +259,33 @@ def test_shadow_agents_raise_findings_and_the_hook_makes_claude_code_managed(
     cc = [e for e in install_events(enrolled) if e["payload"]["product"] == "claude-code"][-1]["payload"]
     assert cc["managed"] is True and "managed" in cc["changed"]
     assert findings(enrolled).count("ai-agent-outside-control") == 3  # becoming managed raises nothing
+
+
+@pytest.mark.parametrize(
+    ("command", "args", "package"),
+    [
+        ("npx", ["-y", "postmark-mcp@1.0.16"], "postmark-mcp@1.0.16"),
+        ("/usr/local/bin/npx", ["--yes", "@modelcontextprotocol/server-github"],
+         "@modelcontextprotocol/server-github"),
+        ("npx", ["-p", "postmark-mcp", "postmark"], "postmark-mcp"),
+        ("npx.cmd", ["-y", "postmark-mcp"], "postmark-mcp"),  # Windows
+        ("uvx", ["--from", "mcp-server-git==0.6", "mcp-server-git"], "mcp-server-git==0.6"),
+        ("uvx", ["--with", "httpx", "docs-mcp"], "docs-mcp"),
+        ("pipx", ["run", "mcp-fetch"], "mcp-fetch"),
+        ("pnpm", ["dlx", "server-fs"], "server-fs"),
+        ("npm", ["exec", "--", "server-fs"], "server-fs"),
+        # Not a launcher, no package-shaped argument, or a token where the package should be: nothing kept.
+        ("node", ["server.js", "--token=abc"], None),
+        ("npx", ["-y"], None),
+        ("npx", ["https://evil.example/pkg.tgz?token=abc"], None),
+        ("npx", ["sk_live_abc:def"], None),
+        ("pipx", ["install", "mcp-fetch"], None),
+        ("npx", "postmark-mcp", None),  # args not a list
+    ],
+)
+def test_launcher_package_keeps_only_the_package_spec(
+    command: str, args: object, package: str | None
+) -> None:
+    from sg_advance.sensor.adapters.coding_agents import launcher_package
+
+    assert launcher_package(command, args) == package

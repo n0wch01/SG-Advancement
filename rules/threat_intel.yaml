@@ -1,0 +1,74 @@
+# 위협 인텔리전스 목록 (KISA 「에이전틱 AI 제로트러스트 안내서」 C1-5, 시나리오 5): 알려진 악성 MCP 패키지·악성 도메인.
+# 허용 목록(supply_chain.yaml의 등록된 MCP 서버, egress 허용 도메인)이 1차 방어다. 이 목록은 허용 목록이 없는 길을 메운다:
+#   - 직원 PC의 Claude Code는 egress 프록시를 거치지 않는다(명령 판정만 있음).
+#   - 로컬(stdio) MCP 서버는 URL이 없어 허용 목록으로 볼 수 없다. 센서가 실행하는 패키지 이름만 보낸다(McpServerRef.package).
+#
+# 목록을 고칠 때는 아래 세 룰에 같게 넣고(정규식이라 YAML 앵커로 묶지 못함) tests/rule_cases/threat_intel.yaml에 케이스를 더한다.
+# 목록 (출처가 있는 것만):
+#   패키지 postmark-mcp  — 2025-09 npm 악성 MCP 서버. 보내는 메일마다 공격자 주소를 숨은 참조로 붙였다.
+#                          안내서 시나리오 5, 각주 11(Koi Security 보고). 같은 이름의 정상 패키지는 npm에 없다(공식은 GitHub).
+#   도메인 giftshop.club — 같은 사건에서 숨은 참조로 메일을 받던 도메인(같은 보고).
+#   도메인 evil-mcp.internet-sim — 데모 공격자 MCP 서버(compose internet-sim).
+#
+# 한계: 목록은 정규식이라 정책 편집기(M9)의 allow 덮어쓰기로는 고칠 수 없다. 룰 파일을 고쳐 검토·배포한다.
+#   새 매치 타입(denylist)을 만들지 않은 이유: 구 센서가 모르는 타입이 든 정책을 거부한다(호환성, 옵션은 태그로 추가해 온 원칙).
+version: 1
+rules:
+  # 설정 단계: 에이전트가 목록의 MCP 서버를 쓰도록 설정됨(섀도 AI 스캔). 실행 전이라 경보한다. 실제 호출·설치는 아래 룰이 막는다.
+  # 오탐 주의: 이름이 정확히 같아야 한다. 스코프(@회사/postmark-mcp)나 접두·접미가 붙은 다른 패키지는 걸리지 않는다.
+  # 미탐 주의: 정상 이름의 패키지가 나중에 악성 버전을 올리면(목록에 없음) 못 잡는다. 버전 범위로 좁히지 않고 이름 전체를 막는다.
+  - id: known-malicious-mcp-server
+    severity: critical
+    category: supply_chain
+    title: 알려진 악성 MCP 서버 설정
+    message: AI 에이전트가 위협 인텔리전스 목록에 있는 악성 MCP 패키지나 악성 도메인의 MCP 서버를 쓰도록 설정돼 있습니다.
+    recommended_action: 그 사람에게 MCP 설정에서 즉시 제거하게 하고, 이미 실행됐다면 그 서버가 접근한 메일·토큰을 회수·교체하세요.
+    response: alert
+    dedup: none
+    tags: [campaign, threat-intel, "kisa-zt:C1-5", owasp-agentic:T17]
+    when:
+      payload.kind: install.snapshot
+      payload.present: "true"
+      "payload.changed[]": [present, mcp_servers]
+    match:
+      type: regex
+      fields: ["payload.mcp_servers[].package", "payload.mcp_servers[].command", "payload.mcp_servers[].url"]
+      ignore_case: true
+      pattern: '^(?:(?:postmark-mcp)(?:(?:@|==).*)?|https?://(?:[\w-]+\.)*(?:giftshop\.club|evil-mcp\.internet-sim)(?::\d+)?(?:/.*)?)$'
+
+  # 실행 단계: 셸로 목록의 패키지를 실행·설치(MCP 서버로 등록하는 명령 포함). 바로 차단(승인 원칙: 공격 진행 신호).
+  # 오탐 주의: 문서 검색처럼 이름만 나오는 명령은 걸리지 않는다(실행·설치 명령 뒤에 올 때만).
+  # 미탐 주의: 스크립트 안에서 설치하거나 변수로 이름을 만들면 못 잡는다(평가 E02·E05와 같은 한계).
+  - id: known-malicious-package-run
+    severity: critical
+    category: supply_chain
+    title: 알려진 악성 패키지 실행·설치
+    message: 위협 인텔리전스 목록에 있는 악성 패키지를 실행하거나 설치하려 해 차단했습니다.
+    recommended_action: 누가(사람·인젝션) 이 패키지를 가져오게 했는지 같은 대화를 확인하세요. 이미 설치됐다면 제거하세요.
+    response: block
+    tags: ["grade:3-1", campaign, threat-intel, "kisa-zt:C1-5", owasp-agentic:T17]
+    when: {payload.kind: tool.call}
+    match:
+      type: regex
+      fields: [payload.arguments.command, payload.arguments.cmd]
+      ignore_case: true
+      pattern: '\b(?:npx|pnpx|bunx|uvx|pipx\s+(?:run|install)|npm\s+(?:i|install|add|exec|x)|pnpm\s+(?:add|i|install|dlx)|yarn\s+(?:add|dlx)|pip3?\s+install|uv\s+(?:add|pip\s+install))\b[^;&|\n]*?(?<![\w@/.-])(?:postmark-mcp)(?:(?:@|==)[\w.^~*-]+)?(?![\w./-])'
+
+  # 툴 호출 인자에 목록의 도메인(URL, 메일 주소의 도메인, 하위 도메인 포함)이 있음. 바로 차단(외부 유출 경로).
+  # 셸·웹 요청·MCP 툴(예: 메일 발송의 숨은 참조)을 모두 본다. 입력 PEP·egress 허용 목록이 놓친 경우를 막는다.
+  # 오탐 주의: 그 도메인을 조사하는 명령(예: 차단 로그 검색)도 막힌다. 조사는 콘솔에서 하게 한다.
+  # 미탐 주의: 도메인을 쪼개거나(문자열 연결) 인코딩하면 못 잡는다. IP 주소는 목록에 없다.
+  - id: known-malicious-domain
+    severity: critical
+    category: data_exfiltration
+    title: 알려진 악성 도메인으로 가는 호출
+    message: 툴 호출이 위협 인텔리전스 목록에 있는 악성 도메인을 가리켜 차단했습니다.
+    recommended_action: 인젝션이 있었는지 같은 대화를 확인하고, 그 도메인을 넣은 설정·문서·MCP 서버를 찾아 제거하세요.
+    response: block
+    tags: ["grade:3-1", campaign, threat-intel, "kisa-zt:C1-5", owasp-llm:LLM02]
+    when: {payload.kind: tool.call}
+    match:
+      type: regex
+      fields: [payload.arguments]
+      ignore_case: true
+      pattern: '(?<![\w.-])(?:[\w-]+\.)*(?:giftshop\.club|evil-mcp\.internet-sim)(?![\w-]|\.[\w-])'
