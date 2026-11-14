@@ -47,6 +47,7 @@ CLAUDE.md 2차 작업의 첫 번째 완성 감시 시나리오다.
 |---|---|---|
 | `protected-data-read` | 테스트 DB 결과의 보호 컬럼 값을 모은다. 설명에는 컬럼 이름과 개수만 남긴다 | 알림(medium) |
 | `protected-data-to-unapproved-destination` | `sga_data_class=protected` 그리고 목적지 중 하나라도 승인 목록 밖 | **차단**(critical, 3-1) |
+| `protected-data-destination-unclear` | 보호 데이터가 실렸는데 목적지가 안 보임(주소 없는 셸 명령 `local`, 모르는 툴 `unknown`) | **사용자 승인**(high, 3-1). 승인하면 보안팀 사후 검토 큐(2026-11-14) |
 | `transfer-with-lineage-unavailable` | 출처 기록 파일을 읽을 수 없음(fail closed) 그리고 목적지가 승인 목록 밖 | **차단**(high, 3-1) |
 
 ### 예전 센서와의 호환
@@ -110,7 +111,7 @@ Finding의 `evidence_event_ids`는 출처 이벤트로 시작한다. 그래서 �
 
 - **값을 바꾸면 연결되지 않는다**: base64, 해시, 일부만, 요약, 다른 표기(공백으로 나눈 번호)가 여기에 든다. 정확한 값 일치만 본다.
 - **셸이 만든 파일**: `sqlite3 ... > out.csv`처럼 셸 명령의 출력으로 만든 파일은 내용을 센서가 보지 못한다. 에이전트의 Write·Edit로 쓴 파일만 추적한다.
-- **목적지를 못 찾는 셸 명령**: 스크립트 안에서 보내는 경우(`python upload.py`)는 `local`로 보아 통과한다. 목적지 추출은 URL과 `scp`·`rsync`·`sftp`·`nc`·`telnet`·`ssh`의 호스트만 본다.
+- **목적지를 못 찾는 셸 명령**: 스크립트 안에서 보내는 경우(`python upload.py`)와 PC 안에서만 다루는 경우를 구별하지 못한다. 그래서 사용자에게 묻고, 보안팀이 사후에 확인한다(2026-11-14). 목적지 추출은 URL과 `scp`·`rsync`·`sftp`·`nc`·`telnet`·`ssh`의 호스트만 본다.
 - **출처는 테스트 DB의 JSON 결과만**: 컬럼 별칭(`SELECT phone AS p`), 표·CSV 형식 결과, 4자 미만 값은 모으지 않는다.
 - **장비 단위**: 출처 기록은 PC의 센서마다 따로다. 중앙 MCP 게이트웨이만 거친 조회는 노트북 hook이 모른다. 노트북의 로컬 게이트웨이가 중앙 게이트웨이 앞에 있어야 잇는다.
 - **기록 파일 삭제**: `lineage.json`이 깨지면 차단 쪽으로 가지만, 사용자가 지우면 빈 기록과 구별하지 못한다. 관리자 권한 설치에서만 막을 수 있다.

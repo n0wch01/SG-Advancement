@@ -80,11 +80,25 @@ Claude Code ─▶ 노트북 센서의 로컬 게이트웨이 ─▶ LAN 게이�
 - 2-1과 3-1 등급은 사람의 명시적 승인 이상이어야 한다.
 - 3-1 등급을 사람이 승인하는 경우 사후 감사가 붙어야 한다. 그래서 severity는 high 이상이어야 하고, `user-approved-high-risk`가 감사한다.
 
+### 승인 원칙 (2026-11-14)
+
+결정: 사용자 승인을 먼저 받고, 매우 위험한 것만 바로 차단하며, 보안팀은 사후에 확인한다.
+
+| 구분 | 무엇 | 처리 |
+|---|---|---|
+| 바로 차단 | 공격 진행 신호(인젝션 뒤 민감 행동, 인젝션 문구를 하위 에이전트에 넘김, 위임 전파), 외부 유출(보호 데이터·비밀값·민감 파일의 외부 전송, 미허가 외부 호스트) | 사용자 승인 없이 차단 |
+| 사용자 승인 | 그 밖의 위험 행동: 되돌릴 수 없는 삭제(파괴적 셸·SQL·클라우드 명령), 목적지가 안 보이는 보호 데이터 전송 등. 3-1 등급 포함 | 에이전트 확인 창. MCP 게이트웨이는 사람에게 물을 수 없어 보안팀 보류 |
+| 보안팀 사후 검토 | 사용자가 승인한 high·critical 호출 | 콘솔 승인 감사의 "보안팀 검토 대기"에서 확인함·문제 있음으로 표시한다(감사 체인에 기록). 문제가 있으면 Finding 화면에서 사람·대화 차단 |
+| 그대로 둠 | 실패 처리(정책 만료, PC 상태 미달, 출처 기록 손상, 데몬·판정 실패), 보안팀이 이미 내린 결정(원격 차단, 변조·미승인 플러그인·스킬·MCP 격리), 위험도가 높아진 사람의 민감 리소스 접근(보안팀 승인), 폭주 중단 | 사용자 승인으로 넘기지 않음 |
+
+- 마지막 줄은 사용자 승인으로 내리면 차단된 사람이 스스로 풀 수 있게 된다. CLAUDE.md의 "장애를 사용자 승인만으로 넘기지 않는다"와도 맞지 않는다.
+- 실행 전에 보안팀이 봐야 하는 룰은 팀 정책에서 응답을 `security_approval`로 올리거나 `approval:security` 태그를 붙인다.
+
 | 등급 | 룰 |
 |---|---|
 | 0 (조회) | `sensitive-file-access` |
 | 2-1 (에이전트 간 전달) | `cross-agent-injection-propagation`, `injection-relayed-to-agent` |
-| 3-1 (영구 삭제·외부 유출) | `destructive-shell-command`, `destructive-sql`, `destructive-cloud-command`, `sensitive-file-exfil-command`, `secret-in-tool-arguments`, `injection-then-sensitive-action` |
+| 3-1 (영구 삭제·외부 유출) | 사용자 승인: `destructive-shell-command`, `destructive-sql`, `destructive-cloud-command`, `protected-data-destination-unclear`. 차단: `sensitive-file-exfil-command`, `secret-in-tool-arguments`, `injection-then-sensitive-action`, `protected-data-to-unapproved-destination`, `transfer-with-lineage-unavailable` |
 
 2-2와 3-2 등급(실시간이라 사전 승인 정책 안에서 자동 실행)은 해당하는 행동이 없어 쓰지 않는다.
 
