@@ -537,6 +537,7 @@ sga-sensor run --openclaw          # 데몬이 <home>/sga.sock을 연다 (--sock
 - **MCP 서버의 경로**: `gateway`(이 센서가 아는 MCP 게이트웨이 주소 아래), `direct`(그 밖의 원격 주소), `local`(stdio 명령), `unknown`(게이트웨이를 모르는 장비).
   게이트웨이 주소는 `--mcp-gateway`를 같이 띄우면 자동, 공용 게이트웨이면 `--mcp-gateway-url`.
 - **개인정보**: 서버 이름, 주소(쿼리 문자열·계정 정보 제거), 명령의 실행 파일 이름만 보낸다. 인자와 환경 변수는 MCP 설정이 토큰을 두는 곳이라 보내지 않는다.
+  - 예외(2026-11-14): 로컬 서버를 패키지 실행기(`npx`, `uvx`, `pipx run`, `pnpm dlx` 등)로 띄우면 실행하는 **패키지 이름 하나**(`postmark-mcp@1.0.16`)를 `package`로 보낸다. 알려진 악성 패키지 목록([rules/threat_intel.yaml](../rules/threat_intel.yaml))과 대조하기 위해서다. 패키지 이름 모양이 아니면(URL, 콜론이 든 값 등) 보내지 않는다.
 - 룰: `ai-agent-outside-control`(medium, 통제 밖 에이전트가 설정됨), `mcp-server-bypasses-gateway`(high, 게이트웨이를 거치지 않는 원격 MCP 서버,
   캠페인 대상: 지표는 서버 주소). 둘 다 관리 상태나 MCP 목록이 바뀐 스냅샷에서만 경보한다.
 
