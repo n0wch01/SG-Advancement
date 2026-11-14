@@ -67,6 +67,7 @@ _DIGIT_RUN = re.compile(r"\d[\d\-.]{6,}\d")
 _TOKEN = re.compile(r"[\w.@+\-]{4,}")  # MIN_TOKEN
 _URL = re.compile(r"\b[a-z][a-z0-9+.-]*://([^/\s:'\"@]+@)?([^/\s:'\"?#]+)", re.I)
 _SCP = re.compile(r"\b(?:scp|rsync|sftp)\b[^|;&]*?\s(?:[\w.-]+@)?([\w.-]+\.[\w-]+|\d+\.\d+\.\d+\.\d+):", re.I)
+_GH = re.compile(r"(?:^|[\s;&|(\"'])gh\s+(?:issue|pr|repo|api|release|gist|run|search)\b")
 _HOST = r"([\w.-]+\.[\w-]+|\d+\.\d+\.\d+\.\d+)"
 _SOCKET = re.compile(r"\b(?:nc|ncat|netcat|telnet|ssh)\s+(?:-\S+\s+)*(?:[\w.-]+@)?" + _HOST, re.I)
 
@@ -124,6 +125,8 @@ def destinations(event: AgentEvent) -> list[str]:
     text = _text(args)
     hosts = {m.group(2).lower().rstrip(".") for m in _URL.finditer(text)}
     if tool in SHELL_TOOLS:
+        if _GH.search(text):  # the GitHub CLI talks to github.com without a URL (issues, PRs: external input)
+            hosts.add("github.com")
         hosts |= {m.group(1).lower() for m in _SCP.finditer(text)}
         hosts |= {m.group(1).lower() for m in _SOCKET.finditer(text)}
         return sorted(hosts) or ["local"]

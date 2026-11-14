@@ -65,6 +65,66 @@ rules:
       fields: [payload.arguments]
       pattern: '\baws\s+s3\s+rb\b|\baws\s+s3\s+rm\b.*--recursive|\baws\s+[\w-]+\s+(delete|terminate)-[\w-]+|\bterraform\s+destroy\b|\bkubectl\s+delete\s+(ns|namespaces?|all)\b|\bkubectl\s+delete\b.*--all\b'
 
+  # ── 후속 시나리오 ①: 외부 입력 뒤의 파괴적 행동 (docs/external-input.md, 2026-11-14) ──
+  # 출처: 센서가 툴 결과마다 그 호출이 말을 건 곳을 labels.sga_input_source로 붙인다(웹 호스트, mcp:<서버>, search, local, file:<경로>).
+  #   호출 인자에서 읽은 것이고 에이전트가 붙인 같은 이름 라벨은 지운다. 외부인지는 아래 룰이 정한다.
+  # 파괴적 행동 패턴은 위 세 룰(셸·SQL·클라우드)을 합친 것이다(&destructive). 위 룰을 고치면 여기도 같이 고친다
+  #   (tests/test_rule_cases.py가 위 룰의 양성 케이스가 여기에도 걸리는지 확인).
+  # 결정(2026-11-14): 인젝션 문구 뒤 = 공격 진행 신호 → 바로 차단. 인젝션 문구 없는 외부 입력 뒤 = 사용자 승인(따로 기록, 보안팀 검토).
+  # 미탐 주의: 문구를 바꾼 인젝션은 첫 룰이 놓치고 두 번째 룰(승인)로만 잡힌다. 다른 대화·하위 에이전트로 넘어간 경우는
+  #   묶지 않는다(위임 통제는 따로). 센서 데몬이 없으면(hook 단독) 시퀀스를 기억하지 못한다.
+  - id: injection-then-destructive-action
+    severity: critical
+    category: prompt_injection
+    title: 인젝션 이후 파괴적 행동
+    message: 인젝션 의심 텍스트를 읽은 직후 같은 대화에서 되돌릴 수 없는 삭제·파괴 명령이 실행되려 해 차단했습니다.
+    recommended_action: 인젝션이 들어온 문서(근거 이벤트의 첫 결과)의 출처를 확인하고, 같은 대화를 검토하세요.
+    response: block
+    tags: ["grade:3-1", owasp-llm:LLM01, owasp-llm:LLM06, scenario:F1]
+    match:
+      type: sequence
+      within_seconds: 600
+      steps:
+        - name: injected-content
+          when: {payload.kind: tool.result}
+          fields: [payload.output_preview]
+          ignore_case: true
+          # injection-then-sensitive-action(prompt_injection.yaml)의 1단계와 같게 유지
+          pattern: 'ignore (all )?(previous|prior|above) instructions|<important>|<\|im_start\|>system|<<SYS>>|\.env.*읽|읽.*\.env|단계별.*지시|send .{0,40}(\.env|credentials|secret)'
+        - name: destructive-action
+          when: {payload.kind: tool.call}
+          fields: &destructive_fields [payload.arguments.command, payload.arguments.cmd, payload.arguments.query, payload.arguments.sql, payload.arguments.statement]
+          ignore_case: true
+          pattern: &destructive >-
+            (?x)\brm\s+-[a-z]*(rf|fr)[a-z]*\b|\brm\s+-[a-z]*r[a-z]*\s+-[a-z]*f|\bmkfs(\.\w+)?\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:|\bchmod\s+-R\s+777\s+/|\bgit\s+push\s+.*(--force\b|-f\b)
+            |\baws\s+s3\s+rb\b|\baws\s+s3\s+rm\b.*--recursive|\baws\s+[\w-]+\s+(delete|terminate)-[\w-]+|\bterraform\s+destroy\b|\bkubectl\s+delete\s+(ns|namespaces?|all)\b|\bkubectl\s+delete\b.*--all\b
+            |(?:^|;)(?:\s|--[^\n]*\n)*(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))
+            |\b(?:psql|mysql|mariadb|sqlite3|sqlcmd|clickhouse-client|duckdb|snowsql|mongosh|cqlsh|cockroach\s+sql|bq\s+query)\b[\s\S]*?\b(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))
+            |\b(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))[^|\n]*\|\s*(?:\S+\s+)*?(?:psql|mysql|mariadb|sqlite3|sqlcmd|clickhouse-client|duckdb|snowsql|mongosh|cqlsh|cockroach\s+sql|bq\s+query)\b
+
+  - id: destructive-after-external-input
+    severity: critical
+    category: tool_misuse
+    title: 외부 콘텐츠를 읽은 직후의 파괴적 행동
+    message: 외부(웹·외부 MCP·검색 등)에서 읽은 내용 직후 같은 대화에서 되돌릴 수 없는 명령이 실행되려 해 사용자 승인을 받습니다.
+    recommended_action: 사용자가 승인했다면 보안팀 검토 큐에서 외부 입력(근거 이벤트의 첫 결과)과 명령이 이어지는지 확인하세요.
+    response: require_approval
+    tags: ["grade:3-1", owasp-llm:LLM01, owasp-llm:LLM06, scenario:F1]
+    match:
+      type: sequence
+      within_seconds: 600
+      steps:
+        - name: external-input
+          when: {payload.kind: tool.result}
+          fields: [labels.sga_input_source]
+          # 사내·로컬이 아닌 출처가 하나라도 있으면 외부. 사내 MCP 서버·사내 호스트 목록은 여기서 관리한다.
+          pattern: '(?:^|,)(?!(?:local|mcp:(?:testdb|reports|crm)|file:[^,]*|[^,]*\.corp\.internal)(?:,|$))[^,]+'
+        - name: destructive-action
+          when: {payload.kind: tool.call}
+          fields: *destructive_fields
+          ignore_case: true
+          pattern: *destructive
+
   # T15 (docs/incidents.md: Nx s1ngularity). 센서가 session.start에 실행 방식을 담아야 동작한다 (M6~).
   # 오탐 주의: 샌드박스·컨테이너에서 일부러 권한 확인을 끄는 개발자도 있다. 그래서 alert.
   - id: agent-safety-bypass

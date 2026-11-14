@@ -199,6 +199,7 @@ class Sensor:
         self._load_posture()
         # Phase 2 (CLAUDE.md): which tool calls carry protected test DB data, and where to (lineage.py).
         self.lineage = lineage_mod.LineageStore(home.root / "lineage.json")
+        self._call_sources: dict[str, tuple[str, datetime]] = {}
         # Outcome model (2026-11-13): tool calls refused by handing the decision to the agent, kept until
         # their result shows up (then the refusal was not applied) or they age out.
         self._refused: dict[str, tuple[list[str], datetime]] = {}
@@ -354,17 +355,20 @@ class Sensor:
         update: dict[str, object] = {}
         if ep.device_id != self.creds.device_id:
             update["endpoint"] = ep.model_copy(update={"device_id": self.creds.device_id})
-        if any(k in event.labels for k in lineage_mod.LABELS):  # the sensor's own; never taken from input
-            update["labels"] = {k: v for k, v in event.labels.items() if k not in lineage_mod.LABELS}
+        if any(k in event.labels for k in self._OWN_LABELS):  # the sensor's own; never taken from input
+            update["labels"] = {k: v for k, v in event.labels.items() if k not in self._OWN_LABELS}
         if event.kind is EventKind.TOOL_CALL:
             base = update.get("labels", event.labels)
             clean = event.model_copy(update={"labels": base}) if "labels" in update else event
             labels = self.state_labels() | self.lineage.labels_for(clean)
             if labels:
                 update["labels"] = base | labels  # type: ignore[operator]
+            self._remember_source(clean)
         elif event.kind is EventKind.TOOL_RESULT:
             if tracked := self.lineage.labels_for(event):
                 update["labels"] = update.get("labels", event.labels) | tracked  # type: ignore[operator]
+            if source := self._source_of(event):
+                update["labels"] = update.get("labels", event.labels) | {"sga_input_source": source}  # type: ignore[operator]
             refused = self._refused.pop(getattr(event.payload, "call_id", ""), None)
             if refused is not None:
                 update["labels"] = (
@@ -375,6 +379,31 @@ class Sensor:
                     }
                 )
         return event.model_copy(update=update) if update else event
+
+    # Follow-up scenario 1 (docs/external-input.md): where a tool result came from = where its call talked
+    # to, read from the call's own arguments (URL host, MCP server, search, local). The rules decide
+    # what is external. Calls are remembered until their result arrives (bounded).
+    _OWN_LABELS = (*lineage_mod.LABELS, "sga_input_source")
+    SOURCE_KEEP = timedelta(hours=1)
+    SOURCE_MAX = 5000
+
+    def _remember_source(self, call: AgentEvent) -> None:
+        call_id = getattr(call.payload, "call_id", None)
+        if not call_id:
+            return
+        if len(self._call_sources) >= self.SOURCE_MAX:
+            cutoff = now_utc() - self.SOURCE_KEEP
+            self._call_sources = {k: v for k, v in self._call_sources.items() if v[1] >= cutoff}
+            while len(self._call_sources) >= self.SOURCE_MAX:
+                self._call_sources.pop(next(iter(self._call_sources)))
+        self._call_sources[call_id] = (",".join(lineage_mod.destinations(call))[:500], now_utc())
+
+    def _source_of(self, result: AgentEvent) -> str | None:
+        known = self._call_sources.pop(getattr(result.payload, "call_id", ""), None)
+        if known is not None:
+            return known[0]
+        server = lineage_mod.mcp_server_of(result)  # the gateway knows the server from the result itself
+        return f"mcp:{server}" if server else None
 
     REFUSED_KEEP = timedelta(hours=24)
     REFUSED_MAX = 5000
