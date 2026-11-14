@@ -300,6 +300,21 @@ class SecurityApproval(Base):
     request_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class ApprovalReview(Base):
+    """Security's after-the-fact review of a person's own approval (decision 2026-11-14: the person
+    approves first, only very high risk is blocked, security reviews). One review per approval
+    (``approval.resolved`` event): ``ok`` or ``problem``. Kept in the audit chain."""
+
+    __tablename__ = "approval_reviews"
+
+    approval_event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(200), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    reviewed_by: Mapped[str] = mapped_column(String(200))
+    reason: Mapped[str] = mapped_column(String(1000))
+    reviewed_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
 def make_engine(url: str) -> Engine:
     if url.startswith("sqlite"):
         path = url.split("///", 1)[-1]

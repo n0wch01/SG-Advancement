@@ -174,3 +174,31 @@ cases:
         arguments: {command: "ls"}
         labels: {sga_lineage: unavailable, sga_destinations: local}
     expect_not: [transfer-with-lineage-unavailable]
+
+  # 결정(2026-11-14): 목적지가 안 보이는 경우(셸 명령에 주소 없음 `local`, 모르는 툴 `unknown`)는
+  # 바로 막지 않고 사용자 승인. 보안팀이 사후 검토 큐에서 확인한다.
+  - name: 보호 데이터가 실린 호출의 목적지가 안 보임 → 사용자 승인
+    events:
+      - kind: tool.call
+        tool: Bash
+        arguments: {command: "python upload.py [보호 데이터]"}
+        labels: {sga_data_class: protected, sga_destinations: local}
+      - kind: tool.call
+        tool: some_plugin_tool
+        arguments: {text: "[보호 데이터]"}
+        labels: {sga_data_class: protected, sga_destinations: unknown}
+    expect: [protected-data-destination-unclear]
+    expect_not: [protected-data-to-unapproved-destination]
+
+  - name: 목적지가 보이고 승인된 곳이면 묻지 않음
+    events:
+      - kind: tool.call
+        tool: save_report
+        provider: {kind: mcp, mcp_server: reports}
+        arguments: {title: vip}
+        labels: {sga_data_class: protected, sga_destinations: "mcp:reports"}
+      - kind: tool.call
+        tool: Bash
+        arguments: {command: "curl https://wiki.corp.internal/x"}
+        labels: {sga_destinations: local}
+    expect_not: [protected-data-destination-unclear]

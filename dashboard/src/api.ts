@@ -4,6 +4,7 @@
 
 import type {
   Approval,
+  ApprovalReview,
   Device,
   DeviceInventory,
   Finding,
@@ -96,8 +97,16 @@ export class Api {
     return this.get<Finding[]>("/findings", q);
   }
 
-  approvals(q: { approved?: string; decision?: string; user_id?: string; since?: string | null; limit?: number; offset?: number }) {
+  approvals(q: { approved?: string; decision?: string; user_id?: string; review?: string; since?: string | null; limit?: number; offset?: number }) {
     return this.get<Approval[]>("/approvals", q);
+  }
+
+  reviewCount() {
+    return this.get<{ pending: number }>("/approvals/review-count");
+  }
+
+  reviewApproval(eventId: string, body: { status: "ok" | "problem"; by: string; reason: string }) {
+    return this.call<ApprovalReview>("POST", `/approvals/${encodeURIComponent(eventId)}/review`, body);
   }
 
   approvalMetrics(days: number) {

@@ -130,6 +130,15 @@ export interface Approval {
   held_call: { event_id: string; ts: string; tool: string; arguments: Record<string, unknown> } | null;
   asked_by: FindingRef[];
   flagged: FindingRef[];
+  needs_review?: boolean;
+  review?: ApprovalReview | null;
+}
+
+export interface ApprovalReview {
+  status: "ok" | "problem";
+  by: string;
+  reason: string;
+  at: string;
 }
 
 export interface Snapshot {

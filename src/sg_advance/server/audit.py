@@ -14,17 +14,22 @@ The console (M7) renders this endpoint; ``sga-server audit approvals`` prints it
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from . import audit_chain
 from .auth import DbSession, require_admin
-from .db import EventRow, FindingRow
+from .db import ApprovalReview, EventRow, FindingRow, utcnow
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 AUDIT_RULES = ("user-approved-high-risk", "approval-fatigue")
+# Decision 2026-11-14: the person approves first; security reviews every approval of a high or critical
+# call afterwards (the review queue). Only very high risk is blocked outright by the rules.
+REVIEW_SEVERITIES = ("high", "critical")
+ReviewFilter = Literal["pending", "ok", "problem"]
 _ACTION_SLACK = timedelta(hours=1)  # the person's answer is recorded before the plugin's own event
 
 
@@ -44,6 +49,19 @@ class FindingRef(_Model):
     rule_id: str
     severity: str
     title: str
+
+
+class ReviewOut(_Model):
+    status: str  # ok | problem
+    by: str
+    reason: str
+    at: datetime
+
+
+class ReviewIn(_Model):
+    status: Literal["ok", "problem"]
+    by: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class ApprovalOut(_Model):
@@ -66,6 +84,16 @@ class ApprovalOut(_Model):
     held_call: HeldCall | None
     asked_by: list[FindingRef]  # findings that put the call on hold
     flagged: list[FindingRef]  # audit findings raised by this answer
+    needs_review: bool = False  # approved, high or critical: on security's review queue
+    review: ReviewOut | None = None
+
+
+def needs_review(payload: dict[str, Any]) -> bool:
+    return payload.get("approved") is True and payload.get("max_severity") in REVIEW_SEVERITIES
+
+
+def _review_out(r: ApprovalReview) -> ReviewOut:
+    return ReviewOut(status=r.status, by=r.reviewed_by, reason=r.reason, at=r.reviewed_at)
 
 
 def _ref(doc: dict[str, Any]) -> FindingRef:
@@ -82,10 +110,12 @@ def list_approvals(
     decision: str | None = None,
     approved: bool | None = None,
     since: datetime | None = None,
+    review: ReviewFilter | None = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[ApprovalOut]:
-    """Newest first. ``approved=true`` is the usual audit view."""
+    """Newest first. ``approved=true`` is the usual audit view; ``review=pending`` is security's queue
+    (approved high/critical calls nobody has reviewed yet)."""
     q = select(EventRow).where(EventRow.kind == "approval.resolved")
     for col, val in ((EventRow.user_id, user_id), (EventRow.device_id, device_id)):
         if val is not None:
@@ -98,6 +128,16 @@ def list_approvals(
         docs = [d for d in docs if d["payload"]["decision"] == decision]
     if approved is not None:
         docs = [d for d in docs if d["payload"]["approved"] is approved]
+    reviews = {
+        r.approval_event_id: r
+        for r in db.scalars(
+            select(ApprovalReview).where(ApprovalReview.approval_event_id.in_([d["event_id"] for d in docs]))
+        )
+    }
+    if review == "pending":
+        docs = [d for d in docs if needs_review(d["payload"]) and d["event_id"] not in reviews]
+    elif review is not None:
+        docs = [d for d in docs if (r := reviews.get(d["event_id"])) is not None and r.status == review]
     docs = docs[offset : offset + limit]
     if not docs:
         return []
@@ -169,6 +209,56 @@ def list_approvals(
                 else None,
                 asked_by=[_ref(asked[i]) for i in p.get("finding_ids", []) if i in asked],
                 flagged=flags.get(d["event_id"], []),
+                needs_review=needs_review(p),
+                review=_review_out(r) if (r := reviews.get(d["event_id"])) else None,
             )
         )
     return out
+
+
+@router.get("/approvals/review-count")
+def review_count(db: DbSession) -> dict[str, int]:
+    """Approved high/critical calls security has not reviewed yet (the console's overview tile)."""
+    reviewed = set(db.scalars(select(ApprovalReview.approval_event_id)))
+    rows = db.scalars(select(EventRow).where(EventRow.kind == "approval.resolved"))
+    return {"pending": sum(1 for r in rows if needs_review(r.doc["payload"]) and r.event_id not in reviewed)}
+
+
+@router.post("/approvals/{event_id}/review", response_model=ReviewOut)
+def review_approval(event_id: str, body: ReviewIn, request: Request, db: DbSession) -> ReviewOut:
+    """Security's verdict on a person's approval. ``problem`` is followed by a response (block the person
+    or conversation from the finding page); the review itself changes nothing on the device."""
+    if request.state.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "reviewing needs the admin token")
+    row = db.get(EventRow, event_id)
+    if row is None or row.kind != "approval.resolved":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "approval not found")
+    if db.get(ApprovalReview, event_id) is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "already reviewed")
+    r = ApprovalReview(
+        approval_event_id=event_id,
+        user_id=row.doc["principal"]["user_id"],
+        status=body.status,
+        reviewed_by=body.by,
+        reason=body.reason,
+        reviewed_at=utcnow(),
+    )
+    db.add(r)
+    p = row.doc["payload"]
+    audit_chain.append(
+        db,
+        "approval_review",
+        event_id,
+        {
+            "status": r.status,
+            "by": r.reviewed_by,
+            "reason": r.reason,
+            "at": r.reviewed_at,
+            "user_id": r.user_id,
+            "tool": p.get("tool"),
+            "rule_ids": p.get("rule_ids", []),
+            "call_id": p.get("call_id"),
+        },
+    )
+    db.commit()
+    return _review_out(r)

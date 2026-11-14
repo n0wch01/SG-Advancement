@@ -19,6 +19,7 @@ import {
   relativeTime,
   responseText,
   lineageFlow,
+  reviewText,
   severityRank,
   sinceFor,
   waitText,
@@ -241,5 +242,14 @@ describe("lineageFlow", () => {
 
   it("is only for transfer findings", () => {
     expect(lineageFlow({ ...(finding as object), tags: [] } as never, [])).toBeNull();
+  });
+});
+
+describe("reviewText", () => {
+  it("shows what security still has to look at", () => {
+    expect(reviewText({ needs_review: true, review: null })).toEqual({ label: "검토 대기", tone: "wait" });
+    expect(reviewText({ needs_review: false, review: null }).tone).toBe("none");
+    const done = reviewText({ needs_review: true, review: { status: "problem", by: "lead", reason: "x", at: "2026-11-14T00:00:00Z" } });
+    expect(done).toEqual({ label: "문제 있음 · lead", tone: "bad" });
   });
 });

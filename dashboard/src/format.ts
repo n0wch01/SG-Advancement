@@ -1,6 +1,6 @@
 // Pure helpers: labels, time, event one-liners, hash routes. Kept free of React for unit tests.
 
-import type { AgentEvent, Finding, Severity } from "./types";
+import type { AgentEvent, Approval, Finding, Severity } from "./types";
 
 export const SEVERITIES: Severity[] = ["critical", "high", "medium", "low", "info"];
 
@@ -433,4 +433,13 @@ export function lineageFlow(
     lines: [responseText(f.response), ...(f.response?.evidence ? [`근거: ${f.response.evidence}`] : [])],
   });
   return steps;
+}
+
+// Security's after-the-fact review of a person's own approval (decision 2026-11-14).
+export const REVIEW_LABEL: Record<string, string> = { ok: "확인함", problem: "문제 있음" };
+
+export function reviewText(a: Pick<Approval, "needs_review" | "review">): { label: string; tone: "ok" | "bad" | "wait" | "none" } {
+  if (a.review) return { label: `${REVIEW_LABEL[a.review.status] ?? a.review.status} · ${a.review.by}`, tone: a.review.status === "ok" ? "ok" : "bad" };
+  if (a.needs_review) return { label: "검토 대기", tone: "wait" };
+  return { label: "-", tone: "none" };
 }

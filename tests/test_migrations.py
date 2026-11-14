@@ -21,7 +21,7 @@ def test_migrations_produce_exactly_the_models(tmp_path) -> None:
     with db.engine.connect() as conn:
         ctx = MigrationContext.configure(conn, opts={"compare_type": True})
         assert compare_metadata(ctx, Base.metadata) == []
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0008"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0009"
     db.create_all()  # idempotent on every start
 
 
@@ -45,6 +45,6 @@ def test_a_database_from_before_migrations_keeps_its_data(tmp_path) -> None:
     db = Database(url)
     db.create_all()
     with db.engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0008"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0009"
         assert conn.execute(text("SELECT device_id, group_name FROM devices")).all() == [("dev-1", None)]
         assert {"policy_groups", "policy_overrides", "policy_changes"} <= set(inspect(conn).get_table_names())

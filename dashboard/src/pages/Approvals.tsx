@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 
-import type { Api } from "../api";
+import { ApiError, type Api } from "../api";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
-import { DECISION_LABEL, approvalsHref, approverText, clip, formatTime, relativeTime, sinceFor, waitText } from "../format";
-import type { Approval, ApprovalMetrics, ChannelStats } from "../types";
+import { DECISION_LABEL, approvalsHref, approverText, clip, formatTime, relativeTime, reviewText, sinceFor, timelineHref, waitText } from "../format";
+import type { Approval, ApprovalMetrics, ChannelStats, Role } from "../types";
 
 const PAGE = 50;
 const RANGES: [string, string][] = [
@@ -14,9 +14,10 @@ const RANGES: [string, string][] = [
   ["all", "전체"],
 ];
 
-// Policy (2026-11-11): people approve risky actions themselves; security reviews them here afterwards.
-export function Approvals({ api, query }: { api: Api; query: Record<string, string> }) {
-  const view = query.approved === "false" ? "denied" : query.approved === "all" ? "all" : "approved";
+// Policy (2026-11-11, 2026-11-14): people approve risky actions themselves, grade 3-1 included; only very
+// high risk is blocked outright. Security reviews each approved high/critical call here afterwards.
+export function Approvals({ api, query, role }: { api: Api; query: Record<string, string>; role: Role | null }) {
+  const view = query.review === "pending" ? "pending" : query.approved === "false" ? "denied" : query.approved === "all" ? "all" : "approved";
   const range = query.range ?? "7d";
   const [rows, setRows] = useState<Approval[]>([]);
   const [error, setError] = useState<Error | null>(null);
@@ -29,7 +30,8 @@ export function Approvals({ api, query }: { api: Api; query: Record<string, stri
     setError(null);
     try {
       const page = await api.approvals({
-        approved: view === "all" ? undefined : String(view === "approved"),
+        approved: view === "all" ? undefined : String(view !== "denied"),
+        review: view === "pending" ? "pending" : undefined,
         user_id: query.user_id,
         since: sinceFor(range),
         limit: PAGE,
@@ -51,7 +53,7 @@ export function Approvals({ api, query }: { api: Api; query: Record<string, stri
   }, [api, key]);
 
   const go = (next: Record<string, string | undefined>) => {
-    window.location.hash = approvalsHref({ approved: query.approved, range: query.range, user_id: query.user_id, ...next });
+    window.location.hash = approvalsHref({ approved: query.approved, review: query.review, range: query.range, user_id: query.user_id, ...next });
   };
 
   return (
@@ -74,12 +76,13 @@ export function Approvals({ api, query }: { api: Api; query: Record<string, stri
         <div className="segmented" role="group" aria-label="결정">
           {(
             [
-              ["approved", "승인한 것", undefined],
-              ["denied", "거절·시간 초과", "false"],
-              ["all", "전체", "all"],
+              ["pending", "보안팀 검토 대기", undefined, "pending"],
+              ["approved", "승인한 것", undefined, undefined],
+              ["denied", "거절·시간 초과", "false", undefined],
+              ["all", "전체", "all", undefined],
             ] as const
-          ).map(([k, label, v]) => (
-            <button key={k} className={k === view ? "on" : ""} aria-pressed={k === view} onClick={() => go({ approved: v })}>
+          ).map(([k, label, v, rv]) => (
+            <button key={k} className={k === view ? "on" : ""} aria-pressed={k === view} onClick={() => go({ approved: v, review: rv })}>
               {label}
             </button>
           ))}
@@ -98,7 +101,9 @@ export function Approvals({ api, query }: { api: Api; query: Record<string, stri
 
       {error && <ErrorBox error={error} />}
       {!loading && !error && rows.length === 0 && <Empty>이 조건의 승인 기록이 없습니다.</Empty>}
-      {rows.length > 0 && (
+      {view === "pending" &&
+        rows.map((a) => <ReviewCard key={a.event_id} api={api} a={a} admin={role === "admin"} onDone={() => void load(0)} />)}
+      {rows.length > 0 && view !== "pending" && (
         <div className="card flush">
           <table className="approvals">
             <thead>
@@ -110,6 +115,7 @@ export function Approvals({ api, query }: { api: Api; query: Record<string, stri
                 <th>보류된 툴 호출</th>
                 <th>승인을 요청한 룰</th>
                 <th>감사 경보</th>
+                <th>보안팀 검토</th>
                 <th className="num">대기</th>
               </tr>
             </thead>
@@ -177,8 +183,96 @@ function ApprovalRow({ a }: { a: Approval }) {
           ))
         )}
       </td>
+      <td className="nowrap">
+        <ReviewChip a={a} />
+      </td>
       <td className="num">{waitText(a.wait_ms)}</td>
     </tr>
+  );
+}
+
+function ReviewChip({ a }: { a: Approval }) {
+  const r = reviewText(a);
+  if (r.tone === "none") return <span className="muted small">-</span>;
+  const cls = r.tone === "ok" ? "chip" : r.tone === "bad" ? "chip chip-bad" : "chip chip-warn";
+  return (
+    <span className={cls} title={a.review?.reason}>
+      {r.label}
+    </span>
+  );
+}
+
+// One approved high/critical call: what ran, why it asked, and security's verdict. "문제 있음" is
+// followed by a response from the finding page (block the person or the conversation).
+function ReviewCard({ api, a, admin, onDone }: { api: Api; a: Approval; admin: boolean; onDone: () => void }) {
+  const [by, setBy] = useState("");
+  const [reason, setReason] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const ready = by.trim() !== "" && reason.trim() !== "";
+  const who = approverText(a);
+  const submit = async (status: "ok" | "problem") => {
+    setMsg(null);
+    try {
+      await api.reviewApproval(a.event_id, { status, by, reason });
+      onDone();
+    } catch (e) {
+      setMsg(e instanceof ApiError ? e.message : String(e));
+    }
+  };
+  return (
+    <div className="card">
+      <div className="page-head">
+        <h3>
+          {a.max_severity && <SeverityBadge severity={a.max_severity} />} {a.user_id} · <span className="mono">{a.tool}</span>
+        </h3>
+        <span className="muted small" title={formatTime(a.ts)}>
+          {relativeTime(a.ts)} 승인 · {who.who}
+          {who.other && <span className="tag warn">본인 아님</span>}
+        </span>
+      </div>
+      <pre className="json">{a.held_call ? JSON.stringify(a.held_call.arguments, null, 2) : "(보류된 호출 기록 없음)"}</pre>
+      <p className="small">
+        {a.asked_by.length === 0
+          ? a.rule_ids.join(", ")
+          : a.asked_by.map((f) => (
+              <a key={f.finding_id} className="side" href={`#/findings/${encodeURIComponent(f.finding_id)}`}>
+                {f.title}
+              </a>
+            ))}
+        <a className="side" href={timelineHref({ session_id: a.session_id })}>
+          대화 타임라인
+        </a>
+      </p>
+      {admin ? (
+        <>
+          <div className="filters">
+            <label>
+              누가
+              <input value={by} onChange={(e) => setBy(e.target.value)} placeholder="예: secops@corp.test" />
+            </label>
+            <label className="grow">
+              왜
+              <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="검토 의견 (문제 있음이면 이어서 Finding 화면에서 차단)" />
+            </label>
+          </div>
+          <div className="editor-actions">
+            <button className="primary" disabled={!ready} onClick={() => void submit("ok")}>
+              확인함
+            </button>
+            <button className="primary danger" disabled={!ready} onClick={() => void submit("problem")}>
+              문제 있음
+            </button>
+          </div>
+          {msg && (
+            <p className="error" role="alert">
+              {msg}
+            </p>
+          )}
+        </>
+      ) : (
+        <p className="muted small">검토는 관리자 토큰으로 로그인해야 할 수 있습니다.</p>
+      )}
+    </div>
   );
 }
 

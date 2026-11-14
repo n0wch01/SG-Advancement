@@ -4,21 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from conftest import CP_ADMIN
 from sg_advance.sensor import Sensor
 from sg_advance.sensor.adapters import AdapterContext
 from sg_advance.sensor.plugin_api import judge, record_resolution
-
-
-@pytest.fixture(autouse=True)
-def agent_prompt_path(monkeypatch):
-    """These tests cover the agent's own approval prompt (linking the answer, audits). Since 2026-11-13
-    grade 3-1 calls go to the security hold instead (tests/test_phase1.py); turned off here so the
-    prompt mechanics stay covered with the rules at hand."""
-    monkeypatch.setattr("sg_advance.sensor.plugin_api.GRADE_HELD", "grade:none")
+from sg_advance.server.db import AuditEntry
 
 
 def call(call_id: str, command: str, session: str = "agent:main:main") -> dict[str, Any]:
@@ -116,3 +109,35 @@ def test_audit_proxy_names_who_actually_approved(enrolled: Sensor, cp: TestClien
     [row] = approvals(cp)
     assert row["user_id"] == "alice"  # whose agent wanted to run it
     assert row["approver"] == "secops@corp.test" and row["approver_source"] == "audit_proxy"
+
+
+def test_security_reviews_the_persons_approvals_afterwards(enrolled: Sensor, cp: TestClient) -> None:
+    """Decision 2026-11-14: the person approves first (grade 3-1 included), only very high risk is
+    blocked, and security reviews each approved high/critical call from a queue."""
+    ctx = AdapterContext(enrolled, user_id="alice", hostname="alice-pc")
+    assert judge(ctx, call("c1", "rm -rf ~/projects/old"))["decision"] == "approve"  # was blocked before
+    assert judge(ctx, call("c2", "psql -c 'DELETE FROM users;'"))["decision"] == "approve"
+    assert judge(ctx, call("c3", "psql -c 'DELETE FROM orders;'"))["decision"] == "approve"
+    record_resolution(ctx, answer("c1", "allow-once"))
+    record_resolution(ctx, answer("c2", "allow-once"))
+    record_resolution(ctx, answer("c3", "deny"))  # a refusal needs no review
+    assert enrolled.flush().ok
+
+    queue = approvals(cp, review="pending")
+    assert {r["call_id"] for r in queue} == {"c1", "c2"} and all(r["needs_review"] for r in queue)
+    assert cp.get("/v1/admin/approvals/review-count", headers=CP_ADMIN).json() == {"pending": 2}
+
+    c1 = next(r for r in queue if r["call_id"] == "c1")
+    body = {"status": "problem", "by": "lead@corp.test", "reason": "deleted a shared folder"}
+    r = cp.post(f"/v1/admin/approvals/{c1['event_id']}/review", json=body, headers=CP_ADMIN)
+    assert r.status_code == 200 and r.json()["status"] == "problem"
+    again = cp.post(f"/v1/admin/approvals/{c1['event_id']}/review", json=body, headers=CP_ADMIN)
+    assert again.status_code == 409  # one review per approval, kept in the audit chain
+    assert [x["call_id"] for x in approvals(cp, review="pending")] == ["c2"]
+    [problem] = approvals(cp, review="problem")
+    assert problem["review"]["by"] == "lead@corp.test"
+    with cp.app.state.db._sessions() as db:
+        kinds = {e.kind for e in db.scalars(select(AuditEntry))}
+    assert "approval_review" in kinds
+    missing = cp.post("/v1/admin/approvals/nope/review", json=body, headers=CP_ADMIN)
+    assert missing.status_code == 404

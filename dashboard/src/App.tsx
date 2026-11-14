@@ -105,7 +105,7 @@ export function App() {
         {route.page === "overview" && <Overview api={api} />}
         {route.page === "findings" && <Findings api={api} query={route.query} />}
         {route.page === "finding" && <FindingDetail api={api} id={route.id} role={role} />}
-        {route.page === "approvals" && <Approvals api={api} query={route.query} />}
+        {route.page === "approvals" && <Approvals api={api} query={route.query} role={role} />}
         {route.page === "inventory" && <Inventory api={api} />}
         {route.page === "timeline" && <Timeline api={api} query={route.query} />}
         {route.page === "policy" && <Policy api={api} role={role} query={route.query} />}

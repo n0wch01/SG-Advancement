@@ -173,7 +173,12 @@ def test_security_approval_sits_between_user_approval_and_block(cp: TestClient) 
     cp.post("/v1/admin/policy/groups", json={"name": "data", **WHO}, headers=CP_ADMIN)
     tighten = {"scope": "data", "rule_id": "destructive-sql", "response": "security_approval", **WHO}
     assert cp.put("/v1/admin/policy/overrides", json=tighten, headers=CP_ADMIN).status_code == 200
-    loosen = {"scope": "data", "rule_id": "destructive-shell-command", "response": "security_approval", **WHO}
+    loosen = {
+        "scope": "data",
+        "rule_id": "sensitive-file-exfil-command",
+        "response": "security_approval",
+        **WHO,
+    }
     r = cp.put("/v1/admin/policy/overrides", json=loosen, headers=CP_ADMIN)
     assert r.status_code == 422 and "cannot lower" in r.text  # block → security_approval is weaker
 

@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { Api } from "../api";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
-import { SEVERITIES, SEVERITY_LABEL, findingsHref, relativeTime, responseText, sinceFor, timelineHref } from "../format";
+import { SEVERITIES, SEVERITY_LABEL, approvalsHref, findingsHref, relativeTime, responseText, sinceFor, timelineHref } from "../format";
 import type { Summary } from "../types";
 import { useAsync } from "../useAsync";
 
@@ -17,6 +17,7 @@ const RANGES: [string, string][] = [
 export function Overview({ api }: { api: Api }) {
   const [range, setRange] = useState("7d");
   const { data, error, loading } = useAsync(() => api.summary(sinceFor(range)), [api, range]);
+  const review = useAsync(() => api.reviewCount(), [api]);
   return (
     <section>
       <div className="page-head">
@@ -31,12 +32,12 @@ export function Overview({ api }: { api: Api }) {
       </div>
       {error && <ErrorBox error={error} />}
       {loading && !data && <Loading />}
-      {data && <OverviewBody s={data} />}
+      {data && <OverviewBody s={data} reviewPending={review.data?.pending ?? null} />}
     </section>
   );
 }
 
-function OverviewBody({ s }: { s: Summary }) {
+function OverviewBody({ s, reviewPending }: { s: Summary; reviewPending: number | null }) {
   const f = s.findings;
   const urgent = f.by_severity.critical + f.by_severity.high;
   return (
@@ -46,6 +47,14 @@ function OverviewBody({ s }: { s: Summary }) {
         <Tile label="긴급·높음" value={urgent} href={findingsHref({ min_severity: "high" })} tone={urgent ? "alert" : undefined} />
         <Tile label="장비 (최근 15분 동기화)" value={`${s.devices.active} / ${s.devices.total}`} note={`최신 정책 ${s.devices.policy_current}대`} />
         <Tile label="이벤트" value={s.events.total} />
+        {reviewPending !== null && (
+          <Tile
+            label="보안팀 검토 대기 (사용자 승인)"
+            value={reviewPending}
+            href={approvalsHref({ review: "pending" })}
+            tone={reviewPending ? "alert" : undefined}
+          />
+        )}
       </div>
 
       <div className="grid-2">

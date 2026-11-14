@@ -200,17 +200,21 @@ def withheld_response(point: EnforcementPoint, hits: list[Any]) -> tuple[dict[st
     )
 
 
-GRADE_HELD = "grade:3-1"  # irreversible, not real-time: a person decides where it can be re-checked
+# A rule tagged ``approval:security`` sends its approval to the security hold even where the person could
+# be asked. No bundled rule carries it (decision 2026-11-14); a security team can add it to a rule.
+SECURITY_HOLD_TAG = "approval:security"
 
 
 def approval_channel(verdict: Verdict, point: EnforcementPoint) -> ResponseAction:
-    """Grades decide *how* approval happens (CLAUDE.md, 2026-11-13). An approval for an irreversible
-    action (grade 3-1), or at a point that cannot ask anyone (the MCP gateway), goes to the security
-    hold: there the call is re-checked and bound to the exact request right before it runs. The agent's
-    own prompt runs the call the moment the person clicks, with no room for either."""
+    """Grades decide *how* approval happens, never whether (CLAUDE.md). Decision 2026-11-14: the person
+    approves first, including grade 3-1, and the security team reviews those approvals afterwards (review
+    queue, ``user-approved-high-risk``). Only very high risk is blocked outright (the rules' own response).
+    A point that cannot ask anyone (the MCP gateway) still goes to the security hold, where the call is
+    re-checked and bound to the exact request; so does a rule tagged ``approval:security``.
+    Limitation: the agent's own prompt runs the call the moment the person clicks, with no re-check."""
     if verdict.action is ResponseAction.REQUIRE_APPROVAL:
         asking = [h for h in verdict.hits if h.rule.response is ResponseAction.REQUIRE_APPROVAL]
-        if point.in_path or any(GRADE_HELD in h.rule.tags for h in asking):
+        if point.in_path or any(SECURITY_HOLD_TAG in h.rule.tags for h in asking):
             return ResponseAction.SECURITY_APPROVAL
     return verdict.action
 
@@ -301,7 +305,7 @@ def judge(
             req, pending, summary_for(result.event, response, pending), call_event=result.event
         )
         response |= {"decision": "hold", "hold_id": hold.id, "wait_ms": int(ctx.holds.wait_seconds * 1000)}
-        why = "grade 3-1" if result.verdict.action is ResponseAction.REQUIRE_APPROVAL else "policy"
+        why = SECURITY_HOLD_TAG if result.verdict.action is ResponseAction.REQUIRE_APPROVAL else "policy"
         enforcement = held_enforcement(OPENCLAW_PLUGIN, why)
     ctx.record(result, enforcement)
     call_id = event.payload.call_id  # type: ignore[union-attr]
@@ -390,7 +394,7 @@ def judge_event(
             if point.in_path and result.verdict.action is ResponseAction.REQUIRE_APPROVAL:
                 why = "the gateway cannot ask the person"
             elif result.verdict.action is ResponseAction.REQUIRE_APPROVAL:
-                why = "grade 3-1"
+                why = SECURITY_HOLD_TAG
             else:
                 why = "policy"
             enforcement = held_enforcement(point, why)

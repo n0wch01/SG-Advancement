@@ -140,7 +140,25 @@ rules:
     match:
       type: allowlist
       field: labels.sga_destinations
-      allow: ["mcp:testdb", "mcp:reports", "file:*", local, "*.corp.internal"]
+      allow: ["mcp:testdb", "mcp:reports", "file:*", local, unknown, "*.corp.internal"]
+
+  # 결정(2026-11-14): 목적지가 안 보이면(local: 주소 없는 셸 명령, unknown: 목적지를 모르는 툴) 바로 막지 않고 사용자가 승인한다.
+  #   예: python upload.py <값>(스크립트 안에서 보냄)과 grep <값> result.txt(PC 안에서만)를 센서가 구분하지 못한다.
+  #   사용자가 승인하면 user-approved-high-risk로 보안팀 사후 검토 큐에 오른다.
+  # 오탐 주의: 보호 값을 PC 안에서만 다루는 셸 명령도 묻는다. 미탐 주의: 값이 바뀌면(위 룰과 같음) 연결되지 않는다.
+  - id: protected-data-destination-unclear
+    severity: high
+    category: data_exfiltration
+    title: 보호 데이터가 실린 호출의 목적지 불명
+    message: 테스트 DB에서 조회한 보호 데이터가 실린 호출인데, 어디로 가는지 호출에서 보이지 않아 사용자 승인을 받습니다.
+    recommended_action: 사용자가 승인했다면 보안팀 검토 큐에서 명령과 출처 조회를 확인하세요. 외부 전송이었다면 그 사람·대화를 차단하세요.
+    response: require_approval
+    tags: ["grade:3-1", lineage:sink, scenario:P2]
+    when: {payload.kind: tool.call, labels.sga_data_class: protected}
+    match:
+      type: regex
+      fields: [labels.sga_destinations]
+      pattern: '(^|,)(local|unknown)(,|$)'
 
   # 실패 처리(fail closed): 출처 기록 파일을 읽을 수 없으면 어떤 호출이 보호 데이터를 싣는지 모른다.
   # 그때는 미승인 목적지로 가는 호출을 모두 막는다(로컬·사내 목적지는 그대로).
