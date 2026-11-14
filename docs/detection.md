@@ -19,7 +19,14 @@ AgentEvent ──▶ Engine.process(event) ──▶ Verdict { hits, action, fin
   Finding의 `explanation` 발췌는 만들 때 이미 마스킹돼 있다.
 - **hit와 finding은 다르다.** 룰이 맞으면 매번 hit가 생기고 판정(`action`)에 반영된다.
   `dedup: session`(기본값)이면 같은 룰·세션·키 조합에 대해 첫 번째 hit만 Finding으로 남는다.
-  같은 유출 시도를 다섯 번 하면 다섯 번 다 막지만 콘솔에는 한 건만 보인다. `session.end` 이벤트가 오면 해당 세션의 dedup 기록이 초기화된다.
+  같은 시도를 다섯 번 하면 다섯 번 다 판정한다. `session.end` 이벤트가 오면 해당 세션의 dedup 기록이 초기화된다.
+  - 예외(2026-11-13 결정): 집행 지점이 그 호출을 **실제로 막거나 보류한 경우**(차단, 보안팀 보류, 결과 가림, 세션 중단, 격리)에는
+    반복이어도 매번 Finding을 남기고 `labels.sga_repeat=true`를 붙인다. 막은 호출 하나하나가 별도 기록이어야 하기 때문이다.
+  - 경보만 내는 룰, 에이전트 자체 확인 창으로 보낸 승인 요청, 감시 모드(실제로 막지 않음)의 반복은 그대로 한 건만 남는다.
+  - 엔진은 실제로 막았는지 모른다. 그래서 반복 hit의 Finding 후보를 `Verdict.suppressed`에 두고, 센서가 집행 결과를 보고 고른다.
+- 태그로 켜는 엔진 동작(예전 센서도 정책을 읽도록 룰 칸 대신 태그를 쓴다):
+  - `lineage:source`: regex가 첫 매치 대신 모든 값을 모은다(이름 붙은 그룹 `field`, `value`). 설명에는 컬럼 이름과 개수만 남는다. 2차 시나리오의 출처([lineage.md](lineage.md)).
+  - `split:<구분자>`: allowlist가 값을 나눠 각각 비교한다(예: `labels.sga_destinations`).
 - **M2에서는 집행하지 않는다.** `Finding.response`에는 `enforced: false`가 기록된다.
   실제 deny나 abort는 센서 어댑터(M5, M6, M8)가 `Verdict.action`을 보고 수행한다.
 
