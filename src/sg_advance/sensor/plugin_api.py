@@ -42,13 +42,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..detect import Verdict
+from ..detect import Verdict, rule_titles
 from ..redact import redact_text
 from ..schema import AgentEvent, Enforcement, EventKind, ResponseAction, SensorType
 from ..schema.events import ApprovalResolution
 from .adapters.base import AdapterContext
 from .adapters.openclaw_people import OpenClawPeople
-from .security_hold import summary_for
+from .security_hold import peer_gone, summary_for
 
 log = logging.getLogger(__name__)
 
@@ -177,7 +177,7 @@ def input_guard_hits(verdict: Verdict) -> list[Any]:
 
 
 def withheld_response(point: EnforcementPoint, hits: list[Any]) -> tuple[dict[str, Any], Enforcement]:
-    titles = "; ".join(dict.fromkeys(h.rule.title for h in hits))
+    titles = rule_titles(hits)
     return {
         "ok": True,
         "decision": "withhold",
@@ -268,8 +268,7 @@ def plugin_response(
     the channel chosen by ``approval_channel`` when it differs from the verdict's."""
     action = action or verdict.action
     rules = verdict.rule_ids
-    titles = [h.rule.title for h in verdict.hits]
-    reason = "; ".join(dict.fromkeys(titles)) or "policy"
+    reason = rule_titles(verdict.hits)
     sensor = point.sensor
     base = {"ok": True, "action": action.value, "rules": rules}
     if severity := max_severity(verdict):
@@ -310,6 +309,41 @@ def finding_ids_for(verdict: Any, action: ResponseAction) -> list[str]:
     return verdict.enforced_ids
 
 
+def pending_for(result: Any, action: ResponseAction, response: dict[str, Any]) -> dict[str, Any]:
+    """What a prompt or a hold keeps about the call, to link the answer back to it."""
+    return {
+        "event_id": result.event.event_id,
+        "finding_ids": finding_ids_for(result.verdict, action),
+        "rule_ids": result.verdict.rule_ids,
+        "max_severity": response.get("severity"),
+        "requested_at": result.event.ts,
+    }
+
+
+def hold_reason(point: EnforcementPoint, verdict: Verdict) -> str:
+    """Why a call went to security instead of the person (the enforcement record's detail)."""
+    if verdict.action is not ResponseAction.REQUIRE_APPROVAL:
+        return "policy"  # the rule (or a team policy) asks for security itself
+    return "the gateway cannot ask the person" if point.in_path else SECURITY_HOLD_TAG
+
+
+def open_hold(
+    ctx: AdapterContext,
+    result: Any,
+    response: dict[str, Any],
+    pending: dict[str, Any],
+    point: EnforcementPoint,
+    req: dict[str, Any],
+) -> tuple[dict[str, Any], Enforcement]:
+    """Hold the call for security (the one place both the plugin and event paths open a hold)."""
+    assert ctx.holds is not None
+    response = {k: v for k, v in response.items() if k != "reason"}
+    response["reason"] = rule_titles(result.verdict.hits)
+    hold = ctx.holds.open(req, pending, summary_for(result.event, response, pending), call_event=result.event)
+    response |= {"decision": "hold", "hold_id": hold.id, "wait_ms": int(ctx.holds.wait_seconds * 1000)}
+    return response, held_enforcement(point, hold_reason(point, result.verdict))
+
+
 def judge(
     ctx: AdapterContext, req: dict[str, Any], *, labels: dict[str, str] | None = None
 ) -> dict[str, Any]:
@@ -326,23 +360,9 @@ def judge(
     result = ctx.evaluate(event)
     action = approval_channel(result.verdict, OPENCLAW_PLUGIN)
     response, enforcement = plugin_response(result.verdict, OPENCLAW_PLUGIN, action)
-    pending = {
-        "event_id": result.event.event_id,
-        "finding_ids": finding_ids_for(result.verdict, action),
-        "rule_ids": result.verdict.rule_ids,
-        "max_severity": response.get("severity"),
-        "requested_at": result.event.ts,
-    }
-    hold = None
+    pending = pending_for(result, action, response)
     if action is ResponseAction.SECURITY_APPROVAL and ctx.holds is not None:
-        titles = "; ".join(dict.fromkeys(h.rule.title for h in result.verdict.hits)) or "policy"
-        response = {k: v for k, v in response.items() if k != "reason"} | {"reason": titles}
-        hold = ctx.holds.open(
-            req, pending, summary_for(result.event, response, pending), call_event=result.event
-        )
-        response |= {"decision": "hold", "hold_id": hold.id, "wait_ms": int(ctx.holds.wait_seconds * 1000)}
-        why = SECURITY_HOLD_TAG if result.verdict.action is ResponseAction.REQUIRE_APPROVAL else "policy"
-        enforcement = held_enforcement(OPENCLAW_PLUGIN, why)
+        response, enforcement = open_hold(ctx, result, response, pending, OPENCLAW_PLUGIN, req)
     ctx.record(result, enforcement)
     call_id = event.payload.call_id  # type: ignore[union-attr]
     ctx.plugins.mark(call_id)
@@ -405,35 +425,10 @@ def judge_event(
     if kind is EventKind.TOOL_CALL:
         action = approval_channel(result.verdict, point)
         response, enforcement = plugin_response(result.verdict, point, action)
-        pending = {
-            "event_id": result.event.event_id,
-            "finding_ids": finding_ids_for(result.verdict, action),
-            "rule_ids": result.verdict.rule_ids,
-            "max_severity": response.get("severity"),
-            "requested_at": result.event.ts,
-            "call": result.event,
-        }
+        pending = pending_for(result, action, response) | {"call": result.event}
         if action is ResponseAction.SECURITY_APPROVAL and ctx.holds is not None:
-            titles = "; ".join(dict.fromkeys(h.rule.title for h in result.verdict.hits)) or "policy"
-            response = {k: v for k, v in response.items() if k != "reason"} | {"reason": titles}
-            hold = ctx.holds.open(
-                {"toolName": result.event.payload.tool},
-                pending,  # type: ignore[union-attr]
-                summary_for(result.event, response, pending),
-                call_event=result.event,
-            )
-            response |= {
-                "decision": "hold",
-                "hold_id": hold.id,
-                "wait_ms": int(ctx.holds.wait_seconds * 1000),
-            }
-            if point.in_path and result.verdict.action is ResponseAction.REQUIRE_APPROVAL:
-                why = "the gateway cannot ask the person"
-            elif result.verdict.action is ResponseAction.REQUIRE_APPROVAL:
-                why = SECURITY_HOLD_TAG
-            else:
-                why = "policy"
-            enforcement = held_enforcement(point, why)
+            tool_req = {"toolName": result.event.payload.tool}  # type: ignore[union-attr]
+            response, enforcement = open_hold(ctx, result, response, pending, point, tool_req)
         ctx.record(result, enforcement)
         if response.get("decision") == "approve" and point.sensor is SensorType.CLAUDE_CODE_HOOK:
             # Claude Code asked the person: a later result means they approved. The MCP gateway asks no one.
@@ -455,7 +450,7 @@ def judge_event(
     if withheld is not None:
         return withheld
     if kind is EventKind.PROMPT_USER and result.verdict.action in _BLOCKING:
-        reason = "; ".join(dict.fromkeys(h.rule.title for h in result.verdict.hits)) or "policy"
+        reason = rule_titles(result.verdict.hits)
         return {
             "ok": True,
             "decision": "block",
@@ -589,7 +584,7 @@ class LocalApiServer:
     async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             while line := await reader.readline():
-                writer.write((json.dumps(await self.handle_async(line)) + "\n").encode())
+                writer.write((json.dumps(await self.handle_async(line, reader)) + "\n").encode())
                 await writer.drain()
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
@@ -606,8 +601,9 @@ class LocalApiServer:
         given = req.get("auth") if isinstance(req, dict) else None
         return isinstance(given, str) and hmac.compare_digest(given, self.token)
 
-    async def handle_async(self, line: bytes) -> dict[str, Any]:
-        """``await_hold`` waits (up to minutes) for security; everything else answers at once."""
+    async def handle_async(self, line: bytes, reader: asyncio.StreamReader | None = None) -> dict[str, Any]:
+        """``await_hold`` waits (up to minutes) for security; everything else answers at once. With the
+        requester's ``reader``, the hold is cancelled if it closes the connection while waiting."""
         try:
             req = json.loads(line)
         except json.JSONDecodeError:
@@ -618,7 +614,10 @@ class LocalApiServer:
             if self.ctx.holds is None:
                 return {"ok": False, "error": "security approval is not available"}
             self.ctx.plugins.touch()
-            return await self.ctx.holds.wait(self.ctx, str(req.get("hold_id") or ""))
+            hold_id = str(req.get("hold_id") or "")
+            if reader is None:
+                return await self.ctx.holds.wait(self.ctx, hold_id)
+            return await self.ctx.holds.wait_while(self.ctx, hold_id, peer_gone(reader))
         return self.handle(line)
 
     def handle(self, line: bytes) -> dict[str, Any]:

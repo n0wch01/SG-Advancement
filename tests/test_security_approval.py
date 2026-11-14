@@ -258,3 +258,54 @@ def test_a_decision_is_handed_out_again_until_the_device_reports_an_outcome(
     assert decisions() == ["denied"]
     monkeypatch.setattr(sa, "utcnow", lambda: real() + timedelta(minutes=5))
     assert decisions() == []
+
+
+async def test_a_hold_whose_requester_left_ends_cancelled_not_allowed(
+    cp: TestClient, ctx: AdapterContext, tmp_path
+) -> None:
+    """Improvement 2026-11-15: the person pressed Esc / the hook died while the call was held. Before,
+    security's later approval was recorded as allow-once and reported "allowed" for a call that never
+    ran. The daemon now sees the requester's connection close and ends the hold as cancelled."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    d = Path(tempfile.mkdtemp(prefix="sh", dir="/tmp"))  # AF_UNIX paths must stay short
+    server = LocalApiServer(ctx, d / "s.sock")
+    await server.start()
+    try:
+        held = judge(ctx, sql_call("c9"))
+        assert held["decision"] == "hold"
+        r, w = await asyncio.open_unix_connection(str(d / "s.sock"))
+        w.write((json.dumps({"op": "await_hold", "hold_id": held["hold_id"]}) + "\n").encode())
+        await w.drain()
+        row = await registered(cp)  # the hold reached security
+        w.close()  # the requester goes away before anyone decides
+        await w.wait_closed()
+        for _ in range(200):
+            if resolutions(ctx.sensor):
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await server.close()
+        shutil.rmtree(d, ignore_errors=True)
+    [ev] = resolutions(ctx.sensor)
+    assert ev["payload"]["decision"] == "cancelled" and ev["labels"]["sga_security_outcome"] == "cancelled"
+    [rowed] = [x for x in queue(cp) if x["id"] == row["id"]]
+    assert rowed["outcome"] == "cancelled"
+    # Security can no longer approve it, and the device records nothing more.
+    late = cp.post(f"/v1/admin/security-approvals/{row['id']}/decision", json={"decision": "approve", **WHO},
+                   headers=CP_ADMIN)  # fmt: skip
+    assert late.status_code == 409
+    assert await ctx.holds.poll(ctx) == 0  # type: ignore[union-attr]
+    assert len(resolutions(ctx.sensor)) == 1
+
+
+async def test_wait_while_still_follows_security_when_the_requester_stays(ctx: AdapterContext) -> None:
+    held = judge(ctx, sql_call("c10"))
+    never: asyncio.Future = asyncio.get_running_loop().create_future()  # the requester never leaves
+    waiting = asyncio.create_task(ctx.holds.wait_while(ctx, held["hold_id"], never))  # type: ignore[union-attr]
+    await asyncio.sleep(0.05)
+    ctx.holds.resolve(held["hold_id"], "denied", "secops@corp.test", "no")  # type: ignore[union-attr]
+    out = await waiting
+    assert out["decision"] == "block" and out["outcome"] == "denied" and never.cancelled()

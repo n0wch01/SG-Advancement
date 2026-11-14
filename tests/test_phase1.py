@@ -354,3 +354,36 @@ def test_a_late_result_replaces_the_servers_unacknowledged(cp: TestClient, enrol
     # A result the device itself reported still stands against a later duplicate.
     enrolled.client.report_action(aid, False, "duplicate", "failed")
     assert _row(cp, aid)["applied"] == "applied"
+
+
+async def test_a_gateway_hold_whose_client_left_never_reaches_the_server(
+    enrolled: Sensor, cp: TestClient
+) -> None:
+    """Improvement 2026-11-15: the client (or nginx's read timeout) dropped the connection while the call
+    was held. Before, security's approval still sent the call to the company server with nobody
+    waiting. Now the hold ends cancelled and the server never sees the call (checked on the server)."""
+    upstream, server, gw, ctx = await _gateway(enrolled, holds=Holds(wait_seconds=30))
+    try:
+        r, w = await asyncio.open_connection("127.0.0.1", gw.port)
+        body = json.dumps(call(1, "run_sql", **SQL)).encode()
+        w.write(b"POST /mcp/db HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                b"Accept: application/json\r\nUser-Agent: claude-code/2.1\r\n"
+                + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)  # fmt: skip
+        await w.drain()
+        row = await registered(cp)
+        w.close()  # the client gives up
+        for _ in range(200):
+            if queue(cp)[0]["outcome"]:
+                break
+            await asyncio.sleep(0.01)
+        assert queue(cp)[0]["outcome"] == "cancelled"
+        late = cp.post(f"/v1/admin/security-approvals/{row['id']}/decision",
+                       json={"decision": "approve", "by": "secops@corp.test", "reason": "late"},
+                       headers=CP_ADMIN)  # fmt: skip
+        assert late.status_code == 409  # a hold that ended cannot be approved any more
+        assert await ctx.holds.poll(ctx) == 0  # type: ignore[union-attr]
+        await asyncio.sleep(0.1)
+        assert upstream.seen == []  # the company server never received the call
+    finally:
+        await gw.close()
+        server.close()

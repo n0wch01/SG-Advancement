@@ -20,14 +20,17 @@ a blocking condition that appeared while it waited refuses it (``rechecked``).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
 import time
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from ..detect import rule_titles
 from ..redact import redact_text
 from .client import ControlPlaneError, Offline
 
@@ -161,6 +164,21 @@ class Holds:
             applied += self.resolve(str(d.get("id")), outcome, d.get("by"), str(d.get("reason") or ""))
         return applied
 
+    async def wait_while(self, ctx: AdapterContext, hold_id: str, gone: Awaitable[Any]) -> dict[str, Any]:
+        """``wait``, unless the requester goes away first (``gone`` resolves): then the hold ends as
+        ``cancelled`` (improvement 2026-11-15). Before, a later approval was recorded as run, and the MCP
+        gateway sent the call upstream with nobody waiting for it."""
+        waiter = asyncio.ensure_future(self.wait(ctx, hold_id))
+        watcher = asyncio.ensure_future(gone)
+        try:
+            done, _ = await asyncio.wait({waiter, watcher}, return_when=asyncio.FIRST_COMPLETED)
+            if watcher in done and not waiter.done():
+                log.warning("security approval %s: the requester went away; cancelled", hold_id)
+                self.resolve(hold_id, "cancelled", None, "the requester went away")
+            return await waiter
+        finally:
+            watcher.cancel()
+
     async def wait(self, ctx: AdapterContext, hold_id: str) -> dict[str, Any]:
         """Block until security decides (or the wait ends); the plugin's answer."""
         hold = self._open.get(hold_id)
@@ -193,7 +211,7 @@ class Holds:
             # Right before release: judge the same call again with the latest policy and state.
             blocking = ctx.sensor.recheck(hold.call_event)
             if blocking:
-                titles = "; ".join(dict.fromkeys(h.rule.title for h in blocking))
+                titles = rule_titles(blocking)
                 log.warning("security approval %s: re-check blocks it now (%s)", hold.id, titles)
                 result = {"outcome": "rechecked", "by": result["by"], "reason": titles}
         await self._finish(ctx, hold, result)
@@ -228,6 +246,14 @@ class Holds:
                 await asyncio.to_thread(ctx.sensor.client.report_security_outcome, hold.id, outcome)
             except (Offline, ControlPlaneError) as e:
                 log.warning("could not report security approval outcome %s: %s", hold.id, e)
+
+
+async def peer_gone(reader: asyncio.StreamReader) -> None:
+    """Resolves when the other side closes its end of the connection (EOF or a reset). A requester
+    waiting for an answer sends nothing more, so anything it does send meanwhile is ignored."""
+    with contextlib.suppress(ConnectionError, OSError):
+        while await reader.read(4096):
+            pass
 
 
 def summary_for(event: Any, response: dict[str, Any], pending: dict[str, Any]) -> dict[str, Any]:

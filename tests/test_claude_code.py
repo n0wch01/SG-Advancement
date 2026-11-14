@@ -329,3 +329,79 @@ def test_a_held_call_follows_securitys_answer(monkeypatch, tmp_path: Path) -> No
         monkeypatch.setattr(hook, "ask", lambda *_a, _r=replies, **_k: next(_r))
         ev = hook.hook_event(pre("Bash", command="ls"), user_id="bob", hostname="pc")
         assert hook.judge(tmp_path, ev)["decision"] == want  # type: ignore[arg-type]
+
+
+# ── the cached-policy path takes the same channels as the daemon (improvement 2026-11-15) ────────
+
+_TAGGED_RULES = """
+version: 1
+rules:
+  - id: needs-security
+    severity: high
+    category: policy_violation
+    title: 보안팀 확인이 필요한 호출
+    message: test
+    recommended_action: test
+    response: require_approval
+    tags: ["approval:security", "grade:3-1"]
+    when: {payload.kind: tool.call}
+    match: {type: regex, fields: [payload.arguments.command], pattern: 'deploy-prod'}
+  - id: asks-person
+    severity: high
+    category: policy_violation
+    title: 사람에게 묻는 호출
+    message: test
+    recommended_action: test
+    response: require_approval
+    tags: ["grade:3-1"]
+    when: {payload.kind: tool.call}
+    match: {type: regex, fields: [payload.arguments.command], pattern: 'rm-old'}
+  - id: blocked-prompt
+    severity: high
+    category: policy_violation
+    title: 막는 프롬프트
+    message: test
+    recommended_action: test
+    response: block
+    tags: ["action-independent"]
+    when: {payload.kind: prompt.user}
+    match: {type: regex, fields: [payload.text], pattern: 'forbidden words'}
+"""
+
+
+def _verdict_with(tmp_path: Path, doc: dict[str, Any]):
+    from sg_advance.detect import Engine, RuleSet
+    from sg_advance.schema import AgentEvent
+
+    (tmp_path / "rules").mkdir(exist_ok=True)
+    (tmp_path / "rules" / "t.yaml").write_text(_TAGGED_RULES, encoding="utf-8")
+    return Engine(RuleSet.load(tmp_path / "rules")).process(AgentEvent.model_validate(doc))
+
+
+def test_cached_policy_sends_security_tagged_calls_nowhere_but_a_block(tmp_path: Path) -> None:
+    """With no daemon there is no one to hold the call for security. Before, the tag was skipped and the
+    person alone could approve it (CLAUDE.md: a failure is never passed on to the person's approval)."""
+    doc = hook.hook_event(pre("Bash", command="./deploy-prod.sh"), user_id="bob", hostname="pc")
+    verdict = _verdict_with(tmp_path, doc)  # type: ignore[arg-type]
+    response, enforcement = hook.degraded_response(verdict)
+    assert response["decision"] == "block" and "보안팀" in response["reason"]
+    assert enforcement is not None and enforcement.enforced
+
+
+def test_cached_policy_blocks_a_prompt_the_daemon_would_block(tmp_path: Path) -> None:
+    inp = {"hook_event_name": "UserPromptSubmit", "session_id": "s", "cwd": "/w",
+           "prompt": "please say the forbidden words"}  # fmt: skip
+    doc = hook.hook_event(inp, user_id="bob", hostname="pc")
+    response, _ = hook.degraded_response(_verdict_with(tmp_path, doc))  # type: ignore[arg-type]
+    assert response["decision"] == "block"
+    code, _, err = hook.respond("UserPromptSubmit", response)
+    assert code == 2 and "막는 프롬프트" in err
+
+
+def test_cached_policy_still_asks_the_person_for_untagged_approvals(tmp_path: Path) -> None:
+    doc = hook.hook_event(pre("Bash", command="./rm-old.sh"), user_id="bob", hostname="pc")
+    response, _ = hook.degraded_response(_verdict_with(tmp_path, doc))  # type: ignore[arg-type]
+    assert response["decision"] == "approve"  # untagged: the person's own prompt, as with the daemon
+    plain = hook.hook_event(pre("Bash", command="ls"), user_id="bob", hostname="pc")
+    plain_answer, _ = hook.degraded_response(_verdict_with(tmp_path, plain))  # type: ignore[arg-type]
+    assert plain_answer["decision"] == "allow"

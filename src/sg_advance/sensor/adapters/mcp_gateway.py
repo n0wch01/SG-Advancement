@@ -41,7 +41,9 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
+from ...detect import rule_titles
 from ...schema import AgentEvent, Enforcement, ResponseAction, SensorType
+from ..security_hold import peer_gone
 from .base import AdapterContext
 
 log = logging.getLogger(__name__)
@@ -282,7 +284,7 @@ class McpGatewayAdapter:
                 return
             body = await read_body(reader, headers) if method == "POST" else b""
             who = self._who(ctx, headers)
-            await self._forward(ctx, writer, name, method, headers, body, who)
+            await self._forward(ctx, writer, name, method, headers, body, who, reader)
         except (HttpError, ConnectionError, ValueError) as e:
             with contextlib.suppress(Exception):
                 writer.write(_reply(400, "Bad Request", json.dumps(rpc_error(None, -32700, str(e))).encode()))
@@ -325,7 +327,12 @@ class McpGatewayAdapter:
     # ── requests: judge tools/call before the server sees it ────────────────
 
     async def _judge_calls(
-        self, ctx: AdapterContext, name: str, who: dict[str, str], messages: list[Any]
+        self,
+        ctx: AdapterContext,
+        name: str,
+        who: dict[str, str],
+        messages: list[Any],
+        client: asyncio.StreamReader | None = None,
     ) -> tuple[dict[Any, Any], list[dict[str, Any]]]:
         """(pending inspections by request id, refusals to send instead of forwarding)."""
         from ..plugin_api import MCP_GATEWAY, judge_event
@@ -361,8 +368,10 @@ class McpGatewayAdapter:
                 if not self.enforce:  # monitor mode records, never waits
                     ctx.holds.discard(str(verdict.get("hold_id")))
                     verdict = {"decision": "allow"}
-                else:
+                elif client is None:
                     verdict = await ctx.holds.wait(ctx, str(verdict.get("hold_id")))
+                else:  # the client went away while held: cancelled, never sent upstream
+                    verdict = await ctx.holds.wait_while(ctx, str(verdict.get("hold_id")), peer_gone(client))
             # Fail closed (2026-11-13): anything but an explicit allow is refused here; an approval that
             # was not confirmed never reaches the server.
             if verdict.get("decision") != "allow" and self.enforce:
@@ -445,7 +454,7 @@ class McpGatewayAdapter:
         if not hits or not self.enforce:
             ctx.record(result)
             return msg
-        titles = "; ".join(dict.fromkeys(h.rule.title for h in hits))
+        titles = rule_titles(hits)
         ctx.record(result, withheld_response(MCP_GATEWAY, hits)[1])
         log.warning("mcp gateway: withheld %s result from %s (%s)", payload["tool"], name, titles)
         notice = (
@@ -512,12 +521,13 @@ class McpGatewayAdapter:
         headers: dict[str, str],
         body: bytes,
         who: dict[str, str],
+        client: asyncio.StreamReader | None = None,
     ) -> None:
         pending: dict[Any, Any] = {}
         if body:
             doc = json.loads(body)
             messages = doc if isinstance(doc, list) else [doc]
-            pending, refusals = await self._judge_calls(ctx, name, who, messages)
+            pending, refusals = await self._judge_calls(ctx, name, who, messages, client)
             if refusals:
                 # Refused calls never reach the server. A batch with one refused call is refused whole.
                 out = refusals if isinstance(doc, list) else refusals[0]

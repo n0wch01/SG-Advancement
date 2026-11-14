@@ -31,8 +31,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .tools import CLAUDE_READ_ONLY
+
 DAEMON_TIMEOUT = 3.0
-READ_ONLY_TOOLS = {"Read", "Glob", "Grep", "LS", "NotebookRead", "TodoRead", "TodoWrite"}
+READ_ONLY_TOOLS = CLAUDE_READ_ONLY  # what passes when there is nothing to judge with
 PREVIEW_MAX = 4000
 # Tool results are judged on their full text up to this size (the sensor keeps only PREVIEW_MAX when it
 # records them). Larger results cannot be checked: labelled, and the rules withhold them (fail closed).
@@ -166,7 +168,6 @@ def degraded(home: Path, event: dict[str, Any]) -> dict[str, Any]:
     """No daemon: judge with the cached signed policy and spool the event for later."""
     from ..schema import AgentEvent
     from .core import Sensor
-    from .plugin_api import CLAUDE_CODE_HOOK, input_guard_hits, plugin_response, withheld_response
     from .state import SensorHome
 
     sensor = Sensor(SensorHome(home))
@@ -174,14 +175,35 @@ def degraded(home: Path, event: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("no cached policy")
     ev = AgentEvent.model_validate(event | {"labels": event["labels"] | {"sga_verdict": "degraded"}})
     result = sensor.evaluate(ev)
-    if ev.kind.value == "tool.call":
-        response, enforcement = plugin_response(result.verdict, CLAUDE_CODE_HOOK)
-    elif ev.kind.value == "tool.result" and (hits := input_guard_hits(result.verdict)):
-        response, enforcement = withheld_response(CLAUDE_CODE_HOOK, hits)
-    else:
-        response, enforcement = {"ok": True, "decision": "allow"}, None
+    response, enforcement = degraded_response(result.verdict)
     sensor.record(result, enforcement)
     return response
+
+
+def degraded_response(verdict: Any) -> tuple[dict[str, Any], Any]:
+    """The answer from the cached policy: the same channels as the daemon (improvement 2026-11-15).
+    A call for security (team response or ``approval:security``) is blocked, since no daemon is there
+    to hold it; before, the tag was skipped and the person alone could approve it. A prompt with a
+    blocking verdict is blocked, as ``judge_event`` does."""
+    from ..detect import rule_titles
+    from .plugin_api import (
+        _BLOCKING,
+        CLAUDE_CODE_HOOK,
+        approval_channel,
+        input_guard_hits,
+        plugin_response,
+        withheld_response,
+    )
+
+    kind = verdict.event.kind.value
+    if kind == "tool.call":
+        return plugin_response(verdict, CLAUDE_CODE_HOOK, approval_channel(verdict, CLAUDE_CODE_HOOK))
+    if kind == "tool.result" and (hits := input_guard_hits(verdict)):
+        return withheld_response(CLAUDE_CODE_HOOK, hits)
+    if kind == "prompt.user" and verdict.action in _BLOCKING:
+        reason = f"SG-Advance: {rule_titles(verdict.hits)}"
+        return {"ok": True, "decision": "block", "reason": reason, "rules": verdict.rule_ids}, None
+    return {"ok": True, "decision": "allow"}, None
 
 
 def fallback(event: dict[str, Any]) -> dict[str, Any]:
