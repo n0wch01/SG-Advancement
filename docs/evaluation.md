@@ -63,10 +63,13 @@
 
 ### 직접 확인한 행동 판정 (시험 장비 제외)
 
+두 오탐은 룰 케이스를 먼저 넣고 고쳤다. 고친 룰로 운영 기록을 다시 돌리니 두 건 모두 사라졌다. 남은 `destructive-shell-command` 1건은 시험 장비에서 실제로 실행한 `rm -rf`다.
+
+
 | 룰 | 무엇 | 판단 |
 |---|---|---|
-| `identical-args-loop` (세션 중단) | 팀 게이트웨이 에이전트가 `get_goal`(목표 조회, 무해)을 같은 인자로 반복 | **오탐 후보**. 상태 조회 툴의 반복을 폭주로 보고 세션을 중단한다 |
-| `destructive-shell-command` (사용자 승인) | OpenClaw Code Mode의 바깥 호출(JavaScript 안에 명령이 들어 있음) | **오탐 후보(승인 피로)**. 안쪽 실제 명령에서 또 묻는다. 같은 승인 룰인 `destructive-sql`·`destructive-cloud-command`는 바깥 호출을 건너뛰는데 이 룰만 빠져 있다. 오늘 차단 → 사용자 승인으로 바꾸면서 두 번 묻게 됐다 |
+| `identical-args-loop` (세션 중단) | 팀 게이트웨이 에이전트가 `get_goal`(목표 조회, 무해)을 같은 인자로 반복 | **오탐 → 수정**(사용자 결정 2026-11-14): 상태만 읽는 툴(`get_goal`, `session_status` 등)을 룰에서 뺐다. 이 툴들로 도는 루프는 `rate-limit-tool-calls`만 본다 |
+| `destructive-shell-command` (사용자 승인) | OpenClaw Code Mode의 바깥 호출(JavaScript 안에 명령이 들어 있음) | **오탐 → 수정**(사용자 결정 2026-11-14): 같은 승인 룰(`destructive-sql`·`destructive-cloud-command`)처럼 바깥 호출을 건너뛴다. 안쪽 실제 명령에서 한 번만 묻는다 |
 | `sensitive-resource-from-degraded-device` (차단) | 중앙 MCP 게이트웨이가 PC 상태 `unknown`으로 `query_customers`를 막음(11-13 08:34) | **이미 고쳐짐**. 1차 작업 수정 전의 기록이다. 지금 중앙 게이트웨이는 PC 상태를 점검하지 않는 센서로 돌아 라벨을 붙이지 않는다(`--no-discovery --no-claude-code`) |
 | `egress-unapproved-host` (차단) | `telemetry.openclaw.ai`, `wttr.in`, `www.gravatar.com`, `example.com` | 정책대로다(허용 목록 결정 2026-11-12) |
 | `user-approved-high-risk` (경보) | 데모에서 사람이 승인한 exec | 정상(사후 감사 대상) |

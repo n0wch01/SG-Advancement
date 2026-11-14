@@ -1,6 +1,6 @@
 # 평가 결과 (scripts/evaluate.py로 생성)
 
-생성: 2026-11-14 12:08 UTC, 묶음 `eval/corpus.yaml`, 룰 `rules/`.
+생성: 2026-11-14 12:19 UTC, 묶음 `eval/corpus.yaml`, 룰 `rules/`.
 
 ## 공격
 
@@ -60,8 +60,8 @@
 
 | 지점 | 건수 | 중앙값 | 95% |
 |---|---|---|---|
-| Claude Code hook | 86 | 1.0 ms | 1.6 ms |
-| OpenClaw 플러그인 | 71 | 1.0 ms | 1.7 ms |
-| MCP 게이트웨이 | 8 | 2.3 ms | 3.2 ms |
+| Claude Code hook | 86 | 0.9 ms | 1.5 ms |
+| OpenClaw 플러그인 | 71 | 0.9 ms | 1.1 ms |
+| MCP 게이트웨이 | 8 | 2.3 ms | 3.0 ms |
 
 MCP 게이트웨이 지연은 가짜 사내 서버 왕복을 포함한다. hook 지연은 데몬 소켓 왕복을 뺀 판정 시간이다.

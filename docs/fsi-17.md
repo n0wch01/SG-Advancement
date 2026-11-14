@@ -15,7 +15,7 @@
 | ① | 인터페이스 보안 | 사내 MCP 서버로 가는 길은 중앙 MCP 게이트웨이 하나. 장비 인증서 mTLS와 요청마다 장비 폐기를 확인하고, 자격증명은 게이트웨이가 보관한다. 등록된 MCP 서버만 쓴다(`unapproved-mcp-server-url`). 관제 서버는 장비 토큰, 관리·읽기 전용 토큰, CSP를 쓴다 | 실환경: 인증서 없으면 403, 우회 403, 폐기 후 403 ([zero-trust.md](zero-trust.md)) | 부분: 에이전트 대화창 자체의 인증은 각 제품에 맡김 |
 | ② | 환각·오정보 대응 | 없음. 모델 출력이 사실인지는 보지 않는다. 결과가 실제로 적용됐는지(차단이 실제로 일어났는지)만 구분해 기록한다([fail-closed.md](fail-closed.md)) | - | 범위 밖 |
 | ③ | 목표 무결성 | 입력 PEP: 인젝션(high 이상)이 든 툴 결과는 모델에 넘기지 않는다(Claude Code hook, MCP 게이트웨이). 인젝션 뒤의 민감·파괴 행동은 차단(`injection-then-sensitive-action`, `injection-then-destructive-action`). 외부 입력 뒤 파괴적 행동은 따로 기록(`destructive-after-external-input`). 팀 작업 범위 밖 툴은 사람 확인(`task-scope-outside-profile`) | 평가 A05·A06·A07·A14 ([evaluation.md](evaluation.md)) | 부분: 문구를 바꾼 인젝션은 놓침(우회 E03·E06) |
-| ④ | 연쇄적 실패 대비 | 장애·판정 실패 처리표(모든 경우 fail closed, [fail-closed.md](fail-closed.md)). 같은 인자 반복·과도한 호출이면 세션 중단(`identical-args-loop`, `rate-limit-tool-calls`). 위임을 통한 인젝션 전파 차단(`cross-agent-injection-propagation`). 여러 사람에게 같은 지표가 퍼지면 캠페인으로 묶음 | 시험 `test_phase1.py`, 처리표 13가지 경우 | 부분: 반복 판정에 오탐 후보 있음(`get_goal` 반복, [evaluation.md](evaluation.md) 2절) |
+| ④ | 연쇄적 실패 대비 | 장애·판정 실패 처리표(모든 경우 fail closed, [fail-closed.md](fail-closed.md)). 같은 인자 반복·과도한 호출이면 세션 중단(`identical-args-loop`, `rate-limit-tool-calls`). 위임을 통한 인젝션 전파 차단(`cross-agent-injection-propagation`). 여러 사람에게 같은 지표가 퍼지면 캠페인으로 묶음 | 시험 `test_phase1.py`, 처리표 13가지 경우 | 부분: 반복 판정의 오탐(`get_goal` 반복)은 2026-11-14 수정 |
 | ⑤ | 취약한 도구 사용금지 | 승인되지 않은 플러그인·스킬·MCP 서버 격리, 변조된 툴 설명 숨김(`mcp-tool-description-poisoning`), 승인된 버전만(`openclaw-version-unapproved`) | 평가 A13, 실환경 무결성 확인(M5d) | 충족(OpenClaw·MCP). Claude Code 플러그인은 아직 안 봄 |
 | ⑥ | 도구 권한 제어 | 호출마다 실행 전 판정(같은 룰을 hook·플러그인·게이트웨이에 적용). 가역성 등급으로 승인 방식 결정. 민감 리소스는 PC 상태·사람 위험도로 제한. 하위 에이전트가 부모보다 큰 권한을 받으면 사람 확인([delegation-permissions.md](delegation-permissions.md)) | 평가 A01~A12, 실제 hook 확인 | 충족 |
 | ⑦ | 샌드박스 환경구축 | 샌드박스를 직접 만들지는 않는다. 꺼져 있으면 경보(`openclaw-sandbox-off`, 기본값 포함). 팀 게이트웨이는 에이전트 망을 격리하고 egress 프록시 허용 목록으로만 내보낸다(`egress-unapproved-host`). 샌드박스 밖으로 나가는 하위 세션은 사람 확인 | 실환경 egress 차단(텔레메트리·날씨 호스트) | 부분: 점검·망 격리까지. 샌드박스 강제는 미룬 과제 |
@@ -25,7 +25,7 @@
 | ⑪ | 에이전트 간 통신보안 | 위임 PEP: 인젝션 문구를 하위 에이전트에 넘기면 차단(`injection-relayed-to-agent`). 위임 사슬로 사람 귀속. 하위 에이전트 권한 비교(Claude Code 정의·OpenClaw `sessions_spawn`). `delegateToolsTo` 설정 경보 | 평가 A11·A12 | 부분: 에이전트 간 채널 암호화·인증은 제품에 맡김 |
 | ⑫ | 공급망 보안 | OpenClaw 본체·플러그인을 npm 서명과 Sigstore 출처로 확인(출시 3일 대기), 서명된 정책, 설치 스크립트 해시 고정, 받은 파일 실행·`curl \| sh`는 사람 확인([downloaded-exec.md](downloaded-exec.md)) | 평가 A09·A10, 실제 내려받기 시험 | 충족 |
 | ⑬ | 인적 승인체계 구축 | 승인 원칙(2026-11-14): 사용자가 먼저 승인하고 보안팀이 사후 검토한다(검토 큐, 감사 체인). 사람에게 물을 수 없는 곳은 보안팀 사전 보류로 보낸다(요청 다이제스트로 묶고 실행 직전 재검사). 실제로 누른 사람은 감사 프록시로 기록 | 실환경 보류·승인·재검사 거부([fail-closed.md](fail-closed.md)) | 충족 |
-| ⑭ | 인적 개입 과부하 방지 | 승인 피로 지표(소요 시간, 5초 안 승인 비율, 반복 요청, 반려율), Code Mode 한 번만 묻기 | 콘솔 승인 피로 패널 | 부분: `destructive-shell-command`가 Code Mode에서 두 번 묻는 오탐 후보 |
+| ⑭ | 인적 개입 과부하 방지 | 승인 피로 지표(소요 시간, 5초 안 승인 비율, 반복 요청, 반려율), Code Mode 한 번만 묻기 | 콘솔 승인 피로 패널 | 부분: Code Mode 이중 질문 오탐은 2026-11-14 수정. 실제 사용에서의 승인 빈도 측정은 노트북 실설치 뒤 |
 | ⑮ | 자원 고갈 방지 | 호출 속도 제한, 같은 인자 반복 중단, 자원 고갈 유도 프롬프트 경보(`exhaustion-keyword-prompt`) | 시나리오 S3(denial-of-wallet) | 부분: 비용·토큰 한도는 보지 않음 |
 | ⑯ | 킬스위치 구현 | 원격 대응: 대화·사람 차단, 실행 중단, 플러그인·스킬 격리, 장비 폐기. 전달 확인·재전달·실제 적용(`applied`)을 구분해 기록 | 실환경 원격 차단 후 재검사 거부 | 충족 |
 | ⑰ | 로깅 및 감사체계 구축 | 공통 이벤트(AgentEvent), Finding의 단계·실제 적용 확인·근거, 감사 로그 해시 체인, 보안팀 검토 기록 | 시험 `test_audit.py`, 해시 체인 검증 | 충족 |
