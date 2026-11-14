@@ -240,3 +240,9 @@ button.primary.danger { background: var(--sev-critical); }
   .facts { grid-template-columns: 1fr; }
   .top { gap: 12px; }
 }
+
+/* Phase 2 data flow (FindingDetail) */
+.flow { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.flow li { padding: 10px 12px; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--line); overflow-wrap: anywhere; }
+.flow li strong { display: block; margin-bottom: 4px; }
+.flow .flow-result { box-shadow: inset 0 0 0 2px var(--line); }

@@ -42,11 +42,18 @@ cases:
       - {kind: tool.call, tool: query_customers, provider: {kind: mcp, mcp_server: crm}, labels: {sga_source: mcp_gateway, sga_posture: ok}}
     expect_not: [sensitive-resource-from-degraded-device]
 
-  # 미탐 주의: 상태 점검을 끈 센서(--no-discovery 등)는 unknown이라 막지 않는다(알려진 공백, 문서화).
-  - name: 상태를 모르면(점검 꺼짐) 대상 아님
+  # 2026-11-13 결정(fail closed): 상태 점검을 하는 PC에서 상태를 모르면(첫 점검 전, 점검 결과가 낡음) 민감 리소스는 차단.
+  # 상태 점검을 하지 않는 센서(중앙 게이트웨이 등)는 라벨 자체를 붙이지 않는다(그 PC의 상태가 판단 대상이 아님).
+  - name: 상태를 모르면 민감 리소스 차단
     sensor: mcp_proxy
     events:
       - {kind: tool.call, tool: query_customers, provider: {kind: mcp, mcp_server: crm}, labels: {sga_posture: unknown}}
+    expect: [sensitive-resource-from-degraded-device]
+
+  - name: 상태 라벨이 없는 센서(상태 점검 안 함)는 대상 아님
+    sensor: mcp_proxy
+    events:
+      - {kind: tool.call, tool: query_customers, provider: {kind: mcp, mcp_server: crm}}
     expect_not: [sensitive-resource-from-degraded-device]
 
   # 사람의 위험도 (안내서 P1-4·C1-7): 최근 24시간 high·critical Finding이 쌓인 사람은 관제 서버가 고위험으로 내려보내고,
@@ -76,3 +83,20 @@ cases:
     events:
       - {kind: tool.call, tool: Bash, arguments: {command: "git push"}}
     expect_not: [task-scope-outside-profile]
+
+  # 결과 기록 모델 (2026-11-13, CLAUDE.md 원칙 "실제 적용 확인"): 집행 지점이 차단을 넘겼는데 그 호출의 결과가 들어오면
+  # 에이전트가 따르지 않은 것(차단이 실제로 적용되지 않음). 센서가 차단한 call_id를 기억했다가 결과에 라벨을 붙인다.
+  - name: 차단한 호출의 결과가 들어옴 → 차단이 적용되지 않음
+    agent: claude_code
+    sensor: claude_code_hook
+    events:
+      - {kind: tool.result, tool: Bash, call_id: c-9, output_preview: "deleted",
+         labels: {sga_enforcement_contradicted: "true", sga_contradicted_findings: "f-1"}}
+    expect: [enforcement-contradicted]
+
+  - name: 평범한 결과는 대상 아님
+    agent: claude_code
+    sensor: claude_code_hook
+    events:
+      - {kind: tool.result, tool: Bash, call_id: c-10, output_preview: "ok"}
+    expect_not: [enforcement-contradicted]

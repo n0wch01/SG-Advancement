@@ -9,11 +9,18 @@ before the device stops waiting, so an accepted decision always has time to arri
 in an ``approval.resolved`` event (``via: security``, ``approver`` = who decided) and the actual
 outcome is reported back, since the console must not show "approved" for a call that never ran.
 The cached-policy CLI path cannot wait for anyone: there the plugin is told to block.
+
+2026-11-13 (CLAUDE.md phase 1): an approval is bound to the exact request. The hold registers a
+digest of the call (tool, arguments, call id, session); a decision that comes back with another
+digest, or none, is a refusal (``mismatch``). Right before an approved call is released it is judged
+again with the latest policy and state (remote blocks, posture, risk, policy freshness, task scope);
+a blocking condition that appeared while it waited refuses it (``rechecked``).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -41,7 +48,23 @@ _OUTCOMES = {
     "timeout": "timeout",
     "cancelled": "cancelled",
     "unreachable": "deny",
+    "mismatch": "deny",
+    "rechecked": "deny",
 }
+
+
+def request_digest(event: Any) -> str:
+    """What an approval is bound to: the call exactly as it will run."""
+    p = event.payload
+    doc = {
+        "tool": getattr(p, "tool", None),
+        "arguments": getattr(p, "arguments", None),
+        "call_id": getattr(p, "call_id", None),
+        "session_id": event.agent.session_id,
+        "user_id": event.principal.user_id,
+    }
+    raw = json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def block_message(outcome: str, by: str | None, reason: str, wait_seconds: float) -> str:
@@ -51,6 +74,10 @@ def block_message(outcome: str, by: str | None, reason: str, wait_seconds: float
         return f"SG-Advance: 보안팀 승인을 {int(wait_seconds // 60)}분 안에 받지 못해 거부했습니다"
     if outcome == "unreachable":
         return "SG-Advance: 관제 서버에 연결할 수 없어 보안팀 승인을 요청하지 못해 거부했습니다"
+    if outcome == "mismatch":
+        return "SG-Advance: 승인이 이 요청과 일치하지 않아 거부했습니다"
+    if outcome == "rechecked":
+        return f"SG-Advance: 승인 후 실행 직전 다시 확인했더니 차단 조건이 생겨 거부했습니다 ({reason})"
     return "SG-Advance: 보안팀 승인 대기 중 실행이 취소됐습니다"
 
 
@@ -65,6 +92,7 @@ class Hold:
     future: asyncio.Future[dict[str, Any]] | None = None
     early: dict[str, Any] | None = None  # resolved before anyone awaited it (cancel)
     call_event: Any = None  # the held tool.call, for enforcement points that send full events (M6)
+    digest: str = ""  # request_digest(call_event): what the approval must name
 
 
 class Holds:
@@ -86,9 +114,16 @@ class Holds:
             summary=summary,
             deadline=time.monotonic() + self.wait_seconds,
             call_event=call_event,
+            digest=request_digest(call_event) if call_event is not None else "",
         )
+        if hold.digest:
+            hold.summary = hold.summary | {"request_digest": hold.digest}
         self._open[hold.id] = hold
         return hold
+
+    def discard(self, hold_id: str) -> None:
+        """A hold nobody will wait for (monitor mode)."""
+        self._open.pop(hold_id, None)
 
     def resolve(self, hold_id: str, outcome: str, by: str | None = None, reason: str = "") -> bool:
         hold = self._open.get(hold_id)
@@ -113,6 +148,16 @@ class Holds:
         applied = 0
         for d in decisions:
             outcome = "allowed" if d.get("decision") == "approved" else "denied"
+            hold = self._open.get(str(d.get("id")))
+            if (
+                outcome == "allowed"
+                and hold is not None
+                and hold.digest
+                and d.get("request_digest") != hold.digest
+            ):
+                # The approval names another request (or none): never run this one on it.
+                log.warning("security approval %s does not match the held request: refused", hold.id)
+                outcome = "mismatch"
             applied += self.resolve(str(d.get("id")), outcome, d.get("by"), str(d.get("reason") or ""))
         return applied
 
@@ -144,6 +189,13 @@ class Holds:
                         pass
         finally:
             self._open.pop(hold_id, None)
+        if result["outcome"] == "allowed" and hold.call_event is not None:
+            # Right before release: judge the same call again with the latest policy and state.
+            blocking = ctx.sensor.recheck(hold.call_event)
+            if blocking:
+                titles = "; ".join(dict.fromkeys(h.rule.title for h in blocking))
+                log.warning("security approval %s: re-check blocks it now (%s)", hold.id, titles)
+                result = {"outcome": "rechecked", "by": result["by"], "reason": titles}
         await self._finish(ctx, hold, result)
         if result["outcome"] == "allowed":
             return {"ok": True, "decision": "allow", "approver": result["by"]}

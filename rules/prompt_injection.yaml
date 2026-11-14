@@ -171,3 +171,21 @@ rules:
       fields: [payload.arguments.task, payload.arguments.message, payload.arguments.prompt]
       pattern: 'ignore (all )?(previous|prior|above) instructions|<important>|<\|im_start\|>system|<<SYS>>|send .{0,40}(\.env|credentials|secret|id_rsa)|upload .{0,40}(\.env|credentials|\.ssh|id_rsa)'
 
+  # fail closed (2026-11-13, CLAUDE.md 1차 5번): 검사할 수 없는 툴 결과. 집행 지점(hook, MCP 게이트웨이)이 결과 전체를
+  # 최대 1MB까지 검사하고, 넘거나(too_large) 형식을 읽을 수 없으면(unreadable) 라벨을 붙인다. prompt_injection·high라
+  # 입력 PEP가 결과를 모델에 넘기지 않는다.
+  # 오탐 주의: 큰 파일·큰 API 응답을 통째로 읽는 작업은 결과가 가려진다(나눠 읽게 해야 함). 미탐: 집행 지점이 없는 경로.
+  - id: tool-result-uninspected
+    severity: high
+    category: prompt_injection
+    title: 검사할 수 없는 툴 결과
+    message: 툴 결과가 너무 크거나 형식을 읽을 수 없어 인젝션 여부를 확인하지 못했습니다. 모델에 넘기지 않았습니다.
+    recommended_action: 결과를 나눠서(범위 지정) 읽게 하거나, 그 도구·서버의 응답 형식을 확인하세요.
+    response: alert
+    dedup: none
+    tags: [zero-trust, "kisa-zt:P6-7"]
+    when: {payload.kind: tool.result}
+    match:
+      type: regex
+      fields: [labels.sga_result_uninspected]
+      pattern: '^(too_large|unreadable)$'

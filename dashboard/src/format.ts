@@ -26,8 +26,34 @@ export const ACTION_LABEL: Record<string, string> = {
   quarantine: "격리",
 };
 
-export function responseText(r: { action: string; enforced: boolean } | null | undefined): string {
+export const STAGE_LABEL: Record<string, string> = {
+  detected: "탐지",
+  approval_requested: "승인 요청",
+  held: "실행 보류",
+  blocked: "차단",
+  result_withheld: "결과 가림",
+  session_aborted: "세션 중단",
+  quarantined: "격리",
+};
+
+export const CONFIRMATION_LABEL: Record<string, string> = {
+  confirmed: "실제 적용 확인",
+  unconfirmed: "적용 미확인",
+  contradicted: "적용 안 됨(실행됨)",
+  failed: "적용 실패",
+};
+
+// Decision stage and whether it was really applied are shown separately (CLAUDE.md, 2026-11-13).
+// Records from before the outcome model have no stage: shown the old way.
+export function responseText(
+  r: { action: string; enforced: boolean; stage?: string | null; confirmation?: string | null } | null | undefined,
+): string {
   if (!r) return "알림";
+  if (r.stage) {
+    const stage = STAGE_LABEL[r.stage] ?? r.stage;
+    const conf = r.confirmation ? CONFIRMATION_LABEL[r.confirmation] : undefined;
+    return conf ? `${stage} · ${conf}` : stage;
+  }
   const label = ACTION_LABEL[r.action] ?? r.action;
   if (r.action === "alert" || r.action === "allow") return label;
   return r.enforced ? `${label} (집행됨)` : `${label} (집행 안 됨)`;
@@ -350,4 +376,61 @@ export const SECURITY_OUTCOME_LABEL: Record<string, string> = {
 export function remainingText(expiresAt: string, now: Date = new Date()): string {
   const left = Math.max(0, Math.floor((new Date(expiresAt).getTime() - now.getTime()) / 1000));
   return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+}
+
+// Phase 2 (docs/lineage.md): a transfer block read as one flow — the read the data came from, the
+// call that tried to send it, the rule that decided, and what actually happened.
+export const LINEAGE_SINK = "lineage:sink";
+
+export interface FlowStep {
+  key: "source" | "transfer" | "policy" | "result";
+  title: string;
+  lines: string[];
+  eventId?: string;
+}
+
+export function lineageFlow(
+  f: Pick<Finding, "tags" | "labels" | "rule_id" | "rule_version" | "explanation" | "response" | "evidence_event_ids">,
+  evidence: AgentEvent[],
+): FlowStep[] | null {
+  if (!f.tags.includes(LINEAGE_SINK)) return null;
+  const sources = (f.labels.sga_lineage_sources ?? "").split(",").filter(Boolean);
+  const byId = new Map(evidence.map((e) => [e.event_id, e]));
+  const steps: FlowStep[] = [];
+  for (const id of sources) {
+    const e = byId.get(id);
+    const provider = (e?.payload.provider ?? {}) as { mcp_server?: string };
+    steps.push({
+      key: "source",
+      title: "1. 보호 데이터 조회 (출처)",
+      eventId: id,
+      lines: e
+        ? [
+            `${formatTime(e.ts)} · ${String(e.payload.tool ?? "?")}${provider.mcp_server ? ` (MCP ${provider.mcp_server})` : ""}`,
+            `보호 컬럼: ${f.labels.sga_lineage_fields || "?"}`,
+          ]
+        : [`출처 이벤트 ${id.slice(0, 8)}… (관제 서버에 아직 없음)`],
+    });
+  }
+  if (f.labels.sga_lineage === "unavailable") {
+    steps.push({ key: "source", title: "1. 출처 기록 없음", lines: ["센서의 출처 기록을 읽을 수 없어 보호 데이터 여부를 모름 (차단 쪽으로 처리)"] });
+  }
+  const call = evidence.find((e) => !sources.includes(e.event_id) && e.payload.kind === "tool.call");
+  steps.push({
+    key: "transfer",
+    title: "2. 전송 시도",
+    eventId: call?.event_id,
+    lines: [
+      call ? `${formatTime(call.ts)} · ${String(call.payload.tool ?? "?")}` : "호출 이벤트 없음",
+      `목적지: ${f.labels.sga_destinations || "?"}`,
+      ...(f.labels.sga_lineage_via ? [`연결 근거: ${f.labels.sga_lineage_via === "value" ? "인자에 같은 값" : f.labels.sga_lineage_via.replace(/^file:/, "그 값을 쓴 파일 ")}`] : []),
+    ],
+  });
+  steps.push({ key: "policy", title: "3. 적용 정책", lines: [`${f.rule_id}${f.rule_version ? ` v${f.rule_version}` : ""} (서명된 정책)`, ...(f.explanation ? [f.explanation] : [])] });
+  steps.push({
+    key: "result",
+    title: "4. 실제 결과",
+    lines: [responseText(f.response), ...(f.response?.evidence ? [`근거: ${f.response.evidence}`] : [])],
+  });
+  return steps;
 }

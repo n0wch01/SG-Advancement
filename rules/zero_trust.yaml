@@ -5,15 +5,16 @@ version: 1
 rules:
   # 안내서 2장 4절 3): 캐시된 정책에는 유효기간을 두고, 판단 근거가 낡았으면 허용 쪽으로 판단하지 않는다.
   # 센서가 관제 서버로부터 "이 정책이 최신"이라는 확인을 기본 72시간(SGA_POLICY_MAX_AGE_HOURS) 받지 못하면 라벨을 붙인다.
-  # 오탐 주의: 출장 등으로 오래 오프라인인 노트북은 상태를 바꾸는 모든 툴에서 확인 창이 뜬다(의도).
+  # 결정(2026-11-13, fail closed): 사람 확인(require_approval) → 차단. 장애를 사용자 승인만으로 넘기지 않는다.
+  # 오탐 주의: 출장 등으로 오래 오프라인인 노트북은 상태를 바꾸는 모든 툴이 막힌다(의도). 다시 연결되면 풀린다.
   # 미탐 주의: 읽기 전용 목록에 든 툴은 낡은 정책에서도 통과한다. 목록은 에이전트별 툴 이름이다.
   - id: policy-stale-state-changing-tool
     severity: medium
     category: policy_violation
     title: 정책이 오래 확인되지 않은 상태에서 상태를 바꾸는 툴 호출
-    message: 이 장비가 관제 서버로부터 오래 정책을 확인받지 못해, 상태를 바꾸는 툴 호출은 사람이 확인하도록 했습니다.
-    recommended_action: 장비의 관제 서버 연결(네트워크, 인증서, 폐기 여부)을 확인하세요.
-    response: require_approval
+    message: 이 장비가 관제 서버로부터 오래 정책을 확인받지 못해, 상태를 바꾸는 툴 호출을 막았습니다.
+    recommended_action: 장비의 관제 서버 연결(네트워크, 인증서, 폐기 여부)을 확인하세요. 연결되면 자동으로 풀립니다.
+    response: block
     dedup: none
     tags: ["action-independent", zero-trust, "kisa-zt:P4-6"]
     when: {payload.kind: tool.call, labels.sga_policy_stale: "true"}
@@ -40,7 +41,8 @@ rules:
   # (labels.sga_posture: ok | degraded | unknown, 이유는 sga_posture_reasons): hook이 없는 Claude Code,
   # 통제 밖 에이전트(Cursor·Codex·Gemini)가 설정돼 있으면 degraded.
   # 오탐 주의: 회사가 허용한 다른 에이전트가 있는 PC도 degraded가 된다(shadow_ai 룰을 먼저 조정).
-  # 미탐 주의: unknown(점검을 끈 센서, 시작 직후 첫 점검 전)은 막지 않는다. 다른 사람 PC의 상태는 보지 않는다.
+  # 결정(2026-11-13, fail closed): 상태 점검을 하는 PC에서 상태를 모르면(unknown: 첫 점검 전, 점검 결과가 1시간 넘게 낡음)도 차단.
+  # 미탐 주의: 상태 점검을 하지 않는 센서는 라벨이 없어 대상이 아니다. 다른 사람 PC의 상태는 보지 않는다.
   - id: sensitive-resource-from-degraded-device
     severity: medium
     category: policy_violation
@@ -56,7 +58,7 @@ rules:
     match:
       type: regex
       fields: [labels.sga_posture]
-      pattern: '^degraded$'
+      pattern: '^(degraded|unknown)$'
 
   # 안내서 P1-4·C1-7: 사람의 위험도를 지속적으로 재평가해 접근 범위를 조정. 관제 서버가 최근 24시간 critical 1건 이상
   # 또는 high 3건 이상인 사람을 elevated_risk_users로 내려보낸다(이 파일의 medium 룰은 세지 않음: 되먹임 방지).
@@ -99,3 +101,21 @@ rules:
       type: allowlist
       field: payload.tool
       allow: ["*"]
+
+  # 결과 기록 모델 (2026-11-13): 차단 판정을 에이전트(Claude Code·OpenClaw)에 넘긴 경우 그 기록은 "미확인"이다.
+  # 같은 call_id의 결과가 나중에 들어오면 에이전트가 따르지 않은 것: 차단이 실제로 적용되지 않았다는 증거.
+  # 미탐 주의: 결과가 오지 않으면(따랐든, 결과 hook이 없든) 확인되지 않은 채 남는다. 센서 재시작 전의 차단은 기억하지 못한다.
+  - id: enforcement-contradicted
+    severity: critical
+    category: policy_violation
+    title: 차단한 툴 호출이 실행됨
+    message: SG-Advance가 실행 전에 차단한 툴 호출의 결과가 들어왔습니다. 에이전트가 차단을 따르지 않았습니다.
+    recommended_action: 해당 PC의 hook·플러그인이 바뀌었거나 우회됐는지 확인하고, 실행된 호출의 영향(파일·DB·외부 전송)을 조사하세요.
+    response: alert
+    dedup: none
+    tags: [zero-trust, "kisa-zt:C1-6"]
+    when: {payload.kind: tool.result}
+    match:
+      type: regex
+      fields: [labels.sga_enforcement_contradicted]
+      pattern: '^true$'

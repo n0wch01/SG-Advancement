@@ -60,6 +60,9 @@ def hooks_block(exe: str, sga_home: Path, user: str) -> dict[str, Any]:
         handler: dict[str, Any] = {"type": "command", "command": exe, "args": args}
         if event == "PreToolUse":
             handler |= {"timeout": PRE_TOOL_TIMEOUT, "onFailure": "block"}
+        elif event == "PostToolUse":
+            # Input PEP: a broken hook must not let an unchecked result through (fail closed, 2026-11-13).
+            handler |= {"timeout": OTHER_TIMEOUT, "onFailure": "block"}
         else:
             handler |= {"timeout": OTHER_TIMEOUT}
         entry: dict[str, Any] = {"hooks": [handler]}

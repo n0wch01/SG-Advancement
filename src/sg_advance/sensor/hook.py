@@ -34,6 +34,9 @@ from typing import Any
 DAEMON_TIMEOUT = 3.0
 READ_ONLY_TOOLS = {"Read", "Glob", "Grep", "LS", "NotebookRead", "TodoRead", "TodoWrite"}
 PREVIEW_MAX = 4000
+# Tool results are judged on their full text up to this size (the sensor keeps only PREVIEW_MAX when it
+# records them). Larger results cannot be checked: labelled, and the rules withhold them (fail closed).
+INSPECT_MAX = 1_000_000
 DEFAULT_HOME = Path("~/.sg-advance")
 
 
@@ -49,9 +52,12 @@ def _provider(tool: str) -> dict[str, Any]:
     return {"kind": "builtin"}
 
 
+def _text(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+
+
 def _preview(value: Any) -> str:
-    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
-    return text[:PREVIEW_MAX]
+    return _text(value)[:PREVIEW_MAX]
 
 
 def hook_event(inp: dict[str, Any], *, user_id: str, hostname: str | None) -> dict[str, Any] | None:
@@ -70,13 +76,15 @@ def hook_event(inp: dict[str, Any], *, user_id: str, hostname: str | None) -> di
     elif name in ("PostToolUse", "PostToolUseFailure"):
         ok = name == "PostToolUse"
         response = inp.get("tool_response") if ok else inp.get("error", inp.get("tool_response"))
+        full = _text(response) if response is not None else None
         payload = {
             "kind": "tool.result",
             "call_id": call_id,
             "tool": tool,
             "provider": _provider(tool),
             "ok": ok,
-            "output_preview": _preview(response) if response is not None else None,
+            "output_preview": full[:INSPECT_MAX] if full is not None else None,  # judged whole, kept short
+            "output_bytes": len(full.encode()) if full is not None else None,
         }
         if not ok:
             payload["error"] = _preview(response)[:500] if response is not None else "failed"
@@ -93,6 +101,9 @@ def hook_event(inp: dict[str, Any], *, user_id: str, hostname: str | None) -> di
     else:
         return None
     labels = {"sga_source": "claude_code_hook", "claude_code.hook": str(name)}
+    full_result = payload.get("output_preview") if payload["kind"] == "tool.result" else None
+    if full_result is not None and len(_text(inp.get("tool_response"))) > INSPECT_MAX:
+        labels["sga_result_uninspected"] = "too_large"
     if isinstance(inp.get("permission_mode"), str):
         labels["claude_code.permission_mode"] = inp["permission_mode"]
     session = str(inp.get("session_id") or "unknown")
@@ -174,14 +185,18 @@ def degraded(home: Path, event: dict[str, Any]) -> dict[str, Any]:
 
 
 def fallback(event: dict[str, Any]) -> dict[str, Any]:
-    """Nothing to judge with: read-only tools pass, the rest goes to Claude Code's prompt."""
+    """Nothing to judge with (no daemon, no valid cached policy): read-only tools pass, everything else
+    is blocked. Fail closed (CLAUDE.md, 2026-11-13): a failure is never passed on to the person's
+    approval. Tool results pass unjudged (they cannot be withheld without a policy): recorded as such."""
     p = event["payload"]
     if p["kind"] != "tool.call" or p["tool"] in READ_ONLY_TOOLS:
-        return {"ok": True, "decision": "allow"}
+        return {"ok": True, "decision": "allow", "judged_by": "fallback"}
     return {
         "ok": True,
-        "decision": "approve",
-        "reason": f"SG-Advance sensor unavailable: approve this {p['tool']} call only if you expected it",
+        "decision": "block",
+        "judged_by": "fallback",
+        "reason": f"SG-Advance: the security sensor is unavailable, so {p['tool']} is blocked "
+        "(read-only tools still work). Ask IT to check the SG-Advance sensor.",
     }
 
 
@@ -285,12 +300,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         inp = json.loads(sys.stdin.read() or "{}")
     except ValueError:
-        print("SG-Advance hook: input is not JSON", file=sys.stderr)
-        return 1  # non-blocking error: Claude Code's onFailure decides
-    event = hook_event(inp, user_id=args.user, hostname=socket.gethostname())
-    if event is None:
-        return 0
-    code, out, err = respond(str(inp.get("hook_event_name")), judge(home, event), inp)
+        # Fail closed: exit 2 blocks the tool (PreToolUse) or the prompt; nothing could be judged.
+        print("SG-Advance hook: input is not JSON; blocked", file=sys.stderr)
+        return 2
+    try:
+        event = hook_event(inp, user_id=args.user, hostname=socket.gethostname())
+        if event is None:
+            return 0
+        code, out, err = respond(str(inp.get("hook_event_name")), judge(home, event), inp)
+    except Exception as e:  # noqa: BLE001 - an unexpected error must not let the call through
+        print(f"SG-Advance hook failed ({type(e).__name__}); blocked", file=sys.stderr)
+        return 2
     if out:
         print(out)
     if err:

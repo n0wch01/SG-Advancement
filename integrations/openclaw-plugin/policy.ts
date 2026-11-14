@@ -4,7 +4,7 @@
 // Order of authority for one tool call (docs/sensor.md, "판정할 수 없을 때는 단계적으로"):
 //   1. the local sensor daemon over its unix socket (full, stateful rules)        -> source "daemon"
 //   2. `sga-sensor evaluate` (signed policy cache, stateless rules)          -> source "degraded"
-//   3. risk tiers: read-only tools pass, everything else asks the user            -> source "fallback"
+//   3. risk tiers: read-only tools pass, everything else is blocked (fail closed) -> source "fallback"
 // A daemon "hold" (M11 security_approval) waits for security's decision in the console: up to
 // securityWaitMs, then denied. Any failure while waiting blocks: nobody approved the call.
 // decide() never throws: an exception inside a before_tool_call handler would make OpenClaw block
@@ -170,18 +170,14 @@ export function fallbackResult(
   toolName: string,
   s: PluginSettings,
   reason: string,
-  onResolution?: (d: string) => void,
+  _onResolution?: (d: string) => void,
 ): HookResult {
+  // Fail closed (CLAUDE.md, 2026-11-13): nothing could judge this call (no daemon, no cached policy),
+  // so only read-only tools pass. A failure is never handed to the person's approval.
   if (s.readOnlyTools.includes(toolName)) return undefined;
   return {
-    requireApproval: {
-      title: "SG-Advance unavailable",
-      description: `Security sensor could not judge this ${toolName} call (${reason}). Approve only if you expected it.`,
-      severity: "warning",
-      timeoutMs: s.approvalTimeoutMs,
-      allowedDecisions: ["allow-once", "deny"],
-      onResolution,
-    },
+    block: true,
+    blockReason: `SG-Advance: the security sensor is unavailable (${reason}), so ${toolName} is blocked; read-only tools still work.`,
   };
 }
 

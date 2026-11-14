@@ -92,7 +92,11 @@ async def daemon(enrolled: Sensor):
         shutil.rmtree(d, ignore_errors=True)
 
 
-async def test_daemon_judges_hook_events_and_records_the_approval(daemon, enrolled: Sensor) -> None:
+async def test_daemon_judges_hook_events_and_records_the_approval(
+    daemon, enrolled: Sensor, monkeypatch
+) -> None:
+    # The agent-prompt path (grade 3-1 now goes to the security hold: tests/test_phase1.py).
+    monkeypatch.setattr("sg_advance.sensor.plugin_api.GRADE_HELD", "grade:none")
     home, _ctx = daemon
 
     def run(inp: dict[str, Any]) -> dict[str, Any]:
@@ -142,7 +146,8 @@ def test_without_daemon_cached_policy_then_risk_tiers(enrolled: Sensor, tmp_path
 
     nobody = tmp_path / "not-enrolled"
     ask = hook.judge(nobody, hook.hook_event(pre("Bash", command="ls"), user_id="b", hostname=None))  # type: ignore[arg-type]
-    assert ask["decision"] == "approve" and "unavailable" in ask["reason"]
+    # Fail closed (2026-11-13): nothing to judge with → blocked, never handed to the person's approval.
+    assert ask["decision"] == "block" and "unavailable" in ask["reason"]
     read = hook.judge(nobody, hook.hook_event(pre("Read", file_path="a"), user_id="b", hostname=None))  # type: ignore[arg-type]
     assert read["decision"] == "allow"
 
@@ -268,3 +273,26 @@ async def test_daemon_withholds_injected_results_and_sees_subagents(daemon, enro
         if (f.get("response") or {}).get("detail", "").startswith("input pep")
     ]
     assert held and held[0]["response"]["enforcer"] == "claude_code_hook"
+
+
+# ── fail closed (2026-11-13) ────────────────────────────────────────────────
+
+
+def test_broken_input_or_an_unexpected_error_blocks(monkeypatch, tmp_path: Path, capsys) -> None:
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
+    assert hook.main(["--home", str(tmp_path)]) == 2  # exit 2 = blocked
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(pre("Bash", command="ls"))))
+
+    def boom(*_a, **_k):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(hook, "judge", boom)
+    assert hook.main(["--home", str(tmp_path)]) == 2
+
+
+def test_post_tool_use_hook_also_fails_closed() -> None:
+    doc = cc.hooks_block("/v/sga-hook", Path("/sga"), "bob")
+    assert doc["PostToolUse"][0]["hooks"][0]["onFailure"] == "block"
+    assert "onFailure" not in doc["UserPromptSubmit"][0]["hooks"][0]  # a prompt is not an action

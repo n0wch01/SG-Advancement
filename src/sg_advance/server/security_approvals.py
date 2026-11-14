@@ -26,7 +26,7 @@ from .auth import DbSession, require_admin, require_device
 from .db import Device, SecurityApproval, utcnow
 
 MAX_WAIT_SECONDS = 900
-OUTCOMES = ("allowed", "denied", "timeout", "cancelled", "unreachable")
+OUTCOMES = ("allowed", "denied", "timeout", "cancelled", "unreachable", "mismatch", "rechecked")
 
 admin = APIRouter(prefix="/v1/admin", tags=["security-approval"], dependencies=[Depends(require_admin)])
 sensor = APIRouter(prefix="/v1", tags=["sensor"])
@@ -49,6 +49,9 @@ class HoldCreate(_Model):
     event_id: str | None = None
     finding_ids: list[str] = Field(default_factory=list, max_length=50)
     wait_seconds: int = Field(ge=1, le=MAX_WAIT_SECONDS)
+    request_digest: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$", description="The exact request the approval is for"
+    )
 
 
 class HoldCreated(_Model):
@@ -61,10 +64,12 @@ class Decision(_Model):
     decision: Literal["approved", "denied"]
     by: str
     reason: str
+    request_digest: str | None = None  # the device runs the call only if this names its held request
 
 
 class OutcomeIn(_Model):
-    outcome: Literal["allowed", "denied", "timeout", "cancelled", "unreachable"]
+    # mismatch: the approval named another request; rechecked: a blocking condition appeared while waiting
+    outcome: Literal["allowed", "denied", "timeout", "cancelled", "unreachable", "mismatch", "rechecked"]
 
 
 class DecisionIn(_Model):
@@ -94,6 +99,7 @@ class ApprovalOut(_Model):
     delivered_at: datetime | None
     outcome: str | None
     outcome_at: datetime | None
+    request_digest: str | None = None
 
 
 def shown_status(a: SecurityApproval, now: datetime) -> str:
@@ -134,6 +140,7 @@ def create_hold(body: HoldCreate, device: CurrentDevice, db: DbSession) -> HoldC
         severity=body.severity,
         event_id=body.event_id,
         finding_ids=body.finding_ids,
+        request_digest=body.request_digest,
     )
     db.add(row)
     db.commit()
@@ -157,7 +164,13 @@ def decisions(device: CurrentDevice, db: DbSession) -> list[Decision]:
         a.delivered_at = now
     db.commit()
     return [
-        Decision(id=a.id, decision=a.status, by=a.decided_by or "", reason=a.decision_reason or "")  # type: ignore[arg-type]
+        Decision(
+            id=a.id,
+            decision=a.status,  # type: ignore[arg-type]
+            by=a.decided_by or "",
+            reason=a.decision_reason or "",
+            request_digest=a.request_digest,
+        )
         for a in rows
     ]
 
@@ -216,7 +229,7 @@ def decide(hold_id: str, body: DecisionIn, request: Request, db: DbSession) -> A
         "security_decision",
         a.id,
         {"status": a.status, "by": a.decided_by, "reason": a.decision_reason, "at": now, "user_id": a.user_id,
-         "tool": a.tool, "rule_ids": a.rule_ids},
+         "tool": a.tool, "rule_ids": a.rule_ids, "request_digest": a.request_digest},
     )  # fmt: skip
     db.commit()
     return _out(a, now)

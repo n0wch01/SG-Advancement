@@ -18,6 +18,7 @@ import {
   parseHash,
   relativeTime,
   responseText,
+  lineageFlow,
   severityRank,
   sinceFor,
   waitText,
@@ -47,6 +48,15 @@ describe("format", () => {
     expect(responseText(null)).toBe("알림");
     expect(responseText({ action: "block", enforced: true })).toBe("차단 (집행됨)");
     expect(responseText({ action: "abort_session", enforced: false })).toBe("실행 중단 (집행 안 됨)");
+    expect(responseText({ action: "block", enforced: true, stage: "blocked", confirmation: "unconfirmed" })).toBe(
+      "차단 · 적용 미확인",
+    );
+    expect(responseText({ action: "block", enforced: true, stage: "blocked", confirmation: "confirmed" })).toBe(
+      "차단 · 실제 적용 확인",
+    );
+    expect(responseText({ action: "alert", enforced: false, stage: "detected", confirmation: "not_applicable" })).toBe(
+      "탐지",
+    );
   });
 
   it("never shows withheld chat text, only its length", () => {
@@ -187,5 +197,49 @@ describe("format", () => {
     expect(sinceFor("24h", now)).toBe("2026-11-11T12:00:00.000Z");
     expect(sinceFor("all", now)).toBeNull();
     expect(relativeTime("2026-11-12T11:58:00Z", now)).toBe("2분 전");
+  });
+});
+
+describe("lineageFlow", () => {
+  const ev = (event_id: string, kind: string, tool: string, extra: Record<string, unknown> = {}) => ({
+    event_id,
+    ts: "2026-11-13T10:00:00Z",
+    endpoint: { device_id: "d" },
+    principal: { user_id: "bob" },
+    agent: { type: "claude_code", session_id: "s" },
+    source: { sensor: "claude_code_hook" },
+    payload: { kind, tool, ...extra },
+    labels: {},
+  });
+  const finding = {
+    rule_id: "protected-data-to-unapproved-destination",
+    rule_version: "1",
+    tags: ["grade:3-1", "lineage:sink"],
+    labels: {
+      sga_lineage_sources: "src-1",
+      sga_lineage_fields: "phone,rrn",
+      sga_destinations: "paste.internet-sim",
+      sga_lineage_via: "file:/work/vip.csv",
+    },
+    explanation: "labels.sga_destinations not in allowlist: paste.internet-sim",
+    response: { action: "block", enforced: true, stage: "blocked", confirmation: "confirmed", evidence: "not forwarded" },
+    evidence_event_ids: ["src-1", "call-1"],
+  } as never;
+
+  it("reads source, transfer, policy and result in order", () => {
+    const steps = lineageFlow(finding, [
+      ev("src-1", "tool.result", "run_query", { provider: { mcp_server: "testdb" } }),
+      ev("call-1", "tool.call", "Bash"),
+    ] as never)!;
+    expect(steps.map((s) => s.key)).toEqual(["source", "transfer", "policy", "result"]);
+    expect(steps[0].lines.join(" ")).toContain("MCP testdb");
+    expect(steps[0].lines.join(" ")).toContain("phone,rrn");
+    expect(steps[1].lines.join(" ")).toContain("paste.internet-sim");
+    expect(steps[1].lines.join(" ")).toContain("그 값을 쓴 파일 /work/vip.csv");
+    expect(steps[3].lines[0]).toBe(responseText({ action: "block", enforced: true, stage: "blocked", confirmation: "confirmed" }));
+  });
+
+  it("is only for transfer findings", () => {
+    expect(lineageFlow({ ...(finding as object), tags: [] } as never, [])).toBeNull();
   });
 });

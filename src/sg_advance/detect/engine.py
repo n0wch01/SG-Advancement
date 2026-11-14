@@ -7,7 +7,9 @@ offline replays share one code path.
 
 Hits vs findings: a rule that matches always produces a hit (and contributes to the verdict),
 but with ``dedup: session`` only the first hit per rule/session/key becomes a Finding, so a
-blocked exfiltration attempt is blocked every time without flooding the console.
+repeated detection does not flood the console. The suppressed ones are kept in
+``Verdict.suppressed``: when an enforcement point really blocks or holds the call, the sensor
+reports them too (every enforced call is its own record, CLAUDE.md "record distinct outcomes").
 """
 
 from __future__ import annotations
@@ -48,6 +50,14 @@ CAMPAIGN_TAG = "campaign"
 CAMPAIGN_KEY_TAG = "campaign-key:"
 INDICATOR = "indicator"
 INDICATOR_MAX = 200
+# Data lineage (phase 2, sensor/lineage.py): a regex rule tagged ``lineage:source`` collects every match
+# (named groups ``field`` and ``value``) instead of the first, and its explanation names only the fields:
+# the values are the protected data itself. ``split:<sep>`` makes an allowlist rule split each value
+# (a label holding a list, e.g. sga_destinations). Tags, not rule fields, so older sensors still load the
+# policy (rule models forbid unknown fields).
+LINEAGE_SOURCE_TAG = "lineage:source"
+SPLIT_TAG = "split:"
+COLLECT_MAX = 5000  # values one ``collect`` hit keeps (a bigger result: the rest is not tracked)
 _ACTION_RANK = {a: i for i, a in enumerate(ResponseAction)}
 
 
@@ -58,6 +68,9 @@ class Hit:
     explanation: str
     evidence_event_ids: tuple[str, ...]
     reported: bool = True  # False when suppressed by dedup
+    # (field, value) pairs a ``collect`` rule found: protected data for the sensor's lineage store.
+    # Never put in a Finding, never printed.
+    collected: tuple[tuple[str, str], ...] = field(default=(), repr=False)
 
 
 @dataclass
@@ -65,6 +78,7 @@ class Verdict:
     event: AgentEvent
     hits: list[Hit] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
+    suppressed: list[Finding] = field(default_factory=list)  # dedup'd hits, reported only if enforced
 
     @property
     def action(self) -> ResponseAction:
@@ -76,6 +90,18 @@ class Verdict:
     def rule_ids(self) -> list[str]:
         return [h.rule.id for h in self.hits]
 
+    @property
+    def enforced_ids(self) -> list[str]:
+        """Finding ids a block or hold of this call refers to (reported + enforcing repeats)."""
+        return [f.finding_id for f in (*self.findings, *self.enforcing_repeats)]
+
+    @property
+    def enforcing_repeats(self) -> list[Finding]:
+        """Suppressed findings of rules that asked for more than an alert: reported when the call is
+        really blocked or held. A repeated alert-only hit stays suppressed."""
+        passive = (ResponseAction.ALERT, ResponseAction.ALLOW)
+        return [f for f in self.suppressed if f.response is not None and f.response.action not in passive]
+
 
 @dataclass(frozen=True)
 class _RawHit:
@@ -83,6 +109,7 @@ class _RawHit:
     explanation: str
     evidence_event_ids: tuple[str, ...]
     values: tuple[str, ...] = ()  # the matched values themselves (campaign indicators)
+    collected: tuple[tuple[str, str], ...] = ()  # regex ``collect``: (field, value), see Hit
 
 
 def indicator_of(values: Iterable[str]) -> str | None:
@@ -127,18 +154,48 @@ def _search(doc: dict[str, Any], spec: RegexMatch | SequenceStep) -> tuple[str, 
 # ── matchers ────────────────────────────────────────────────────────────────
 
 
+def _split_of(rule: Rule) -> str | None:
+    return next(
+        (t[len(SPLIT_TAG) :] for t in rule.tags if t.startswith(SPLIT_TAG) and len(t) > len(SPLIT_TAG)), None
+    )
+
+
 class _RegexMatcher:
-    def __init__(self, spec: RegexMatch) -> None:
+    def __init__(self, spec: RegexMatch, collect: bool = False) -> None:
         self.spec = spec
+        self.collect = collect
 
     def check(self, event: AgentEvent, doc: dict[str, Any]) -> _RawHit | None:
+        if self.collect:
+            return self._collect(event, doc)
         hit = _search(doc, self.spec)
         return _RawHit("", hit[0], (event.event_id,), (hit[1],)) if hit is not None else None
 
+    def _collect(self, event: AgentEvent, doc: dict[str, Any]) -> _RawHit | None:
+        cre = self.spec.compiled()
+        assert cre is not None
+        found: dict[tuple[str, str], None] = {}
+        for path in self.spec.fields:
+            for value in resolve(doc, path):
+                for text in string_leaves(value):
+                    for m in cre.finditer(text):
+                        if len(found) >= COLLECT_MAX:
+                            break
+                        groups = m.groupdict()
+                        found.setdefault((groups.get("field") or "value", groups.get("value") or m.group(0)))
+        if not found:
+            return None
+        fields = sorted({f for f, _ in found})
+        why = f"{len(found)} protected value(s) in: {', '.join(fields)}"  # names only, never the values
+        return _RawHit("", why, (event.event_id,), (), tuple(found))
+
 
 class _AllowlistMatcher:
-    def __init__(self, spec: AllowlistMatch, trusted: TrustedSets | None = None) -> None:
+    def __init__(
+        self, spec: AllowlistMatch, trusted: TrustedSets | None = None, split: str | None = None
+    ) -> None:
         self.spec = spec
+        self.split = split
         self.allow = [a.lower() for a in spec.allow] if spec.ignore_case else list(spec.allow)
         self.trusted = trusted if trusted is not None else {}
 
@@ -151,7 +208,15 @@ class _AllowlistMatcher:
         return any(fnmatchcase(v, pat) for pat in self.allow)
 
     def check(self, event: AgentEvent, doc: dict[str, Any]) -> _RawHit | None:
-        values = sorted({str(v) for v in resolve(doc, self.spec.field) if not isinstance(v, dict | list)})
+        values = sorted(
+            {
+                part.strip()
+                for v in resolve(doc, self.spec.field)
+                if not isinstance(v, dict | list)
+                for part in (str(v).split(self.split) if self.split else [str(v)])
+                if part.strip()
+            }
+        )
         offending = [v for v in values if not self._allowed(v)]
         if not offending:
             return None
@@ -307,10 +372,12 @@ class Engine:
         self._compiled = [
             (
                 r,
-                _AllowlistMatcher(r.match, self.trusted)
+                _AllowlistMatcher(r.match, self.trusted, _split_of(r))
                 if r.match.type == "allowlist"
                 else _InSetMatcher(r.match, self.trusted)
                 if r.match.type == "in_set"
+                else _RegexMatcher(r.match, collect=True)
+                if r.match.type == "regex" and LINEAGE_SOURCE_TAG in r.tags
                 else _MATCHERS[r.match.type](r.match),
             )
             for r in ruleset.enabled
@@ -334,9 +401,10 @@ class Engine:
             if rule.dedup == "session":
                 self._reported.add(dedup_key)
             report = first_time or rule.dedup == "none"
-            verdict.hits.append(Hit(rule, raw.key, raw.explanation, raw.evidence_event_ids, report))
-            if report:
-                verdict.findings.append(self._finding(rule, event, raw, doc))
+            verdict.hits.append(
+                Hit(rule, raw.key, raw.explanation, raw.evidence_event_ids, report, raw.collected)
+            )
+            (verdict.findings if report else verdict.suppressed).append(self._finding(rule, event, raw, doc))
         if event.kind is EventKind.SESSION_END:
             self._forget_session(session)
         return verdict

@@ -11,6 +11,7 @@ import {
   eventSummary,
   findingsHref,
   formatTime,
+  lineageFlow,
   relativeTime,
   responseText,
   timelineHref,
@@ -51,6 +52,7 @@ function DetailBody({ d }: { d: Detail }) {
         </p>
       ))}
       {f.rule_id === CAMPAIGN_RULE && <Campaign f={f} members={d.campaign_members ?? []} />}
+      <DataFlow d={d} />
 
       <div className="grid-2">
         <div className="card">
@@ -100,6 +102,7 @@ function DetailBody({ d }: { d: Detail }) {
             <dd>
               {responseText(f.response)}
               {f.response?.detail && <div className="muted small">{f.response.detail}</div>}
+              {f.response?.evidence && <div className="muted small">근거: {f.response.evidence}</div>}
             </dd>
             {f.tags.length > 0 && (
               <>
@@ -311,4 +314,28 @@ function Respond({ api, f }: { api: Api; f: Finding }) {
 function useAsyncList(api: Api, device: string, tick: number) {
   const { data } = useAsync(() => api.actions({ device_id: device }), [api, device, tick]);
   return data ?? [];
+}
+
+function DataFlow({ d }: { d: Detail }) {
+  const steps = lineageFlow(d.finding, d.evidence);
+  if (!steps) return null;
+  return (
+    <div className="card">
+      <h2>데이터 흐름</h2>
+      <p className="muted small">테스트 DB에서 조회한 보호 데이터가 어디로 가려 했는지. 값은 PC 밖으로 보내지 않아 가려져 있습니다.</p>
+      <ol className="flow">
+        {steps.map((s, i) => (
+          <li key={`${s.key}-${i}`} className={`flow-${s.key}`}>
+            <strong>{s.title}</strong>
+            {s.lines.map((l) => (
+              <div key={l} className="small">
+                {l}
+              </div>
+            ))}
+            {s.eventId && <div className="muted small mono">이벤트 {s.eventId.slice(0, 12)}…</div>}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
 }

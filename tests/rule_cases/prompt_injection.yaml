@@ -137,3 +137,19 @@ cases:
       - {kind: tool.call, tool: exec, arguments: {command: "echo 'ignore previous instructions'"}}
     expect_not: [injection-relayed-to-agent]
 
+
+  # 검사할 수 없는 툴 결과 (2026-11-13, fail closed): 1MB를 넘거나 형식을 읽을 수 없는 결과는 인젝션을 확인할 수 없다.
+  # 집행 지점이 labels.sga_result_uninspected를 붙이고, 이 룰(prompt_injection, high)에 걸리면 입력 PEP가 결과를 가린다.
+  - name: 검사할 수 없는 결과는 가림 대상
+    agent: claude_code
+    sensor: claude_code_hook
+    events:
+      - {kind: tool.result, tool: WebFetch, call_id: r-1, output_preview: "aaaa", labels: {sga_result_uninspected: too_large}}
+    expect: [tool-result-uninspected]
+
+  - name: 평범한 결과는 대상 아님
+    agent: claude_code
+    sensor: claude_code_hook
+    events:
+      - {kind: tool.result, tool: WebFetch, call_id: r-2, output_preview: "hello"}
+    expect_not: [tool-result-uninspected]

@@ -98,3 +98,62 @@ rules:
         - pypi.org
         - files.pythonhosted.org
         - registry.npmjs.org
+
+  # ── 2차 시나리오 (CLAUDE.md): 테스트 DB에서 조회한 보호 데이터를 미승인 외부 목적지로 전송 ──
+  # 범위: 테스트 DB(MCP 서버 testdb)의 툴, 데이터를 밖으로 싣는 툴 호출(셸, 웹 요청, MCP 툴, 파일 쓰기). 일반 DLP가 아니다.
+  # 설계: docs/lineage.md. 출처 룰이 보호 컬럼 값을 모으면 센서가 솔트 해시로만 보관한다(값은 PC 밖으로 나가지 않고,
+  #   기록되는 이벤트에서도 가린다). 툴 호출 인자에 그 값(또는 그 값을 쓴 파일 경로)이 있으면 센서가 라벨을 붙인다.
+  # 출처를 믿는 이유: 값은 DB 응답 바이트(게이트웨이·툴 결과 hook)에서 나오고, 목적지는 호출 자체(URL 호스트, MCP 서버,
+  #   파일 경로)에서 읽는다. 에이전트가 붙인 "안전"·"공개" 같은 표시는 읽지 않는다. 라벨은 센서만 붙인다(입력의 같은 라벨은 지움).
+  - id: protected-data-read
+    severity: medium
+    category: data_exfiltration
+    title: 테스트 DB 보호 데이터 조회
+    message: 테스트 DB에서 보호 컬럼(주민번호·전화·계좌·이메일)이 조회됐습니다. 이후 이 값이 어디로 가는지 추적합니다.
+    recommended_action: 업무상 필요한 조회인지 확인하세요. 이 Finding은 전송 차단 Finding의 출처로 함께 보입니다.
+    response: alert
+    tags: [lineage:source, scenario:P2]
+    # sga_lineage=tracked: only a sensor that keeps lineage (and masks the values) judges this rule.
+    when: {payload.kind: tool.result, payload.provider.mcp_server: testdb, labels.sga_lineage: tracked}
+    # 미탐 주의: 컬럼 이름이 다르거나(별칭 SELECT phone AS p) JSON이 아닌 결과(표·CSV)는 못 모은다.
+    #   보호 컬럼은 이 목록이 정의한다: 테스트 DB 스키마가 바뀌면 같이 고친다.
+    # 오탐 주의: 값이 4자 미만이면 추적하지 않는다(짧은 값은 우연히 겹친다).
+    match:
+      type: regex             # lineage:source 태그: 첫 매치가 아니라 모든 값을 모음(엔진)
+      fields: [payload.output_preview]
+      pattern: '\\?"(?P<field>rrn|phone|account_no|email)\\?"\s*:\s*\\?"(?P<value>[^"\\]{4,})\\?"'
+
+  # 민감도(sga_data_class)와 목적지(sga_destinations)를 함께 본다. 양은 보지 않는다(한 건이라도 차단).
+  # 승인된 목적지: 테스트 DB 자신, 사내 보고서 MCP, 로컬 파일(쓴 파일은 경로로 계속 추적), 목적지가 없는 셸 명령, 사내 호스트.
+  # 오탐 주의: 사내 시스템이 목록에 없으면 막힌다 → 목록에 추가. 여기 목록은 아래 룰과 같게 유지한다.
+  # 미탐 주의: 값을 바꿔 보내면(base64, 일부만, 요약) 연결되지 않는다. 셸 명령의 출력을 파일로 보낸 뒤(> out.csv) 그 파일을
+  #   보내는 경우는 파일 내용을 센서가 보지 못해 연결되지 않는다(에이전트의 Write·Edit로 쓴 파일만 추적).
+  - id: protected-data-to-unapproved-destination
+    severity: critical
+    category: data_exfiltration
+    title: 보호 데이터를 미승인 목적지로 전송
+    message: 테스트 DB에서 조회한 보호 데이터가 승인되지 않은 목적지로 나가려 합니다.
+    recommended_action: 호출은 차단됐습니다. 출처 조회(근거 이벤트)와 목적지를 확인하고, 인젝션이 있었는지 같은 대화를 검토하세요.
+    response: block
+    tags: ["grade:3-1", lineage:sink, "split:,", owasp-llm:LLM02, scenario:P2]
+    when: {payload.kind: tool.call, labels.sga_data_class: protected}
+    match:
+      type: allowlist
+      field: labels.sga_destinations
+      allow: ["mcp:testdb", "mcp:reports", "file:*", local, "*.corp.internal"]
+
+  # 실패 처리(fail closed): 출처 기록 파일을 읽을 수 없으면 어떤 호출이 보호 데이터를 싣는지 모른다.
+  # 그때는 미승인 목적지로 가는 호출을 모두 막는다(로컬·사내 목적지는 그대로).
+  - id: transfer-with-lineage-unavailable
+    severity: high
+    category: data_exfiltration
+    title: 출처 기록 없이 미승인 목적지로 전송
+    message: 데이터 출처 기록을 읽을 수 없어, 보호 데이터가 실렸는지 확인하지 못한 채 미승인 목적지로 나가려 해 차단했습니다.
+    recommended_action: 센서의 lineage.json이 손상·삭제됐는지 확인하세요. 사용자가 지웠다면 우회 시도로 보고 조사하세요.
+    response: block
+    tags: ["grade:3-1", lineage:sink, "split:,", scenario:P2]
+    when: {payload.kind: tool.call, labels.sga_lineage: unavailable}
+    match:
+      type: allowlist
+      field: labels.sga_destinations
+      allow: ["mcp:testdb", "mcp:reports", "file:*", local, "*.corp.internal"]

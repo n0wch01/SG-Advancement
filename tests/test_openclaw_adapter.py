@@ -451,6 +451,9 @@ async def test_observe_only_never_aborts(gateway, enrolled: Sensor) -> None:
             "enforced": False,
             "enforcer": "openclaw_gateway",
             "detail": "observe-only mode",
+            "stage": "blocked",
+            "confirmation": "failed",  # decided, not applied: recorded as such (2026-11-13)
+            "evidence": None,
         }
         assert gw.aborts() == []
     finally:

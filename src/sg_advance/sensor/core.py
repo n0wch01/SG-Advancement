@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from .. import __version__
 from ..detect import Engine, Verdict
@@ -27,6 +28,7 @@ from ..pki import fingerprint, key_pem, make_csr, new_key
 from ..policy import PolicyBundle, PolicyVerificationError, key_id, load_public_key
 from ..redact import redact_event
 from ..schema import AgentEvent, Enforcement, EventKind
+from . import lineage as lineage_mod
 from .client import ControlPlaneClient, ControlPlaneError, Offline, Transport, urllib_transport
 from .priority import event_priority
 from .spool import FlushResult, Spool
@@ -147,6 +149,20 @@ def withhold_chat_text(event: AgentEvent) -> AgentEvent:
     return event.model_copy(update={"payload": payload, "raw": None})
 
 
+RECORD_PREVIEW = 4000  # tool results are judged whole (up to the enforcement point's limit), kept short
+
+
+def _short_result(event: AgentEvent) -> AgentEvent:
+    p = event.payload
+    if (
+        event.kind is not EventKind.TOOL_RESULT
+        or len(getattr(p, "output_preview", None) or "") <= RECORD_PREVIEW
+    ):
+        return event
+    short = p.output_preview[:RECORD_PREVIEW]  # type: ignore[union-attr]
+    return event.model_copy(update={"payload": p.model_copy(update={"output_preview": short})})
+
+
 class Sensor:
     def __init__(self, home: SensorHome, transport: Transport | None = None) -> None:
         creds = home.load_credentials()
@@ -176,11 +192,63 @@ class Sensor:
         # Device posture for zero-trust access decisions: each check (Claude Code hook settings,
         # agent discovery) reports why this PC falls short; no report yet means unknown.
         self.posture: dict[str, list[str]] = {}
+        self._posture_at: dict[str, datetime] = {}
+        # Only a sensor that checks its PC labels posture (fail closed: a PC that should be checked but
+        # has no fresh result is "unknown"). The file keeps the last results for the hook's degraded path.
+        self.posture_expected = False
+        self._load_posture()
+        # Phase 2 (CLAUDE.md): which tool calls carry protected test DB data, and where to (lineage.py).
+        self.lineage = lineage_mod.LineageStore(home.root / "lineage.json")
+        # Outcome model (2026-11-13): tool calls refused by handing the decision to the agent, kept until
+        # their result shows up (then the refusal was not applied) or they age out.
+        self._refused: dict[str, tuple[list[str], datetime]] = {}
+
+    POSTURE_MAX_AGE = timedelta(hours=1)
+
+    @property
+    def _posture_path(self) -> Path:
+        return self.home.root / "posture.json"
+
+    def _load_posture(self) -> None:
+        try:
+            doc = json.loads(self._posture_path.read_text("utf-8"))
+            for check, row in doc.get("checks", {}).items():
+                self.posture[check] = list(row["reasons"])
+                self._posture_at[check] = datetime.fromisoformat(row["at"])
+            self.posture_expected = True
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
 
     def set_posture(self, check: str, reasons: list[str]) -> None:
         if self.posture.get(check) != reasons:
             log.info("posture %s: %s", check, "; ".join(reasons) or "ok")
         self.posture[check] = list(reasons)
+        self._posture_at[check] = now_utc()
+        self.posture_expected = True
+        doc = {
+            "checks": {
+                c: {"reasons": r, "at": self._posture_at[c].isoformat()} for c, r in self.posture.items()
+            }
+        }
+        try:
+            write_private(self._posture_path, json.dumps(doc))
+        except OSError as e:
+            log.warning("could not keep posture results: %s", e)
+
+    def posture_state(self, now: datetime | None = None) -> tuple[str, list[str]] | None:
+        """(ok | degraded | unknown, reasons), or None when this sensor does not check its PC."""
+        if not self.posture_expected:
+            return None
+        now = now or now_utc()
+        fresh = {
+            c: r
+            for c, r in self.posture.items()
+            if now - self._posture_at.get(c, now) <= self.POSTURE_MAX_AGE
+        }
+        if not fresh:
+            return "unknown", []
+        reasons = list(dict.fromkeys(r for rs in fresh.values() for r in rs))
+        return ("degraded" if reasons else "ok"), reasons
 
     # ── policy freshness ─────────────────────────────────────────────────────
 
@@ -286,22 +354,45 @@ class Sensor:
         update: dict[str, object] = {}
         if ep.device_id != self.creds.device_id:
             update["endpoint"] = ep.model_copy(update={"device_id": self.creds.device_id})
+        if any(k in event.labels for k in lineage_mod.LABELS):  # the sensor's own; never taken from input
+            update["labels"] = {k: v for k, v in event.labels.items() if k not in lineage_mod.LABELS}
         if event.kind is EventKind.TOOL_CALL:
-            labels = self.state_labels()
+            base = update.get("labels", event.labels)
+            clean = event.model_copy(update={"labels": base}) if "labels" in update else event
+            labels = self.state_labels() | self.lineage.labels_for(clean)
             if labels:
-                update["labels"] = event.labels | labels
+                update["labels"] = base | labels  # type: ignore[operator]
+        elif event.kind is EventKind.TOOL_RESULT:
+            if tracked := self.lineage.labels_for(event):
+                update["labels"] = update.get("labels", event.labels) | tracked  # type: ignore[operator]
+            refused = self._refused.pop(getattr(event.payload, "call_id", ""), None)
+            if refused is not None:
+                update["labels"] = (
+                    update.get("labels", event.labels)
+                    | {  # type: ignore[operator]
+                        "sga_enforcement_contradicted": "true",
+                        "sga_contradicted_findings": ",".join(refused[0])[:500],
+                    }
+                )
         return event.model_copy(update=update) if update else event
+
+    REFUSED_KEEP = timedelta(hours=24)
+    REFUSED_MAX = 5000
+
+    def _remember_refused(self, call_id: str, finding_ids: list[str]) -> None:
+        now = now_utc()
+        if len(self._refused) >= self.REFUSED_MAX:
+            self._refused = {k: v for k, v in self._refused.items() if now - v[1] < self.REFUSED_KEEP}
+        self._refused[call_id] = (finding_ids, now)
 
     def state_labels(self) -> dict[str, str]:
         """Endpoint state for the zero-trust rules (rules/zero_trust.yaml)."""
         labels: dict[str, str] = {}
-        if not self.posture:
-            labels["sga_posture"] = "unknown"
-        else:
-            reasons = list(dict.fromkeys(r for rs in self.posture.values() for r in rs))
-            labels["sga_posture"] = "degraded" if reasons else "ok"
-            if reasons:
-                labels["sga_posture_reasons"] = "; ".join(reasons)[:500]
+        posture = self.posture_state()
+        if posture is not None:
+            labels["sga_posture"] = posture[0]
+            if posture[1]:
+                labels["sga_posture_reasons"] = "; ".join(posture[1])[:500]
         if self.policy_stale():
             age = self.policy_age()
             labels["sga_policy_stale"] = "true"
@@ -319,16 +410,85 @@ class Sensor:
         verdict = self.engine.process(event)  # detection sees the original (unredacted) event
         return ProcessResult(verdict, event)
 
+    _STATE_LABELS = ("sga_policy_stale", "sga_policy_age_hours", "sga_posture", "sga_posture_reasons")
+    _BLOCKING = frozenset({"block", "abort_session", "quarantine"})
+
+    def recheck(self, event: AgentEvent) -> list[Any]:
+        """The hits that would block this call *now* (latest policy, sets, posture, freshness), without
+        recording anything or touching the live engine's state. Used right before an approved call is
+        released (CLAUDE.md phase 1). Sequence rules start empty here: they were judged when it was held."""
+        if self.engine is None:
+            raise NoPolicy("call start() first")
+        fresh = Engine(self.engine.ruleset, self.trusted)
+        clean = event.model_copy(
+            update={"labels": {k: v for k, v in event.labels.items() if k not in self._STATE_LABELS}}
+        )
+        verdict = fresh.process(self.stamp(clean))
+        return [h for h in verdict.hits if str(h.rule.response.value) in self._BLOCKING]
+
     def record(self, result: ProcessResult, enforcement: Enforcement | None = None) -> None:
         """Step 2: queue the redacted event and its findings, with the enforcement outcome."""
         findings = result.verdict.findings
         if enforcement is not None:
+            findings = [*findings, *self._enforced_repeats(result.verdict, enforcement)]
             findings = [f.model_copy(update={"response": enforcement}) for f in findings]
             result.verdict.findings = findings
-        event = redact_event(result.event)
+            if (
+                result.event.kind is EventKind.TOOL_CALL
+                and enforcement.stage == "blocked"
+                and enforcement.confirmation == "unconfirmed"
+            ):
+                self._remember_refused(result.event.payload.call_id, [f.finding_id for f in findings])  # type: ignore[union-attr]
+        findings = self._lineage(result, findings)
+        result.verdict.findings = findings
+        event = redact_event(_short_result(self._mask_protected(result.event)))
         if not self.keep_chat_text and not result.verdict.hits:
             event = withhold_chat_text(event)
         self.spool.add([event, *findings], event_priority(result.event, result.verdict))
+
+    def _lineage(self, result: ProcessResult, findings: list[Any]) -> list[Any]:
+        """Register protected values a ``lineage:source`` rule found (hashes only), and point a
+        ``lineage:sink`` finding at the reads its data came from, so the console shows one flow."""
+        for hit in result.verdict.hits:
+            if lineage_mod.SOURCE_TAG in hit.rule.tags and hit.collected:
+                self.lineage.register(result.event, list(hit.collected))
+        sources = self.lineage.source_ids(result.event.labels)
+        if not sources:
+            return findings
+        return [
+            f.model_copy(
+                update={
+                    "evidence_event_ids": (*sources, *(i for i in f.evidence_event_ids if i not in sources))
+                }
+            )
+            if lineage_mod.SINK_TAG in f.tags
+            else f
+            for f in findings
+        ]
+
+    def _mask_protected(self, event: AgentEvent) -> AgentEvent:
+        """Protected test DB values never leave the endpoint: the read and the call carrying them are
+        recorded with the values replaced (the hashes stay on this PC)."""
+        p = event.payload
+        if event.kind is EventKind.TOOL_RESULT and getattr(p, "output_preview", None):
+            masked = self.lineage.mask(p.output_preview)  # type: ignore[union-attr]
+            if masked != p.output_preview:  # type: ignore[union-attr]
+                return event.model_copy(update={"payload": p.model_copy(update={"output_preview": masked})})
+        elif event.kind is EventKind.TOOL_CALL and event.labels.get("sga_data_class"):
+            args = json.loads(self.lineage.mask(json.dumps(p.arguments, ensure_ascii=False)))  # type: ignore[union-attr]
+            return event.model_copy(update={"payload": p.model_copy(update={"arguments": args})})
+        return event
+
+    # Stages where the enforcement point acted on the call itself (not detection or the agent's own prompt).
+    _ENFORCED_STAGES = frozenset({"held", "blocked", "result_withheld", "session_aborted", "quarantined"})
+
+    def _enforced_repeats(self, verdict: Any, enforcement: Enforcement) -> list[Any]:
+        """Hits dedup suppressed, reported anyway when this call was really blocked or held (decision
+        2026-11-13): each enforced call is its own record, labelled ``sga_repeat``."""
+        if not enforcement.enforced or enforcement.stage not in self._ENFORCED_STAGES:
+            return []
+        repeat = {"sga_repeat": "true"}
+        return [f.model_copy(update={"labels": f.labels | repeat}) for f in verdict.enforcing_repeats]
 
     def process(self, event: AgentEvent) -> ProcessResult:
         """evaluate + record, for observation-only callers (replay)."""

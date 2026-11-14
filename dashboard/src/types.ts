@@ -25,6 +25,10 @@ export interface Enforcement {
   enforced: boolean;
   enforcer?: string | null;
   detail?: string | null;
+  // Outcome model (2026-11-13): decision stage and whether the side effect is known not to have happened.
+  stage?: string | null;
+  confirmation?: "not_applicable" | "unconfirmed" | "confirmed" | "contradicted" | "failed" | null;
+  evidence?: string | null;
 }
 
 export interface Finding {
@@ -32,6 +36,7 @@ export interface Finding {
   ts: string;
   received_ts?: string | null;
   rule_id: string;
+  rule_version?: string;
   severity: Severity;
   category: string;
   title: string;

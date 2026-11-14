@@ -58,13 +58,14 @@ test("daemon down -> cached-policy CLI (degraded)", async () => {
   assert.deepEqual(result, { block: true, blockReason: "blocked from cache" });
 });
 
-test("everything down -> read-only passes, others ask the user", async () => {
+test("everything down -> read-only passes, others are blocked (fail closed)", async () => {
   const deps = { askDaemon: down, askCli: down };
   const read = await decide({ ...event, toolName: "read" }, ctx, s, deps);
   assert.equal(read.source, "fallback");
   assert.equal(read.result, undefined);
   const exec = await decide(event, ctx, s, deps);
-  assert.equal((exec.result as any).requireApproval.title, "SG-Advance unavailable");
+  assert.equal((exec.result as any).block, true);
+  assert.equal((exec.result as any).requireApproval, undefined); // never handed to the person's approval
 });
 
 test("daemon answering ok:false is treated as unavailable", async () => {
@@ -180,24 +181,19 @@ test("approval answer falls back to the CLI when the daemon is gone", async () =
   assert.equal(r.cli[0].decision, "deny");
 });
 
-test("risk-tier fallback approvals are recorded too", async () => {
+test("risk-tier fallback never asks the person (nothing to approve)", async () => {
   const cli: any[] = [];
   const { result, source } = await decide(event, ctx, s, {
     askDaemon: down,
     askCli: async (req: any) => {
-      if (req.op === "resolution") {
-        cli.push(req);
-        return { ok: true } as Verdict;
-      }
+      cli.push(req);
       throw new Error("no cache");
     },
   });
   assert.equal(source, "fallback");
-  (result as any).requireApproval.onResolution("allow-once");
+  assert.equal((result as any).block, true);
   await tick();
-  assert.equal(cli.length, 1);
-  assert.equal(cli[0].source, "fallback");
-  assert.deepEqual(cli[0].rules, []);
+  assert.ok(cli.every((r) => r.op !== "resolution"));
 });
 
 // ── security approval (M11) ─────────────────────────────────────────────────

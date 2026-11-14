@@ -68,6 +68,15 @@ def test_dedup_reports_once_but_verdict_applies_every_time() -> None:
     assert v1.action is v2.action is ResponseAction.BLOCK
     assert len(v1.findings) == 1 and not v2.findings
     assert not v2.hits[0].reported
+    # Kept aside: the sensor reports it when the call is really blocked or held (decision 2026-11-13).
+    assert [f.rule_id for f in v2.enforcing_repeats] == ["r"]
+
+
+def test_a_repeated_alert_only_hit_is_never_an_enforcing_repeat() -> None:
+    eng = Engine(RuleSet([rule(response="alert", match={"type": "regex", "pattern": "x"})]))
+    eng.process(bash("x"))
+    v = eng.process(bash("x"))
+    assert v.suppressed and not v.enforcing_repeats and not v.enforced_ids
 
 
 def test_dedup_none_reports_every_time_and_dedup_is_per_session() -> None:

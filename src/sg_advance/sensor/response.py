@@ -10,10 +10,14 @@ Adapters add what only they can do (``abort_session``, ``disable_plugin``, ``dis
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from pathlib import Path
+from typing import Any
 
 from .adapters.base import AdapterContext
 from .client import ControlPlaneError, Offline
+from .state import write_private
 
 log = logging.getLogger(__name__)
 
@@ -56,28 +60,72 @@ def install_core_handlers(ctx: AdapterContext) -> None:
     ctx.actions.setdefault("unblock_user", setter(BLOCKED_USERS, False, "person"))
 
 
+DONE_FILE = "remote-actions.json"
+DONE_KEEP = 500
+
+
+def _done_path(ctx: AdapterContext) -> Path:
+    return ctx.sensor.home.root / DONE_FILE
+
+
+def _load_done(ctx: AdapterContext) -> dict[str, dict[str, Any]]:
+    try:
+        doc = json.loads(_done_path(ctx).read_text("utf-8"))
+        return doc if isinstance(doc, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_done(ctx: AdapterContext, done: dict[str, dict[str, Any]]) -> None:
+    keep = dict(list(done.items())[-DONE_KEEP:])
+    write_private(_done_path(ctx), json.dumps(keep))
+
+
+def applied_of(supported: bool, ok: bool, detail: str) -> str:
+    """What the device actually did, apart from what was asked (CLAUDE.md, 2026-11-13)."""
+    if not supported:
+        return "not_supported"
+    if not ok:
+        return "failed"
+    return "already_applied" if "(no change)" in detail else "applied"
+
+
 async def run_pending(ctx: AdapterContext) -> int:
-    """Fetch, run and report this device's pending actions. Returns how many ran."""
+    """Fetch, run and report this device's pending actions. Returns how many ran.
+
+    Each action id runs once: the result is kept on disk before it is reported, so an action handed
+    out again (its result report was lost, or the sensor restarted in between) is reported, not rerun."""
     client = ctx.sensor.client
     try:
         actions = await asyncio.to_thread(client.get_actions)
     except (Offline, ControlPlaneError) as e:
         log.debug("remote actions unavailable: %s", e)
         return 0
+    done = _load_done(ctx)
+    ran = 0
     for a in actions:
-        handler = ctx.actions.get(a["action"])
-        if handler is None:
-            ok, detail = False, f"{a['action']} is not supported on this device"
+        record = done.get(a["id"])
+        if record is None:
+            handler = ctx.actions.get(a["action"])
+            if handler is None:
+                ok, detail = False, f"{a['action']} is not supported on this device"
+            else:
+                try:
+                    ok, detail = await handler(a["target"])
+                except Exception as e:  # noqa: BLE001 - report the failure instead of losing the action
+                    ok, detail = False, f"error: {e}"
+            record = {"ok": ok, "detail": detail, "applied": applied_of(handler is not None, ok, detail)}
+            done[a["id"]] = record
+            _save_done(ctx, done)
+            ran += 1
+            log.warning("remote action %s %s: %s (%s)", a["action"], a["target"], record["applied"], detail)
         else:
-            try:
-                ok, detail = await handler(a["target"])
-            except Exception as e:  # noqa: BLE001 - report the failure instead of losing the action
-                ok, detail = False, f"error: {e}"
-        log.warning(
-            "remote action %s %s: %s (%s)", a["action"], a["target"], "done" if ok else "FAILED", detail
-        )
+            log.info("remote action %s handed out again (attempt %s): reporting, not rerunning",
+                     a["id"], a.get("attempt"))  # fmt: skip
         try:
-            await asyncio.to_thread(client.report_action, a["id"], ok, detail)
+            await asyncio.to_thread(
+                client.report_action, a["id"], record["ok"], record["detail"], record["applied"]
+            )
         except (Offline, ControlPlaneError) as e:
-            log.warning("could not report remote action %s: %s", a["id"], e)
-    return len(actions)
+            log.warning("could not report remote action %s (it will be handed out again): %s", a["id"], e)
+    return ran

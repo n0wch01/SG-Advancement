@@ -145,12 +145,22 @@ class EnforcementPoint:
     sensor: SensorType
     name: str  # "openclaw plugin", "claude code hook"
     asks: str  # where a require_approval verdict is answered
+    # The point itself sits between the agent and the side effect (it does not forward what it
+    # refuses), so a refusal is confirmed on the spot. Hooks and plugins hand the decision to the agent:
+    # unconfirmed until evidence arrives (a result for a refused call contradicts it).
+    in_path: bool = False
+
+    def outcome(self, in_path_evidence: str) -> dict[str, str]:
+        if self.in_path:
+            return {"confirmation": "confirmed", "evidence": in_path_evidence}
+        return {"confirmation": "unconfirmed", "evidence": f"{self.asks} applies the decision"}
 
 
 OPENCLAW_PLUGIN = EnforcementPoint(SensorType.OPENCLAW_PLUGIN, "openclaw plugin", "OpenClaw")
 CLAUDE_CODE_HOOK = EnforcementPoint(SensorType.CLAUDE_CODE_HOOK, "claude code hook", "Claude Code")
-# require_approval at the MCP gateway is left to the agent's own prompt (the gateway cannot ask anyone).
-MCP_GATEWAY = EnforcementPoint(SensorType.MCP_PROXY, "mcp gateway", "the agent's own approval prompt")
+MCP_GATEWAY = EnforcementPoint(
+    SensorType.MCP_PROXY, "mcp gateway", "the agent's own approval prompt", in_path=True
+)
 
 
 # Input PEP (KISA agentic AI ZT guide 2.4, P6-7): tool results with injection findings this severe never
@@ -177,14 +187,51 @@ def withheld_response(point: EnforcementPoint, hits: list[Any]) -> tuple[dict[st
         enforced=True,
         enforcer=point.sensor,
         detail=f"input pep: {point.name} withheld the tool result from the model",
+        stage="result_withheld",
+        **(
+            point.outcome("the result was replaced before it was sent to the agent")
+            if point.in_path
+            else {
+                "confirmation": "unconfirmed",
+                "evidence": "Claude Code keeps the original result if the replacement does not fit the "
+                "tool's output shape; the block reason still reaches the model",
+            }
+        ),
+    )
+
+
+GRADE_HELD = "grade:3-1"  # irreversible, not real-time: a person decides where it can be re-checked
+
+
+def approval_channel(verdict: Verdict, point: EnforcementPoint) -> ResponseAction:
+    """Grades decide *how* approval happens (CLAUDE.md, 2026-11-13). An approval for an irreversible
+    action (grade 3-1), or at a point that cannot ask anyone (the MCP gateway), goes to the security
+    hold: there the call is re-checked and bound to the exact request right before it runs. The agent's
+    own prompt runs the call the moment the person clicks, with no room for either."""
+    if verdict.action is ResponseAction.REQUIRE_APPROVAL:
+        asking = [h for h in verdict.hits if h.rule.response is ResponseAction.REQUIRE_APPROVAL]
+        if point.in_path or any(GRADE_HELD in h.rule.tags for h in asking):
+            return ResponseAction.SECURITY_APPROVAL
+    return verdict.action
+
+
+def held_enforcement(point: EnforcementPoint, why: str) -> Enforcement:
+    return Enforcement(
+        action=ResponseAction.SECURITY_APPROVAL,
+        enforced=True,
+        enforcer=point.sensor,
+        detail=f"pre-exec: held for security approval in the console ({why})",
+        stage="held",
+        **point.outcome("the request is held by the gateway and not forwarded"),
     )
 
 
 def plugin_response(
-    verdict: Verdict, point: EnforcementPoint = OPENCLAW_PLUGIN
+    verdict: Verdict, point: EnforcementPoint = OPENCLAW_PLUGIN, action: ResponseAction | None = None
 ) -> tuple[dict[str, Any], Enforcement | None]:
-    """What the plugin (or hook) should do, and the enforcement record that matches it."""
-    action = verdict.action
+    """What the plugin (or hook) should do, and the enforcement record that matches it. ``action``:
+    the channel chosen by ``approval_channel`` when it differs from the verdict's."""
+    action = action or verdict.action
     rules = verdict.rule_ids
     titles = [h.rule.title for h in verdict.hits]
     reason = "; ".join(dict.fromkeys(titles)) or "policy"
@@ -195,20 +242,32 @@ def plugin_response(
     if action in _BLOCKING:
         detail = f"pre-exec: {point.name} blocked the tool call"
         return base | {"decision": "block", "reason": f"SG-Advance: {reason}"}, Enforcement(
-            action=action, enforced=True, enforcer=sensor, detail=detail
-        )
+            action=action, enforced=True, enforcer=sensor, detail=detail,
+            stage="blocked", **point.outcome("the request was not forwarded upstream"),
+        )  # fmt: skip
     if action is ResponseAction.SECURITY_APPROVAL:  # no daemon to wait with (cached-policy CLI)
         detail = "pre-exec: security approval needs the sensor daemon; blocked"
         return base | {
             "decision": "block",
             "reason": f"SG-Advance: 보안팀 승인이 필요한 호출이지만 센서 데몬이 없어 차단했습니다 ({reason})",
-        }, Enforcement(action=ResponseAction.BLOCK, enforced=True, enforcer=sensor, detail=detail)
+        }, Enforcement(
+            action=ResponseAction.BLOCK, enforced=True, enforcer=sensor, detail=detail,
+            stage="blocked", **point.outcome("the request was not forwarded upstream"),
+        )  # fmt: skip
     if action is ResponseAction.REQUIRE_APPROVAL:
         detail = f"pre-exec: user approval requested through {point.asks}"
         return base | {"decision": "approve", "title": "SG-Advance", "reason": reason}, Enforcement(
             action=action, enforced=True, enforcer=sensor, detail=detail
         )
     return base | {"decision": "allow"}, None
+
+
+def finding_ids_for(verdict: Any, action: ResponseAction) -> list[str]:
+    """The findings a hold or approval record points at. A hold or block also reports the hits dedup
+    suppressed (``Sensor._enforced_repeats``); the agent's own prompt does not, so it doesn't list them."""
+    if action is ResponseAction.REQUIRE_APPROVAL:
+        return [f.finding_id for f in verdict.findings]
+    return verdict.enforced_ids
 
 
 def judge(
@@ -225,26 +284,25 @@ def judge(
     if labels:
         event = event.model_copy(update={"labels": event.labels | labels})
     result = ctx.evaluate(event)
-    response, enforcement = plugin_response(result.verdict)
+    action = approval_channel(result.verdict, OPENCLAW_PLUGIN)
+    response, enforcement = plugin_response(result.verdict, OPENCLAW_PLUGIN, action)
     pending = {
         "event_id": result.event.event_id,
-        "finding_ids": [f.finding_id for f in result.verdict.findings],
+        "finding_ids": finding_ids_for(result.verdict, action),
         "rule_ids": result.verdict.rule_ids,
         "max_severity": response.get("severity"),
         "requested_at": result.event.ts,
     }
     hold = None
-    if result.verdict.action is ResponseAction.SECURITY_APPROVAL and ctx.holds is not None:
+    if action is ResponseAction.SECURITY_APPROVAL and ctx.holds is not None:
         titles = "; ".join(dict.fromkeys(h.rule.title for h in result.verdict.hits)) or "policy"
         response = {k: v for k, v in response.items() if k != "reason"} | {"reason": titles}
-        hold = ctx.holds.open(req, pending, summary_for(result.event, response, pending))
-        response |= {"decision": "hold", "hold_id": hold.id, "wait_ms": int(ctx.holds.wait_seconds * 1000)}
-        enforcement = Enforcement(
-            action=ResponseAction.SECURITY_APPROVAL,
-            enforced=True,
-            enforcer=SensorType.OPENCLAW_PLUGIN,
-            detail="pre-exec: held for security approval in the console",
+        hold = ctx.holds.open(
+            req, pending, summary_for(result.event, response, pending), call_event=result.event
         )
+        response |= {"decision": "hold", "hold_id": hold.id, "wait_ms": int(ctx.holds.wait_seconds * 1000)}
+        why = "grade 3-1" if result.verdict.action is ResponseAction.REQUIRE_APPROVAL else "policy"
+        enforcement = held_enforcement(OPENCLAW_PLUGIN, why)
     ctx.record(result, enforcement)
     call_id = event.payload.call_id  # type: ignore[union-attr]
     ctx.plugins.mark(call_id)
@@ -305,16 +363,17 @@ def judge_event(
     result = ctx.evaluate(event)
     kind = result.event.kind
     if kind is EventKind.TOOL_CALL:
-        response, enforcement = plugin_response(result.verdict, point)
+        action = approval_channel(result.verdict, point)
+        response, enforcement = plugin_response(result.verdict, point, action)
         pending = {
             "event_id": result.event.event_id,
-            "finding_ids": [f.finding_id for f in result.verdict.findings],
+            "finding_ids": finding_ids_for(result.verdict, action),
             "rule_ids": result.verdict.rule_ids,
             "max_severity": response.get("severity"),
             "requested_at": result.event.ts,
             "call": result.event,
         }
-        if result.verdict.action is ResponseAction.SECURITY_APPROVAL and ctx.holds is not None:
+        if action is ResponseAction.SECURITY_APPROVAL and ctx.holds is not None:
             titles = "; ".join(dict.fromkeys(h.rule.title for h in result.verdict.hits)) or "policy"
             response = {k: v for k, v in response.items() if k != "reason"} | {"reason": titles}
             hold = ctx.holds.open(
@@ -328,12 +387,13 @@ def judge_event(
                 "hold_id": hold.id,
                 "wait_ms": int(ctx.holds.wait_seconds * 1000),
             }
-            enforcement = Enforcement(
-                action=ResponseAction.SECURITY_APPROVAL,
-                enforced=True,
-                enforcer=point.sensor,
-                detail="pre-exec: held for security approval in the console",
-            )
+            if point.in_path and result.verdict.action is ResponseAction.REQUIRE_APPROVAL:
+                why = "the gateway cannot ask the person"
+            elif result.verdict.action is ResponseAction.REQUIRE_APPROVAL:
+                why = "grade 3-1"
+            else:
+                why = "policy"
+            enforcement = held_enforcement(point, why)
         ctx.record(result, enforcement)
         if response.get("decision") == "approve" and point.sensor is SensorType.CLAUDE_CODE_HOOK:
             # Claude Code asked the person: a later result means they approved. The MCP gateway asks no one.

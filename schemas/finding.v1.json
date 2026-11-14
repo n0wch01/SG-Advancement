@@ -178,6 +178,7 @@
     },
     "Enforcement": {
       "additionalProperties": false,
+      "description": "What was done about a finding. CLAUDE.md principle: detection, approval request, hold, single\nblock, session abort and *confirmed* enforcement are separate records (2026-11-13). ``enforced``\nsays the enforcement point acted on the decision; ``confirmation`` says whether the side effect\nis known not to have happened.",
       "properties": {
         "action": {
           "$ref": "#/$defs/ResponseAction"
@@ -210,6 +211,54 @@
           ],
           "default": null,
           "title": "Detail"
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "enum": [
+                "detected",
+                "approval_requested",
+                "held",
+                "blocked",
+                "result_withheld",
+                "session_aborted",
+                "quarantined"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Filled from action when not given",
+          "title": "Stage"
+        },
+        "confirmation": {
+          "default": "unconfirmed",
+          "description": "Whether the side effect is known not to have happened",
+          "enum": [
+            "not_applicable",
+            "unconfirmed",
+            "confirmed",
+            "contradicted",
+            "failed"
+          ],
+          "title": "Confirmation",
+          "type": "string"
+        },
+        "evidence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How the outcome was confirmed or contradicted",
+          "title": "Evidence"
         }
       },
       "required": [

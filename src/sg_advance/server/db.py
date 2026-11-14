@@ -225,6 +225,10 @@ class RemoteAction(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     result_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     result_detail: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # 2026-11-13: redelivered until acknowledged; what was asked vs what the device actually did.
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    lease_until: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    applied: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
 
 class FindingIndicator(Base):
@@ -292,6 +296,8 @@ class SecurityApproval(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     outcome: Mapped[str | None] = mapped_column(String(20), nullable=True)
     outcome_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # 2026-11-13: the exact request the approval is for (sensor's request_digest); echoed with decisions.
+    request_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 def make_engine(url: str) -> Engine:

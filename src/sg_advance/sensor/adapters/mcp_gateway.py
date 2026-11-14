@@ -153,11 +153,15 @@ def _agent_type(user_agent: str) -> str:
     return "claude_code" if "claude-code" in ua or "claude code" in ua else "unknown"
 
 
+INSPECT_MAX = 1_000_000  # results are judged whole up to this; the sensor keeps a short preview
+
+
 def _text_of(result: Any) -> str:
+    """The text the model would read, whole (the caller checks INSPECT_MAX)."""
     if isinstance(result, dict) and isinstance(result.get("content"), list):
         parts = [str(c.get("text", "")) for c in result["content"] if isinstance(c, dict)]
-        return "\n".join(p for p in parts if p)[:PREVIEW_MAX]
-    return json.dumps(result, ensure_ascii=False, default=str)[:PREVIEW_MAX]
+        return "\n".join(p for p in parts if p)
+    return json.dumps(result, ensure_ascii=False, default=str)
 
 
 # ── the gateway ─────────────────────────────────────────────────────────────
@@ -325,10 +329,16 @@ class McpGatewayAdapter:
                 continue
             verdict = judge_event(ctx, event, MCP_GATEWAY)
             if verdict.get("decision") == "hold" and ctx.holds is not None:
-                verdict = await ctx.holds.wait(ctx, str(verdict.get("hold_id")))
-            if verdict.get("decision") == "block" and self.enforce:
+                if not self.enforce:  # monitor mode records, never waits
+                    ctx.holds.discard(str(verdict.get("hold_id")))
+                    verdict = {"decision": "allow"}
+                else:
+                    verdict = await ctx.holds.wait(ctx, str(verdict.get("hold_id")))
+            # Fail closed (2026-11-13): anything but an explicit allow is refused here; an approval that
+            # was not confirmed never reaches the server.
+            if verdict.get("decision") != "allow" and self.enforce:
                 refusals.append(
-                    tool_refusal(mid, str(verdict.get("reason") or "SG-Advance: blocked by policy"))
+                    tool_refusal(mid, str(verdict.get("reason") or "SG-Advance: not allowed by policy"))
                 )
                 continue
             pending[mid] = ("call", (tool, call["call_id"]))
@@ -355,8 +365,32 @@ class McpGatewayAdapter:
                 "ok": "error" not in msg and not (isinstance(result, dict) and result.get("isError")),
                 "output_preview": _text_of(result if result is not None else msg.get("error")),
             }
-            return self._input_pep(ctx, name, who, msg, payload)
+            uninspected = "too_large" if len(payload["output_preview"]) > INSPECT_MAX else None
+            payload["output_bytes"] = len(payload["output_preview"].encode())
+            payload["output_preview"] = payload["output_preview"][:INSPECT_MAX]
+            return self._input_pep(ctx, name, who, msg, payload, uninspected)
         return msg
+
+    def _unreadable(
+        self, ctx: AdapterContext, name: str, who: dict[str, str], pending: dict[Any, Any]
+    ) -> Any:
+        """The server answered tool calls in a form the gateway cannot read (not JSON-RPC): nothing could
+        be checked, so each call's answer is withheld (fail closed, 2026-11-13)."""
+        out = []
+        for mid, (what, info) in pending.items():
+            if what != "call" or info is None:
+                continue
+            tool, call_id = info
+            payload = {
+                "kind": "tool.result",
+                "call_id": call_id,
+                "tool": tool,
+                "provider": self._provider(name),
+                "ok": False,
+                "output_preview": "",
+            }
+            out.append(self._input_pep(ctx, name, who, {"jsonrpc": "2.0", "id": mid}, payload, "unreadable"))
+        return out[0] if len(out) == 1 else out
 
     def _input_pep(
         self,
@@ -365,13 +399,17 @@ class McpGatewayAdapter:
         who: dict[str, str],
         msg: dict[str, Any],
         payload: dict[str, Any],
+        uninspected: str | None = None,
     ) -> dict[str, Any]:
         """Input PEP (KISA agentic AI ZT guide 2.4, P6-7): a tool result with high or critical prompt-
         injection findings never reaches the model; it gets a notice instead (enforce mode). The full
         preview is kept with the event for security. Lower severities are recorded only."""
         from ..plugin_api import MCP_GATEWAY, input_guard_hits, withheld_response
 
-        result = ctx.evaluate(AgentEvent.model_validate(self._event(ctx, name, who, payload)))
+        event = self._event(ctx, name, who, payload)
+        if uninspected:
+            event["labels"] |= {"sga_result_uninspected": uninspected}
+        result = ctx.evaluate(AgentEvent.model_validate(event))
         hits = input_guard_hits(result.verdict)
         if not hits or not self.enforce:
             ctx.record(result)
@@ -421,6 +459,11 @@ class McpGatewayAdapter:
                 detail=f"mcp gateway hid {', '.join(hidden)} from agents and refuses their calls"
                 if hidden
                 else "mcp gateway in monitor mode: nothing hidden",
+                **(
+                    {"confirmation": "confirmed", "evidence": "removed from tools/list sent to the agent"}
+                    if hidden
+                    else {}
+                ),
             )
         ctx.record(result, enforcement)
         if hidden:
@@ -501,9 +544,17 @@ class McpGatewayAdapter:
                     )
                     data, ctype, keep = json.dumps(refusal).encode(), "application/json", ""
                     log.warning("mcp gateway: upstream for %s refused this device (HTTP %d)", name, status)
-                if "application/json" in ctype and data and pending:
-                    doc = json.loads(data)
-                    if isinstance(doc, list):
+                calls = any(what == "call" for what, _ in pending.values())
+                if data and pending and (calls or "application/json" in ctype):
+                    try:
+                        doc = json.loads(data) if "application/json" in ctype else None
+                    except ValueError:
+                        doc = None
+                    if doc is None:  # tool calls answered in a form nobody can check: withheld
+                        doc = self._unreadable(ctx, name, who, pending)
+                        ctype, keep = "application/json", ""
+                        log.warning("mcp gateway: %s answered in an unreadable form; withheld", name)
+                    elif isinstance(doc, list):
                         doc = [self._inspect(ctx, name, who, m, pending) for m in doc]
                     else:
                         doc = self._inspect(ctx, name, who, doc, pending)
@@ -555,5 +606,8 @@ class McpGatewayAdapter:
                 msg = json.loads("\n".join(data))
                 data = [json.dumps(self._inspect(ctx, name, who, msg, pending), ensure_ascii=False)]
             except ValueError:
-                pass
+                # Unreadable while tool calls wait for their answer: never passed on unchecked.
+                if any(what == "call" for what, _ in pending.values()):
+                    data = [json.dumps(self._unreadable(ctx, name, who, pending), ensure_ascii=False)]
+                    log.warning("mcp gateway: %s sent an unreadable event; withheld", name)
         return ("\n".join([*rest, *(f"data: {d}" for d in data)]) + "\n\n").encode()

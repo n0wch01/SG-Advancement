@@ -122,8 +122,11 @@ class ControlPlaneClient:
         """People who used this device and are elevated risk now (zero trust, 2026-11-13)."""
         return dict(self._ok(self._call("GET", "/v1/risk"), 200))
 
-    def report_action(self, action_id: str, ok: bool, detail: str) -> None:
-        r = self._call("POST", f"/v1/actions/{action_id}/result", {"ok": ok, "detail": detail[:1000]})
+    def report_action(self, action_id: str, ok: bool, detail: str, applied: str | None = None) -> None:
+        body: dict[str, Any] = {"ok": ok, "detail": detail[:1000]}
+        if applied is not None:
+            body["applied"] = applied
+        r = self._call("POST", f"/v1/actions/{action_id}/result", body)
         if r.status != 204:
             raise ControlPlaneError(r.status, _detail(r))
 

@@ -171,6 +171,14 @@ class EgressProxyAdapter:
                 enforced=self.enforce,
                 enforcer=SensorType.EGRESS_PROXY,
                 detail="egress refused (403)" if self.enforce else "monitor mode: allowed and recorded",
+                **(
+                    {
+                        "confirmation": "confirmed",
+                        "evidence": "the proxy answered 403; no upstream connection",
+                    }
+                    if self.enforce
+                    else {}
+                ),
             )
             log.warning(
                 "egress %s %s:%s %s", "BLOCK" if self.enforce else "would block", host, port, client_ip

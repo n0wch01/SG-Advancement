@@ -20,6 +20,15 @@ from sg_advance.sensor.adapters import AdapterContext
 from sg_advance.sensor.cli import main as sensor_main
 from sg_advance.sensor.plugin_api import LocalApiServer
 
+
+@pytest.fixture(autouse=True)
+def agent_prompt_path(monkeypatch):
+    """These tests cover the agent's own approval prompt (linking the answer, audits). Since 2026-11-13
+    grade 3-1 calls go to the security hold instead (tests/test_phase1.py); turned off here so the
+    prompt mechanics stay covered with the rules at hand."""
+    monkeypatch.setattr("sg_advance.sensor.plugin_api.GRADE_HELD", "grade:none")
+
+
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = ROOT / "integrations" / "openclaw-plugin"
 
@@ -91,6 +100,10 @@ async def test_verdicts_map_to_plugin_decisions(api, enrolled: Sensor) -> None:
         "enforced": True,
         "enforcer": "openclaw_plugin",
         "detail": "pre-exec: openclaw plugin blocked the tool call",
+        "stage": "blocked",
+        # OpenClaw applies the plugin's decision: not confirmed until evidence arrives (2026-11-13)
+        "confirmation": "unconfirmed",
+        "evidence": "OpenClaw applies the decision",
     }
     assert findings["destructive-sql"]["response"]["detail"].startswith("pre-exec: user approval")
     ev = next(e for e in spooled(enrolled, "event") if e["payload"]["call_id"] == "c1")

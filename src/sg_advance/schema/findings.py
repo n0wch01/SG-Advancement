@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, model_validator
 
 from .common import SCHEMA_VERSION, AgentRef, Endpoint, Principal, SensorType, StrictModel
 from .events import AgentEvent, new_id
@@ -57,11 +57,66 @@ class ResponseAction(StrEnum):
     QUARANTINE = "quarantine"  # disable plugin / MCP server on the endpoint
 
 
+EnforcementStage = Literal[
+    "detected",  # recorded only
+    "approval_requested",  # a person was asked in the agent's own prompt
+    "held",  # execution paused for a security decision
+    "blocked",  # this one call was refused
+    "result_withheld",  # the call ran; its result was kept from the model
+    "session_aborted",  # the run or session was stopped
+    "quarantined",  # a tool, plugin or skill was taken out of use
+]
+Confirmation = Literal[
+    "not_applicable",  # detection only: nothing to apply
+    "unconfirmed",  # the decision was handed to the agent; whether it obeyed is not known (yet)
+    "confirmed",  # the enforcement point itself prevented the side effect (``evidence`` says how)
+    "contradicted",  # later evidence says it ran anyway (e.g. its result arrived)
+    "failed",  # the enforcement point could not apply it
+]
+
+_STAGE_OF = {
+    "allow": "detected",
+    "alert": "detected",
+    "require_approval": "approval_requested",
+    "security_approval": "held",
+    "block": "blocked",
+    "abort_session": "session_aborted",
+    "quarantine": "quarantined",
+}
+
+
 class Enforcement(StrictModel):
+    """What was done about a finding. CLAUDE.md principle: detection, approval request, hold, single
+    block, session abort and *confirmed* enforcement are separate records (2026-11-13). ``enforced``
+    says the enforcement point acted on the decision; ``confirmation`` says whether the side effect
+    is known not to have happened."""
+
     action: ResponseAction
     enforced: bool = Field(description="False = recommended only (detect mode) or enforcement failed")
     enforcer: SensorType | Literal["control_plane"]
     detail: str | None = None
+    stage: EnforcementStage | None = Field(default=None, description="Filled from action when not given")
+    confirmation: Confirmation = Field(
+        default="unconfirmed", description="Whether the side effect is known not to have happened"
+    )
+    evidence: str | None = Field(default=None, description="How the outcome was confirmed or contradicted")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive(cls, data: object) -> object:
+        """Models are frozen: fill stage and confirmation from the input, before validation."""
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        action = d.get("action")
+        action = getattr(action, "value", action)
+        if d.get("stage") is None:
+            d["stage"] = _STAGE_OF.get(str(action), "detected")
+        if d["stage"] == "detected":
+            d["confirmation"] = "not_applicable"
+        elif d.get("enforced") is False and d.get("confirmation", "unconfirmed") == "unconfirmed":
+            d["confirmation"] = "failed"
+        return d
 
 
 class Finding(StrictModel):

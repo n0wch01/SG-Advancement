@@ -27,7 +27,7 @@ def test_stale_policy_asks_before_state_changing_tools(enrolled: Sensor) -> None
     r = enrolled.evaluate(call("Bash", command="git push"))
     assert r.event.labels["sga_policy_stale"] == "true" and r.event.labels["sga_policy_age_hours"] == "80"
     assert r.verdict.rule_ids == ["policy-stale-state-changing-tool"]
-    assert r.verdict.action is ResponseAction.REQUIRE_APPROVAL
+    assert r.verdict.action is ResponseAction.BLOCK  # fail closed (2026-11-13): not the person's approval
     assert enrolled.evaluate(call("Read", file_path="a")).verdict.action is ResponseAction.ALLOW
 
     enrolled.sync_policy()  # the control plane answers again: fresh
@@ -60,6 +60,7 @@ def mcp_call(tool: str, server: str, user: str = "alice"):
 
 
 def test_posture_labels_follow_the_checks(enrolled: Sensor) -> None:
+    enrolled.posture_expected = True  # a sensor that checks its PC (sga-sensor run with the checks on)
     assert enrolled.evaluate(mcp_call("q", "crm")).event.labels["sga_posture"] == "unknown"
     enrolled.set_posture("claude-code-hook", [])
     enrolled.set_posture("agent-discovery", ["cursor: no SG-Advance control for cursor"])
@@ -176,3 +177,63 @@ def test_a_team_turns_on_its_task_scope_profile(enrolled: Sensor, cp) -> None:
     assert enrolled.evaluate(call("Read", file_path="notes.md")).verdict.action is ResponseAction.ALLOW
     q = enrolled.evaluate(mcp_call("mcp__crm__query_customers", "crm"))
     assert "task-scope-outside-profile" not in q.verdict.rule_ids
+
+
+# ── outcome model (2026-11-13) ──────────────────────────────────────────────
+
+
+async def test_a_result_for_a_refused_call_contradicts_the_refusal(enrolled: Sensor) -> None:
+    """The hook told Claude Code to deny; if the call's result arrives anyway, the refusal was not
+    applied: recorded as a critical finding, the original stays 'unconfirmed' (never 'success')."""
+    from sg_advance.sensor.adapters import AdapterContext
+    from sg_advance.sensor.plugin_api import CLAUDE_CODE_HOOK, judge_event
+
+    ctx = AdapterContext(enrolled, "bob", "pc")
+    base = {"endpoint": {"device_id": "pending"}, "principal": {"user_id": "bob"},
+            "agent": {"type": "claude_code", "session_id": "s1"}, "source": {"sensor": "claude_code_hook"},
+            "ts": now_utc().isoformat()}  # fmt: skip
+    call = base | {"payload": {"kind": "tool.call", "call_id": "c-77", "tool": "Bash",
+                               "arguments": {"command": "rm -rf ~/projects"}}}  # fmt: skip
+    assert judge_event(ctx, call, CLAUDE_CODE_HOOK)["decision"] == "block"
+    result = base | {"payload": {"kind": "tool.result", "call_id": "c-77", "tool": "Bash", "ok": True,
+                                 "output_preview": ""}}  # fmt: skip
+    judge_event(ctx, result, CLAUDE_CODE_HOOK)
+    import json
+    import sqlite3
+
+    with sqlite3.connect(enrolled.spool.path) as db:
+        found = [
+            json.loads(d) for (d,) in db.execute("SELECT doc FROM outbox WHERE kind='finding' ORDER BY rowid")
+        ]
+    blocked = next(f for f in found if f["rule_id"] == "destructive-shell-command")
+    assert blocked["response"]["stage"] == "blocked" and blocked["response"]["confirmation"] == "unconfirmed"
+    contra = next(f for f in found if f["rule_id"] == "enforcement-contradicted")
+    assert contra["severity"] == "critical"
+    with sqlite3.connect(enrolled.spool.path) as db:
+        events = [
+            json.loads(d) for (d,) in db.execute("SELECT doc FROM outbox WHERE kind='event' ORDER BY rowid")
+        ]
+    res = next(
+        e for e in events if e["payload"]["kind"] == "tool.result" and e["payload"]["call_id"] == "c-77"
+    )
+    assert blocked["finding_id"] in res["labels"]["sga_contradicted_findings"].split(",")
+
+
+def test_posture_unknown_blocks_sensitive_resources_only_where_posture_is_checked(enrolled: Sensor) -> None:
+    """Fail closed (2026-11-13): a PC whose posture is checked but has no fresh result is 'unknown' and
+    may not reach sensitive resources. A sensor that does not check its PC (central gateway) adds no label."""
+    assert enrolled.posture_state() is None  # not a posture-checking sensor
+    assert "sga_posture" not in enrolled.evaluate(mcp_call("q", "crm")).event.labels
+    enrolled.posture_expected = True
+    r = enrolled.evaluate(mcp_call("q", "crm"))
+    assert r.event.labels["sga_posture"] == "unknown" and r.verdict.action is ResponseAction.BLOCK
+    enrolled.set_posture("agent-discovery", [])
+    assert enrolled.evaluate(mcp_call("q", "crm")).event.labels["sga_posture"] == "ok"
+    enrolled._posture_at["agent-discovery"] = now_utc() - timedelta(hours=2)  # results went stale
+    assert enrolled.evaluate(mcp_call("q", "crm")).event.labels["sga_posture"] == "unknown"
+
+
+def test_posture_results_survive_for_the_hooks_degraded_path(enrolled: Sensor) -> None:
+    enrolled.set_posture("claude-code-hook", ["claude-code: no SG-Advance hook"])
+    again = Sensor(enrolled.home, transport=enrolled.client._send)  # what the hook builds with no daemon
+    assert again.posture_state() == ("degraded", ["claude-code: no SG-Advance hook"])

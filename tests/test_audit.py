@@ -4,12 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from conftest import CP_ADMIN
 from sg_advance.sensor import Sensor
 from sg_advance.sensor.adapters import AdapterContext
 from sg_advance.sensor.plugin_api import judge, record_resolution
+
+
+@pytest.fixture(autouse=True)
+def agent_prompt_path(monkeypatch):
+    """These tests cover the agent's own approval prompt (linking the answer, audits). Since 2026-11-13
+    grade 3-1 calls go to the security hold instead (tests/test_phase1.py); turned off here so the
+    prompt mechanics stay covered with the rules at hand."""
+    monkeypatch.setattr("sg_advance.sensor.plugin_api.GRADE_HELD", "grade:none")
 
 
 def call(call_id: str, command: str, session: str = "agent:main:main") -> dict[str, Any]:

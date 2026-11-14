@@ -184,6 +184,9 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
             adapters.append(
                 OpenClawIntegrityAdapter(interval=args.integrity_interval, quarantine=not args.observe_only)
             )
+    # Zero trust: a sensor that checks its PC labels posture; until the first results arrive it is
+    # "unknown" (fail closed for sensitive resources).
+    sensor.posture_expected = sensor.posture_expected or not (args.no_claude_code and args.no_discovery)
     if not args.no_claude_code:  # Claude Code's guard hook in place? (M6; silent if not installed)
         from .adapters.claude_code_config import ClaudeCodeConfigAdapter
 
