@@ -28,6 +28,7 @@ from ..pki import fingerprint, key_pem, make_csr, new_key
 from ..policy import PolicyBundle, PolicyVerificationError, key_id, load_public_key
 from ..redact import redact_event
 from ..schema import AgentEvent, Enforcement, EventKind
+from . import downloads as downloads_mod
 from . import lineage as lineage_mod
 from .client import ControlPlaneClient, ControlPlaneError, Offline, Transport, urllib_transport
 from .priority import event_priority
@@ -200,6 +201,8 @@ class Sensor:
         # Phase 2 (CLAUDE.md): which tool calls carry protected test DB data, and where to (lineage.py).
         self.lineage = lineage_mod.LineageStore(home.root / "lineage.json")
         self._call_sources: dict[str, tuple[str, datetime]] = {}
+        # Follow-up scenario 2: files shell commands downloaded, labelled when a later command runs them.
+        self.downloads = downloads_mod.DownloadTracker()
         # Outcome model (2026-11-13): tool calls refused by handing the decision to the agent, kept until
         # their result shows up (then the refusal was not applied) or they age out.
         self._refused: dict[str, tuple[list[str], datetime]] = {}
@@ -360,7 +363,7 @@ class Sensor:
         if event.kind is EventKind.TOOL_CALL:
             base = update.get("labels", event.labels)
             clean = event.model_copy(update={"labels": base}) if "labels" in update else event
-            labels = self.state_labels() | self.lineage.labels_for(clean)
+            labels = self.state_labels() | self.lineage.labels_for(clean) | self.downloads.labels_for(clean)
             if labels:
                 update["labels"] = base | labels  # type: ignore[operator]
             self._remember_source(clean)
@@ -383,7 +386,7 @@ class Sensor:
     # Follow-up scenario 1 (docs/external-input.md): where a tool result came from = where its call talked
     # to, read from the call's own arguments (URL host, MCP server, search, local). The rules decide
     # what is external. Calls are remembered until their result arrives (bounded).
-    _OWN_LABELS = (*lineage_mod.LABELS, "sga_input_source")
+    _OWN_LABELS = (*lineage_mod.LABELS, "sga_input_source", downloads_mod.LABEL)
     SOURCE_KEEP = timedelta(hours=1)
     SOURCE_MAX = 5000
 
