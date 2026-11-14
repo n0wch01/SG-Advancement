@@ -32,7 +32,7 @@
 자세한 설계는 [docs/architecture.md](docs/architecture.md), 공통 이벤트 스키마는 [docs/schema.md](docs/schema.md),
 탐지 엔진과 룰 튜닝은 [docs/detection.md](docs/detection.md), 중앙 서버 API는 [docs/control-plane.md](docs/control-plane.md),
 엔드포인트 센서는 [docs/sensor.md](docs/sensor.md), 팀 프로젝트에서 바뀐 점은 [docs/from-sg.md](docs/from-sg.md),
-위협 모델은 [docs/threat-model.md](docs/threat-model.md), 장애 처리와 차단 결과 기록은 [docs/fail-closed.md](docs/fail-closed.md), 테스트 DB 유출 시나리오는 [docs/lineage.md](docs/lineage.md), 외부 입력 뒤 파괴적 행동은 [docs/external-input.md](docs/external-input.md), 내려받은 파일 실행은 [docs/downloaded-exec.md](docs/downloaded-exec.md), 하위 에이전트 권한 상승은 [docs/delegation-permissions.md](docs/delegation-permissions.md), 근거가 된 실제 사건은 [docs/incidents.md](docs/incidents.md)를 참고하세요.
+위협 모델은 [docs/threat-model.md](docs/threat-model.md), 장애 처리와 차단 결과 기록은 [docs/fail-closed.md](docs/fail-closed.md), 테스트 DB 유출 시나리오는 [docs/lineage.md](docs/lineage.md), 외부 입력 뒤 파괴적 행동은 [docs/external-input.md](docs/external-input.md), 내려받은 파일 실행은 [docs/downloaded-exec.md](docs/downloaded-exec.md), 하위 에이전트 권한 상승은 [docs/delegation-permissions.md](docs/delegation-permissions.md), 평가는 [docs/evaluation.md](docs/evaluation.md)와 [docs/fsi-17.md](docs/fsi-17.md)(금융보안원 17개 항목), 근거가 된 실제 사건은 [docs/incidents.md](docs/incidents.md)를 참고하세요.
 
 ## 개발
 
