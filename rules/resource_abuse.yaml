@@ -26,6 +26,9 @@ rules:
     response: abort_session
     tags: ["action-independent", owasp-llm:LLM10, scenario:S3]
     when: {payload.kind: tool.call}
+    # 오탐 수정(2026-11-14, 운영 기록, 사용자 결정): 상태만 읽는 툴(목표·세션 상태 조회)의 반복은 폭주가 아니다.
+    #   팀 게이트웨이 에이전트가 get_goal을 반복해 세션이 중단됐다. 미탐 주의: 이 툴들로 도는 루프는 rate-limit-tool-calls만 본다.
+    unless: {payload.tool: [get_goal, session_status, sessions_list, sessions_history, agents_list, TodoRead]}
     match:
       type: repeat
       threshold: 5

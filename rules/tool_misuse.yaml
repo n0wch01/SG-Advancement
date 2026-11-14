@@ -12,6 +12,9 @@ rules:
     response: require_approval
     tags: ["grade:3-1", owasp-llm:LLM06]
     when: {payload.kind: tool.call}
+    # 오탐 수정(2026-11-14, 사용자 결정): Code Mode 바깥 호출은 JavaScript에 명령을 담고 있을 뿐, 실제로 실행하는 안쪽 호출이
+    #   따로 판정된다. 사용자 승인이 된 뒤로 두 번 묻게 돼 다른 승인 룰처럼 건너뛴다(명령당 한 번).
+    unless: {labels.openclaw.tool_kind: code_mode_exec}
     match:
       type: regex
       fields: [payload.arguments]

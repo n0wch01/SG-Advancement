@@ -50,3 +50,21 @@ cases:
     events:
       - {kind: prompt.user, text: 분기 보고서를 요약해줘. 최대 3번까지만 검색해}
     expect_not: [exhaustion-keyword-prompt]
+
+  # 오탐 수정(2026-11-14, 운영 기록): 팀 게이트웨이 에이전트가 목표 조회 툴(get_goal)을 같은 인자로 반복해 세션이 중단됐다.
+  # 상태만 읽는 툴의 반복은 폭주가 아니다(사용자 결정: 룰에서 뺌).
+  - name: 상태 조회 툴의 반복은 루프로 보지 않음
+    agent: openclaw
+    sensor: openclaw_plugin
+    events:
+      - {at: 0, kind: tool.call, tool: get_goal, arguments: {}}
+      - {at: 20, kind: tool.call, tool: get_goal, arguments: {}}
+      - {at: 40, kind: tool.call, tool: get_goal, arguments: {}}
+      - {at: 60, kind: tool.call, tool: get_goal, arguments: {}}
+      - {at: 80, kind: tool.call, tool: get_goal, arguments: {}}
+      - {at: 100, kind: tool.call, tool: session_status, arguments: {}}
+      - {at: 120, kind: tool.call, tool: session_status, arguments: {}}
+      - {at: 140, kind: tool.call, tool: session_status, arguments: {}}
+      - {at: 160, kind: tool.call, tool: session_status, arguments: {}}
+      - {at: 180, kind: tool.call, tool: session_status, arguments: {}}
+    expect_not: [identical-args-loop]
