@@ -56,6 +56,7 @@ sga-sensor enroll --server https://<Mac LAN IP>:18443 --token set_… --device-i
   --ca-file ca.pem --ca-sha256 <CA 지문>
 sga-server device list                     # 인증서 만료일, 마지막 접속, 폐기 여부
 sga-server device revoke laptop --by … --reason …    # 토큰·인증서 즉시 거부 (T11)
+sga-server device owner laptop alice@corp.test --by … --reason …   # 이 장비는 MCP 경로에서 항상 alice로 기록·판정 ('-'로 해제)
 sga-server device tokens | revoke-token ID           # 아직 안 쓴 등록 토큰 폐기
 ```
 
