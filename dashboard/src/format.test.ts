@@ -18,6 +18,7 @@ import {
   parseHash,
   relativeTime,
   responseText,
+  riskBand,
   lineageFlow,
   reviewText,
   severityRank,
@@ -251,5 +252,16 @@ describe("reviewText", () => {
     expect(reviewText({ needs_review: false, review: null }).tone).toBe("none");
     const done = reviewText({ needs_review: true, review: { status: "problem", by: "lead", reason: "x", at: "2026-11-14T00:00:00Z" } });
     expect(done).toEqual({ label: "문제 있음 · lead", tone: "bad" });
+  });
+});
+
+describe("riskBand", () => {
+  it("words the score in three bands without deciding access", () => {
+    expect(riskBand(0)).toEqual({ label: "낮음", fill: "low" });
+    expect(riskBand(19).label).toBe("낮음");
+    expect(riskBand(20)).toEqual({ label: "주의", fill: "medium" });
+    expect(riskBand(59).label).toBe("주의");
+    expect(riskBand(60)).toEqual({ label: "높음", fill: "high" });
+    expect(riskBand(100).label).toBe("높음");
   });
 });

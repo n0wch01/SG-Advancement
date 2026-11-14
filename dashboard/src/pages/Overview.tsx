@@ -3,8 +3,8 @@ import { useState } from "react";
 import type { Api } from "../api";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
-import { SEVERITIES, SEVERITY_LABEL, approvalsHref, findingsHref, relativeTime, responseText, sinceFor, timelineHref } from "../format";
-import type { Summary } from "../types";
+import { SEVERITIES, SEVERITY_LABEL, approvalsHref, findingsHref, relativeTime, responseText, riskBand, sinceFor, timelineHref } from "../format";
+import type { PersonRisk, Summary } from "../types";
 import { useAsync } from "../useAsync";
 
 const RANGES: [string, string][] = [
@@ -18,6 +18,7 @@ export function Overview({ api }: { api: Api }) {
   const [range, setRange] = useState("7d");
   const { data, error, loading } = useAsync(() => api.summary(sinceFor(range)), [api, range]);
   const review = useAsync(() => api.reviewCount(), [api]);
+  const risk = useAsync(() => api.risk(), [api]);
   return (
     <section>
       <div className="page-head">
@@ -32,12 +33,13 @@ export function Overview({ api }: { api: Api }) {
       </div>
       {error && <ErrorBox error={error} />}
       {loading && !data && <Loading />}
-      {data && <OverviewBody s={data} reviewPending={review.data?.pending ?? null} />}
+      {risk.error && <ErrorBox error={risk.error} />}
+      {data && <OverviewBody s={data} reviewPending={review.data?.pending ?? null} people={risk.data} />}
     </section>
   );
 }
 
-function OverviewBody({ s, reviewPending }: { s: Summary; reviewPending: number | null }) {
+function OverviewBody({ s, reviewPending, people }: { s: Summary; reviewPending: number | null; people: PersonRisk[] | null }) {
   const f = s.findings;
   const urgent = f.by_severity.critical + f.by_severity.high;
   return (
@@ -56,6 +58,8 @@ function OverviewBody({ s, reviewPending }: { s: Summary; reviewPending: number 
           />
         )}
       </div>
+
+      {people && <RiskCard people={people} />}
 
       <div className="grid-2">
         <div className="card">
@@ -150,6 +154,65 @@ function OverviewBody({ s, reviewPending }: { s: Summary; reviewPending: number 
         )}
       </div>
     </>
+  );
+}
+
+// People's risk (KISA P1-4). Always the last 24 h, whatever range is picked above: it is the value
+// the control plane sends to sensors. One series (score per person), no legend: the number and the
+// band word sit next to each bar, and the access column says what actually changes for that person.
+function RiskCard({ people }: { people: PersonRisk[] }) {
+  return (
+    <div className="card">
+      <h2>사람 위험도 (최근 24시간, 에이전트 행동 기준)</h2>
+      <p className="muted small">
+        점수는 critical 60·high 20을 최근일수록 크게(24시간 전은 절반) 더한 값이고 100에서 자릅니다. 접근 제한은 점수가 아니라 기준(critical 1건 또는
+        high 3건)으로 정합니다. PC 설정 경보는 세지 않습니다.
+      </p>
+      {people.length === 0 ? (
+        <Empty>최근 24시간에 위험 행동이 기록된 사람이 없습니다.</Empty>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>사람</th>
+              <th>점수</th>
+              <th>접근 제한</th>
+              <th className="num">긴급 / 높음</th>
+              <th>마지막</th>
+            </tr>
+          </thead>
+          <tbody>
+            {people.map((p) => {
+              const band = riskBand(p.score);
+              return (
+                <tr key={p.user_id}>
+                  <td>
+                    <a href={findingsHref({ user_id: p.user_id })}>{p.user_id}</a>
+                    <a className="small side" href={timelineHref({ user_id: p.user_id })}>
+                      타임라인
+                    </a>
+                  </td>
+                  <td>
+                    <div className="risk-meter" title={`위험도 ${p.score} / 100 (${band.label})`}>
+                      <span className="bar-track" aria-hidden="true">
+                        <span className={`bar-fill fill-${band.fill}`} style={{ width: `${Math.max(p.score, 1)}%` }} />
+                      </span>
+                      <span className="num">{p.score}</span>
+                      <span className="muted small">{band.label}</span>
+                    </div>
+                  </td>
+                  <td>{p.elevated ? <span className="tag warn">민감 리소스는 보안팀 승인</span> : <span className="muted">없음</span>}</td>
+                  <td className="num">
+                    {p.critical} / {p.high}
+                  </td>
+                  <td className="muted">{p.last_ts ? relativeTime(p.last_ts) : "-"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 

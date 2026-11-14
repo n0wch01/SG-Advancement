@@ -443,3 +443,11 @@ export function reviewText(a: Pick<Approval, "needs_review" | "review">): { labe
   if (a.needs_review) return { label: "검토 대기", tone: "wait" };
   return { label: "-", tone: "none" };
 }
+
+// Risk score bands for display (server: critical 60, high 20, × recency, capped at 100).
+// The band is wording only; access decisions follow `elevated`.
+export function riskBand(score: number): { label: string; fill: "high" | "medium" | "low" } {
+  if (score >= 60) return { label: "높음", fill: "high" };
+  if (score >= 20) return { label: "주의", fill: "medium" };
+  return { label: "낮음", fill: "low" };
+}

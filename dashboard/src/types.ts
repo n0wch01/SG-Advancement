@@ -79,6 +79,17 @@ export interface UserCount {
   last_ts: string;
 }
 
+// GET /v1/admin/risk: people with high/critical action findings in the last 24 h (KISA P1-4).
+// score 0..100 ranks them; elevated is what access decisions use (unchanged thresholds).
+export interface PersonRisk {
+  user_id: string;
+  critical: number;
+  high: number;
+  elevated: boolean;
+  score: number;
+  last_ts: string | null;
+}
+
 export interface Summary {
   since: string | null;
   generated_at: string;

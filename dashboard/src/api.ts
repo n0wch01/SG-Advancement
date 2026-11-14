@@ -4,19 +4,22 @@
 
 import type {
   Approval,
+  ApprovalMetrics,
   ApprovalReview,
   Device,
   DeviceInventory,
   Finding,
   FindingDetail,
+  PersonRisk,
   PolicyChange,
   PolicyRule,
   PolicyScope,
   RemoteAction,
-  SecurityApproval,
   Role,
+  SecurityApproval,
   Summary,
-  Timeline, ApprovalMetrics } from "./types";
+  Timeline,
+} from "./types";
 
 const KEY = "sga-dashboard-token";
 
@@ -99,6 +102,10 @@ export class Api {
 
   approvals(q: { approved?: string; decision?: string; user_id?: string; review?: string; since?: string | null; limit?: number; offset?: number }) {
     return this.get<Approval[]>("/approvals", q);
+  }
+
+  risk() {
+    return this.get<PersonRisk[]>("/risk");
   }
 
   reviewCount() {

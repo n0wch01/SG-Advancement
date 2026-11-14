@@ -108,6 +108,9 @@ def test_server_scores_people_and_tells_each_device_only_its_own(enrolled: Senso
     enrolled.flush()
     people = {p["user_id"]: p for p in cp.get("/v1/admin/risk", headers=CP_ADMIN).json()}
     assert people["mallory"]["elevated"] and not people["bob"]["elevated"]
+    # The continuous score ranks them; access still follows "elevated" (unchanged thresholds).
+    assert people["mallory"]["score"] >= 60 > people["bob"]["score"] >= 19
+    assert list(people) == ["mallory", "bob"] and people["bob"]["last_ts"]
 
     ctx = AdapterContext(enrolled, "alice", "pc")
     assert asyncio.run(refresh_risk(ctx))
@@ -237,3 +240,21 @@ def test_posture_results_survive_for_the_hooks_degraded_path(enrolled: Sensor) -
     enrolled.set_posture("claude-code-hook", ["claude-code: no SG-Advance hook"])
     again = Sensor(enrolled.home, transport=enrolled.client._send)  # what the hook builds with no daemon
     assert again.posture_state() == ("degraded", ["claude-code: no SG-Advance hook"])
+
+
+def test_risk_score_weighs_severity_and_recency() -> None:
+    """P1-4 continuous score: critical 60, high 20, × recency (1.0 now → 0.5 at 24 h), capped at 100."""
+    from datetime import timedelta
+
+    from sg_advance.server.risk import score_of
+
+    now = now_utc()
+    assert score_of([], now) == 0
+    assert score_of([("critical", now)], now) == 60
+    assert score_of([("high", now)], now) == 20
+    assert score_of([("critical", now - timedelta(hours=24))], now) == 30  # the edge of the window: half
+    assert score_of([("high", now - timedelta(hours=12))], now) == 15
+    assert score_of([("critical", now)] * 3, now) == 100  # capped
+    assert score_of([("medium", now), ("low", now)], now) == 0  # medium and lower never count
+    # A future timestamp (device clock ahead) counts as now, not more.
+    assert score_of([("high", now + timedelta(hours=2))], now) == 20

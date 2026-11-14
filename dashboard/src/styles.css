@@ -126,6 +126,7 @@ a.tile:hover { text-decoration: none; box-shadow: 0 0 0 1px var(--accent); }
 .fill-low { background: var(--sev-low); }
 .fill-info { background: var(--sev-info); }
 .bar-value { color: var(--ink-2); }
+.risk-meter { display: grid; grid-template-columns: minmax(80px, 160px) 32px auto; align-items: center; gap: 8px; }
 
 table { width: 100%; border-collapse: collapse; }
 th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--line); }
