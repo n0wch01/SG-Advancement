@@ -101,6 +101,9 @@ class Device(Base):
     cert_not_after: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     revoked_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Review 2026-11-15: the person this device belongs to (a laptop). Set by security; the LAN gateway
+    # then forwards this person for MCP calls whatever the device claims. None: the device's claim.
+    owner: Mapped[str | None] = mapped_column(String(200), nullable=True)
     revoke_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
 

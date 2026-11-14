@@ -18,7 +18,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from ..redact import redact_text
 from . import audit_chain
@@ -26,6 +26,9 @@ from .auth import DbSession, require_admin, require_device
 from .db import Device, SecurityApproval, utcnow
 
 MAX_WAIT_SECONDS = 900
+# Review 2026-11-15: a decision handed out but not yet answered by an outcome goes out again after this,
+# so a lost response cannot lose security's decision (the device ignores holds it no longer has).
+DECISION_LEASE = timedelta(seconds=15)
 OUTCOMES = ("allowed", "denied", "timeout", "cancelled", "unreachable", "mismatch", "rechecked")
 
 admin = APIRouter(prefix="/v1/admin", tags=["security-approval"], dependencies=[Depends(require_admin)])
@@ -149,17 +152,23 @@ def create_hold(body: HoldCreate, device: CurrentDevice, db: DbSession) -> HoldC
 
 @sensor.get("/security-approvals/decisions", response_model=list[Decision])
 def decisions(device: CurrentDevice, db: DbSession) -> list[Decision]:
-    """Decisions on this device's holds not handed out yet; each is handed out once."""
+    """Decisions on this device's holds: not handed out yet, or handed out more than DECISION_LEASE ago
+    with no outcome reported while the hold is still open (the first answer may have been lost)."""
+    now = utcnow()
     rows = list(
         db.scalars(
             select(SecurityApproval).where(
                 SecurityApproval.device_id == device.device_id,
                 SecurityApproval.status.in_(("approved", "denied")),
-                SecurityApproval.delivered_at.is_(None),
+                or_(
+                    SecurityApproval.delivered_at.is_(None),
+                    (SecurityApproval.delivered_at < now - DECISION_LEASE)
+                    & SecurityApproval.outcome.is_(None)
+                    & (SecurityApproval.expires_at > now),
+                ),
             )
         )
     )
-    now = utcnow()
     for a in rows:
         a.delivered_at = now
     db.commit()

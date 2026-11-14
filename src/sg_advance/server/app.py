@@ -138,6 +138,13 @@ class DeviceOut(_Model):
     revoked_at: datetime | None = None
     revoked_by: str | None = None
     revoke_reason: str | None = None
+    owner: str | None = Field(default=None, description="Person the LAN MCP route speaks for (2026-11-15)")
+
+
+class OwnerRequest(_Model):
+    owner: str | None = Field(min_length=1, max_length=200, description="None: no owner")
+    by: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class RevokeRequest(_Model):
@@ -465,6 +472,7 @@ def list_devices(request: Request, db: DbSession) -> list[DeviceOut]:
             revoked_at=d.revoked_at,
             revoked_by=d.revoked_by,
             revoke_reason=d.revoke_reason,
+            owner=d.owner,
         )
         for d in rows
     ]
@@ -482,6 +490,25 @@ def revoke_device(device_id: str, body: RevokeRequest, request: Request, db: DbS
     if d.revoked_at is None:
         d.revoked_at, d.revoked_by, d.revoke_reason = utcnow(), body.by, body.reason
         db.commit()
+    return next(x for x in list_devices(request, db) if x.device_id == device_id)
+
+
+@admin.post("/devices/{device_id}/owner", response_model=DeviceOut)
+def set_device_owner(device_id: str, body: OwnerRequest, request: Request, db: DbSession) -> DeviceOut:
+    """Pin the person a single-user device (a laptop) speaks for. The LAN gateway's per-request check
+    then forwards this person to the central MCP gateway instead of what the device's request claims,
+    so a stolen or misused device certificate cannot act as someone else (review 2026-11-15)."""
+    if request.state.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "setting an owner needs the admin token")
+    d = db.get(Device, device_id)
+    if d is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
+    before, d.owner = d.owner, body.owner
+    audit_chain.append(
+        db, "device_owner", device_id,
+        {"before": before, "after": body.owner, "by": body.by, "reason": body.reason, "at": utcnow()},
+    )  # fmt: skip
+    db.commit()
     return next(x for x in list_devices(request, db) if x.device_id == device_id)
 
 

@@ -175,3 +175,39 @@ def test_mcp_route_authz_follows_enrollment_and_revocation(lan: TestClient, tmp_
     r = lan.post("/v1/admin/devices/laptop/revoke", json=WHO, headers=CP_ADMIN)
     assert r.status_code == 200, r.text
     assert ask(home.cert_path).status == 403
+
+
+def test_an_owned_device_cannot_speak_for_someone_else(lan: TestClient, tmp_path: Path) -> None:
+    """Review 2026-11-15: X-SGA-User passed through the LAN gateway untouched, so anything holding a
+    laptop's certificate could act as any person on the company MCP servers (and slip past a remote
+    block on its owner). A device with an owner now always speaks as that owner; without one, its claim
+    is forwarded as before (the documented limit: a person's identity is what the device says)."""
+    home = enroll_laptop(lan, tmp_path)
+
+    def ask(claim: str | None) -> HttpResponse:
+        headers = {"X-SGA-User": claim} if claim is not None else {}
+        return Gateway(lan, home.cert_path)("GET", f"{LAN_URL}/v1/gateway/authz", headers, None)
+
+    assert ask("bob@corp.test").headers.get("x-sga-user") == "bob@corp.test"  # no owner: the claim
+    assert "x-sga-user" not in ask(None).headers or ask(None).headers["x-sga-user"] == ""
+    body = {"owner": "alice@corp.test", **WHO}
+    viewer = dataclasses.replace(lan.app.state.settings, dashboard_token="view")
+    lan.app.state.settings = viewer
+    view = {"Authorization": "Bearer view"}
+    assert lan.post("/v1/admin/devices/laptop/owner", json=body, headers=view).status_code == 403
+    r = lan.post("/v1/admin/devices/laptop/owner", json=body, headers=CP_ADMIN)
+    assert r.status_code == 200 and r.json()["owner"] == "alice@corp.test"
+    assert ask("mallory-blocked@corp.test").headers["x-sga-user"] == "alice@corp.test"  # owner wins
+    assert ask(None).headers["x-sga-user"] == "alice@corp.test"
+    cleared = lan.post("/v1/admin/devices/laptop/owner", json={"owner": None, **WHO}, headers=CP_ADMIN)
+    assert cleared.json()["owner"] is None
+    assert ask("bob@corp.test").headers["x-sga-user"] == "bob@corp.test"
+    assert lan.post("/v1/admin/devices/nope/owner", json=body, headers=CP_ADMIN).status_code == 404
+
+
+def test_the_lan_gateway_forwards_the_checked_person_not_the_clients_header() -> None:
+    conf = (Path(__file__).resolve().parents[1] / "deploy/lan-gateway/default.conf.template").read_text()
+    mcp = conf[conf.index("location /mcp/"):]
+    mcp = mcp[: mcp.index("}") + 1] if "location /v1/" not in mcp else mcp[: mcp.index("location /v1/")]
+    assert "auth_request_set $sga_user $upstream_http_x_sga_user;" in mcp
+    assert "proxy_set_header X-SGA-User         $sga_user;" in mcp

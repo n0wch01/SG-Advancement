@@ -331,3 +331,26 @@ async def test_gateway_withholds_an_answer_it_cannot_read(enrolled: Sensor) -> N
         up.close()
     f = next(f for f in spooled(enrolled, "finding") if f["rule_id"] == "tool-result-uninspected")
     assert f["response"]["confirmation"] == "confirmed"  # the gateway itself replaced what it sent
+
+
+def test_a_late_result_replaces_the_servers_unacknowledged(cp: TestClient, enrolled: Sensor) -> None:
+    """Review 2026-11-15: after the server gave up (unacknowledged), the device's real result arrived and
+    was thrown away, so the console said "failed" while the person was in fact blocked on the device.
+    Requested and applied must not be conflated: the late report now stands, marked late."""
+    aid = _create(cp, "block_user", "mallory")
+    with cp.app.state.db._sessions() as db:
+        db.execute(
+            update(RemoteAction)
+            .where(RemoteAction.id == aid)
+            .values(attempts=5, status="delivered", lease_until=utcnow() - timedelta(minutes=5))
+        )
+        db.commit()
+    assert enrolled.client.get_actions() == []
+    assert _row(cp, aid)["applied"] == "unacknowledged"
+    enrolled.client.report_action(aid, True, "blocked mallory", "applied")  # its results kept failing
+    row = _row(cp, aid)
+    assert row["status"] == "done" and row["applied"] == "applied"
+    assert "late" in row["result_detail"]
+    # A result the device itself reported still stands against a later duplicate.
+    enrolled.client.report_action(aid, False, "duplicate", "failed")
+    assert _row(cp, aid)["applied"] == "applied"

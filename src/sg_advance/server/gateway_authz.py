@@ -6,6 +6,10 @@ must belong to an enrolled, unrevoked device whose certificate has not expired. 
 device (``X-SGA-Device``), which nginx forwards to the central MCP gateway. Revoking a device in the
 console therefore cuts its agents off the company's MCP servers on the next request
 (KISA agentic AI ZT guide P1-3 continuous verification, P5-6).
+
+The person (``X-SGA-User``, review 2026-11-15): nginx forwards *this answer*, never the client's own
+header. A device with an owner (``POST /v1/admin/devices/{id}/owner``) always speaks as its owner;
+a device without one gets its claim back (the documented limit: a person is what the device says).
 """
 
 from __future__ import annotations
@@ -31,4 +35,8 @@ def authz(request: Request, db: DbSession) -> Response:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "unknown or revoked device")
     if device.cert_not_after is not None and now >= device.cert_not_after:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "device certificate expired")
-    return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"X-SGA-Device": device.device_id})
+    headers = {"X-SGA-Device": device.device_id}
+    claim = " ".join(request.headers.get("x-sga-user", "").split())[:200]
+    if person := device.owner or claim:
+        headers["X-SGA-User"] = person
+    return Response(status_code=status.HTTP_204_NO_CONTENT, headers=headers)

@@ -402,6 +402,10 @@ def device_main(argv: list[str]) -> int:
     p = sub.add_parser("revoke", help="stop a device for good (its token and certificate)")
     p.add_argument("device")
     _who(p)
+    p = sub.add_parser("owner", help="pin the person a single-user device speaks for on the MCP route")
+    p.add_argument("device")
+    p.add_argument("person", help="e.g. alice@corp.test; '-' clears it")
+    _who(p)
     p = sub.add_parser("token", help="create an enrollment token for one PC")
     p.add_argument("--label")
     p.add_argument("--group", help="policy group the device joins (M9)")
@@ -432,6 +436,16 @@ def device_main(argv: list[str]) -> int:
             {"by": args.by, "reason": args.reason},
         )
         print(f"revoked {d['device_id']} at {d['revoked_at'][:19]}; its token and certificate no longer work")  # type: ignore[index]
+        return 0
+    if args.cmd == "owner":
+        person = None if args.person == "-" else args.person
+        d = _api(
+            args.server,
+            "POST",
+            f"/v1/admin/devices/{args.device}/owner",
+            {"owner": person, "by": args.by, "reason": args.reason},
+        )
+        print(f"{d['device_id']}: owner {d['owner'] or '(none: the device says who)'}")  # type: ignore[index]
         return 0
     if args.cmd == "token":
         body = {"label": args.label, "group": args.group, "ttl_hours": args.ttl_hours}

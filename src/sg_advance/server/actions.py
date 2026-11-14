@@ -194,11 +194,14 @@ def action_result(action_id: str, body: ActionResult, device: CurrentDevice, db:
     a = db.get(RemoteAction, action_id)
     if a is None or a.device_id != device.device_id:  # a device reports only on its own actions
         raise HTTPException(status.HTTP_404_NOT_FOUND, "action not found")
-    if a.status in ("done", "failed"):
+    late = a.applied == "unacknowledged"
+    if a.status in ("done", "failed") and not late:
         return  # a duplicate report (redelivery raced the first result): the first one stands
+    # Review 2026-11-15: "unacknowledged" is the server giving up, not a result. The device's own
+    # report, even late, says what was actually applied, so it replaces that (marked late).
     a.status = "done" if body.ok else "failed"
     a.result_at = utcnow()
-    a.result_detail = body.detail
+    a.result_detail = f"{body.detail} (late: after the server gave up)" if late else body.detail
     a.applied = body.applied or ("applied" if body.ok else "failed")
     a.lease_until = None
     audit_chain.append(

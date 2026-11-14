@@ -217,3 +217,44 @@ def test_devices_see_only_their_own_holds(cp: TestClient, enrolled: Sensor) -> N
         "denied"
     ]
     assert cp.get("/v1/security-approvals/decisions", headers=alice).json() == []  # handed out once
+
+
+def test_a_decision_is_handed_out_again_until_the_device_reports_an_outcome(
+    cp: TestClient, enrolled: Sensor, monkeypatch
+) -> None:
+    """Review 2026-11-15: a decision was marked delivered before the device had it; a lost response lost
+    the decision for good (the hold then timed out although security approved in time). It is now
+    handed out again after a short lease until the device reports what happened, like remote actions."""
+    from datetime import timedelta
+
+    from sg_advance.server import security_approvals as sa
+
+    hold = {"id": "b" * 32, "tool": "exec", "user_id": "alice@corp.test", "session_id": "s",
+            "wait_seconds": 120}  # fmt: skip
+    alice = {"Authorization": f"Bearer {enrolled.creds.device_token}"}
+    assert cp.post("/v1/security-approvals", json=hold, headers=alice).status_code == 201
+    cp.post(f"/v1/admin/security-approvals/{'b' * 32}/decision", json={"decision": "approve", **WHO},
+            headers=CP_ADMIN)  # fmt: skip
+
+    def decisions() -> list[str]:
+        return [d["decision"] for d in cp.get("/v1/security-approvals/decisions", headers=alice).json()]
+
+    assert decisions() == ["approved"]
+    assert decisions() == []  # within the lease: not again (the device is applying it)
+    real = sa.utcnow
+    monkeypatch.setattr(sa, "utcnow", lambda: real() + sa.DECISION_LEASE + timedelta(seconds=1))
+    assert decisions() == ["approved"]  # the first answer was lost: handed out again
+    assert cp.post(f"/v1/security-approvals/{'b' * 32}/outcome", json={"outcome": "allowed"},
+                   headers=alice).status_code == 204  # fmt: skip
+    monkeypatch.setattr(sa, "utcnow", lambda: real() + 3 * sa.DECISION_LEASE)
+    assert decisions() == []  # the device said what happened: done
+    # And never once the hold has expired: the device stopped waiting by then.
+    late = {"id": "c" * 32, "tool": "exec", "user_id": "alice@corp.test", "session_id": "s",
+            "wait_seconds": 1}  # fmt: skip
+    monkeypatch.setattr(sa, "utcnow", real)
+    assert cp.post("/v1/security-approvals", json=late, headers=alice).status_code == 201
+    cp.post(f"/v1/admin/security-approvals/{'c' * 32}/decision", json={"decision": "deny", **WHO},
+            headers=CP_ADMIN)  # fmt: skip
+    assert decisions() == ["denied"]
+    monkeypatch.setattr(sa, "utcnow", lambda: real() + timedelta(minutes=5))
+    assert decisions() == []
