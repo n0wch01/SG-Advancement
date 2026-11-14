@@ -98,7 +98,7 @@ Claude Code ─▶ 노트북 센서의 로컬 게이트웨이 ─▶ LAN 게이�
 |---|---|
 | 0 (조회) | `sensitive-file-access` |
 | 2-1 (에이전트 간 전달) | `cross-agent-injection-propagation`, `injection-relayed-to-agent` |
-| 3-1 (영구 삭제·외부 유출) | 사용자 승인: `destructive-shell-command`, `destructive-sql`, `destructive-cloud-command`, `protected-data-destination-unclear`. 차단: `sensitive-file-exfil-command`, `secret-in-tool-arguments`, `injection-then-sensitive-action`, `protected-data-to-unapproved-destination`, `transfer-with-lineage-unavailable` |
+| 3-1 (영구 삭제·외부 유출) | 사용자 승인: `destructive-shell-command`, `destructive-sql`, `destructive-cloud-command`, `destructive-after-external-input`, `protected-data-destination-unclear`. 차단: `sensitive-file-exfil-command`, `secret-in-tool-arguments`, `injection-then-sensitive-action`, `injection-then-destructive-action`, `protected-data-to-unapproved-destination`, `transfer-with-lineage-unavailable` |
 
 2-2와 3-2 등급(실시간이라 사전 승인 정책 안에서 자동 실행)은 해당하는 행동이 없어 쓰지 않는다.
 
