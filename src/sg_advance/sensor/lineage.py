@@ -38,6 +38,7 @@ from urllib.parse import unquote, urlsplit
 
 from ..detect.engine import LINEAGE_SOURCE_TAG
 from ..schema import AgentEvent, EventKind
+from . import tools
 from .state import now_utc
 
 log = logging.getLogger(__name__)
@@ -56,11 +57,11 @@ MAX_PATHS = 2000
 SCAN_MAX = 1_000_000  # characters of a call's arguments that are tokenised
 MIN_TOKEN = 4
 
-FILE_WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "write", "edit", "apply_patch"}
-WEB_TOOLS = {"WebFetch", "web_fetch", "fetch", "browser"}
-SEARCH_TOOLS = {"WebSearch", "web_search"}
-SHELL_TOOLS = {"Bash", "exec", "shell", "bash", "run_command", "process"}
-LOCAL_TOOLS = {"Read", "Glob", "Grep", "LS", "NotebookRead", "TodoRead", "TodoWrite", "read"}
+FILE_WRITE_TOOLS = tools.FILE_WRITE
+WEB_TOOLS = tools.WEB
+SEARCH_TOOLS = tools.SEARCH
+SHELL_TOOLS = tools.SHELL
+LOCAL_TOOLS = tools.LOCAL
 
 _DIGITS_ONLY = re.compile(r"[\d\s\-.()+]+")
 _DIGIT_RUN = re.compile(r"\d[\d\-.]{6,}\d")

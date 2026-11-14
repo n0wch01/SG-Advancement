@@ -73,6 +73,11 @@ class Hit:
     collected: tuple[tuple[str, str], ...] = field(default=(), repr=False)
 
 
+def rule_titles(hits: Iterable[Hit], default: str = "policy") -> str:
+    """The hit rules' titles, each once, in order: what an agent or a person is told."""
+    return "; ".join(dict.fromkeys(h.rule.title for h in hits)) or default
+
+
 @dataclass
 class Verdict:
     event: AgentEvent

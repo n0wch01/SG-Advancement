@@ -31,6 +31,7 @@ from typing import Any
 import yaml
 
 from ..schema import AgentEvent, EventKind
+from .tools import CLAUDE_SUBAGENT_READ_ONLY
 
 LABEL = "sga_delegation_escalation"
 DEF_LABEL = "sga_delegation_def"
@@ -48,9 +49,7 @@ MODE_RANK = {
     "bypassPermissions": 5,
 }
 _PASS_DOWN = {"bypassPermissions", "acceptEdits", "auto"}
-READ_ONLY = frozenset(
-    {"Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "TodoRead", "TodoWrite"}
-)
+READ_ONLY = CLAUDE_SUBAGENT_READ_ONLY
 # Built-in subagent types (no file): read-only explorers, and the general one that inherits everything.
 BUILTIN: dict[str, dict[str, Any]] = {
     "Explore": {"tools": sorted(READ_ONLY)},

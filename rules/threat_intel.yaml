@@ -3,7 +3,8 @@
 #   - 직원 PC의 Claude Code는 egress 프록시를 거치지 않는다(명령 판정만 있음).
 #   - 로컬(stdio) MCP 서버는 URL이 없어 허용 목록으로 볼 수 없다. 센서가 실행하는 패키지 이름만 보낸다(McpServerRef.package).
 #
-# 목록을 고칠 때는 아래 세 룰에 같게 넣고(정규식이라 YAML 앵커로 묶지 못함) tests/rule_cases/threat_intel.yaml에 케이스를 더한다.
+# 목록을 고칠 때는 아래 세 룰에 같게 넣고(정규식이라 YAML 앵커로 묶지 못함, 어긋나면 tests/test_rule_lists.py가 실패)
+# tests/rule_cases/threat_intel.yaml에 케이스를 더한다.
 # 목록 (출처가 있는 것만):
 #   패키지 postmark-mcp  — 2025-09 npm 악성 MCP 서버. 보내는 메일마다 공격자 주소를 숨은 참조로 붙였다.
 #                          안내서 시나리오 5, 각주 11(Koi Security 보고). 같은 이름의 정상 패키지는 npm에 없다(공식은 GitHub).

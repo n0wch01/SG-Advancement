@@ -19,8 +19,8 @@ from pathlib import PurePosixPath, PureWindowsPath
 from urllib.parse import urlsplit
 
 from ..schema import AgentEvent, EventKind
-from .lineage import SHELL_TOOLS
 from .state import now_utc
+from .tools import SHELL as SHELL_TOOLS
 
 LABEL = "sga_runs_downloaded"
 KEEP = timedelta(hours=24)
