@@ -53,3 +53,43 @@ rules:
       type: regex
       fields: [payload.default_mode]
       pattern: '^bypassPermissions$'
+
+  # ── 후속 시나리오 ③: 부모보다 큰 권한을 받은 하위 에이전트 (docs/delegation-permissions.md, 2026-11-14) ──
+  # 위임 통제(데이터 출처 추적과 따로). 센서가 Task/Agent 호출 때 하위 에이전트 정의(.claude/agents/*.md의 permissionMode·
+  # tools·disallowedTools·mcpServers)를 부모(호출 hook의 permission_mode, 부모가 하위 에이전트면 그 정의의 tools)와 비교해
+  # labels.sga_delegation_escalation을 붙인다: "mode:<부모>→<자식>", "tools:+<더 받은 툴>", "mcp:+<자기가 띄우는 서버>".
+  # 결정(2026-11-14 승인 원칙): 공격 진행 신호가 아니므로 사용자 승인 + 보안팀 사후 검토(인젝션 문구를 위임하면
+  #   injection-relayed-to-agent가 바로 차단).
+  # 오탐 주의: 팀이 일부러 acceptEdits로 만든 수정 담당 하위 에이전트도 묻는다(정의를 고치거나 부모 모드를 맞추면 사라짐).
+  # 미탐 주의: 정의 파일을 못 찾는 하위 에이전트(플러그인 에이전트, 실행 중에 만든 것)는 비교하지 않는다.
+  - id: delegation-grants-more-permission
+    severity: high
+    category: policy_violation
+    title: 부모보다 큰 권한으로 하위 에이전트 생성
+    message: 하위 에이전트 정의가 부모 대화보다 넓은 권한(권한 모드·툴·MCP 서버)을 주고 있어, 만들기 전에 사용자 승인을 받습니다.
+    recommended_action: 사용자가 승인했다면 보안팀 검토 큐에서 하위 에이전트 정의 파일(라벨 sga_delegation_def)과 더 받은 권한을 확인하세요. 저장소에 딸려 온 정의라면 출처를 확인하세요.
+    response: require_approval
+    tags: ["grade:2-1", owasp-agentic:ASI03, scenario:F3]
+    when: {payload.kind: tool.call, payload.tool: [Task, Agent]}
+    match:
+      type: regex
+      fields: [labels.sga_delegation_escalation]
+      pattern: '^(?:mode|tools|mcp):'
+
+  # 실행 중 확인("승인된 툴도 계속 확인"): 하위 에이전트가 보고한 권한 모드가 최상위 대화보다 넓으면, 부모라면 물었을
+  # 변경 행동을 사용자에게 묻는다(부모 수준으로 되돌림). 읽기 전용 툴은 그대로.
+  # 미탐 주의: 센서 데몬이 최상위 대화의 모드를 본 적이 없으면(데몬 재시작 직후, hook 단독) 비교하지 못한다.
+  - id: subagent-above-parent-permission
+    severity: high
+    category: policy_violation
+    title: 부모보다 넓은 권한으로 도는 하위 에이전트의 변경 행동
+    message: 하위 에이전트가 부모 대화보다 넓은 권한 모드로 실행 중이라, 부모였다면 확인받았을 행동을 사용자에게 묻습니다.
+    recommended_action: 하위 에이전트 정의의 permissionMode를 부모와 맞추세요. 사용자가 승인했다면 보안팀 검토 큐에서 확인하세요.
+    response: require_approval
+    tags: [action-independent, owasp-agentic:ASI03, scenario:F3]
+    when: {payload.kind: tool.call}
+    unless: {payload.tool: [Read, Glob, Grep, LS, NotebookRead, TodoRead, TodoWrite, WebSearch]}
+    match:
+      type: regex
+      fields: [labels.sga_delegation_escalation]
+      pattern: '^runtime-mode:'
