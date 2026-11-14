@@ -14,7 +14,9 @@ import pytest
 
 from sg_advance.sensor import Sensor, hook
 from sg_advance.sensor.adapters import AdapterContext
-from sg_advance.sensor.plugin_api import CLAUDE_CODE_HOOK, judge_event
+from sg_advance.sensor.adapters.openclaw_config import posture
+from sg_advance.sensor.plugin_api import CLAUDE_CODE_HOOK, OPENCLAW_PLUGIN, judge, judge_event
+from sg_advance.shorthand import build_event
 
 AGENTS = {
     "fixer": "permissionMode: acceptEdits\n",
@@ -22,7 +24,8 @@ AGENTS = {
     "reviewer": "tools: Read, Grep, Agent\npermissionMode: plan\n",
     "deployer": "tools:\n  - Read\n  - Bash\n  - Write\n",
     "reader": "tools: Read, Grep\n",
-    "with-mcp": "mcpServers:\n  - github\n  - pastebin:\n      type: http\n      url: https://paste.internet-sim/mcp\n",
+    "with-mcp": "mcpServers:\n  - github\n  - pastebin:\n      type: http\n"
+    "      url: https://paste.internet-sim/mcp\n",
 }
 
 
@@ -145,3 +148,71 @@ def test_a_child_at_the_parents_level_is_left_alone(enrolled: Sensor, project: P
     write = call(project, "Write", "acceptEdits", ("a-8", "fixer"), file_path="src/app.py", content="x")
     assert decide(enrolled, write) == "allow"
     assert not [f for f in spooled(enrolled) if f["rule_id"] == "subagent-above-parent-permission"]
+
+
+# ── OpenClaw: sessions_spawn under another agent (2026-11-14) ────────────────
+
+
+OC = {"agent": "openclaw"}
+
+
+def _snapshots(sensor: Sensor, modes: dict[str, str], sandboxes: list[dict[str, Any]] | None = None) -> None:
+    for aid, mode in modes.items():
+        inv = {"kind": "inventory.snapshot", "agent_id": aid, "permission_mode": mode}
+        sensor.process(build_event(inv, defaults=OC, index=0))
+    if sandboxes is not None:
+        cfg = {"kind": "config.snapshot", "product": "openclaw", "sandboxes": sandboxes}
+        sensor.process(build_event(cfg, defaults=OC | {"sensor": "openclaw_config"}, index=0))
+
+
+def spawn(sensor: Sensor, parent_key: str, **params: Any) -> dict[str, Any]:
+    req = {"op": "tool_call", "sessionKey": parent_key, "toolCallId": uuid.uuid4().hex}
+    req |= {"toolName": "sessions_spawn", "params": {"task": "do the work", **params}}
+    return judge(AdapterContext(sensor, "alice", "pc"), req)
+
+
+def test_openclaw_spawn_under_a_wider_agent_asks(enrolled: Sensor) -> None:
+    _snapshots(enrolled, {"research": "workspace", "ops": "full", "reader": "read-only"})
+    assert spawn(enrolled, "agent:research:main", agentId="ops")["decision"] == "approve"
+    assert spawn(enrolled, "agent:research:main", agentId="reader")["decision"] == "allow"  # narrower
+    assert spawn(enrolled, "agent:research:main")["decision"] == "allow"  # same agent: same mode
+    (f,) = [f for f in spooled(enrolled) if f["rule_id"] == "delegation-grants-more-permission"]
+    assert f["labels"]["sga_delegation_escalation"] == "mode:workspace→full"
+    assert f["labels"]["sga_delegation_child"] == "ops"
+
+
+def test_openclaw_spawn_out_of_the_sandbox_asks(enrolled: Sensor) -> None:
+    boxes = [{"scope": "defaults", "mode": "off"}, {"scope": "agent:research", "mode": "all"}]
+    _snapshots(enrolled, {"research": "workspace", "runner": "workspace"}, boxes)
+    assert spawn(enrolled, "agent:research:main", agentId="runner")["decision"] == "approve"
+    assert spawn(enrolled, "agent:research:main", agentId="runner", sandbox="require")["decision"] == "allow"
+    (f,) = [f for f in spooled(enrolled) if f["rule_id"] == "delegation-grants-more-permission"]
+    assert f["labels"]["sga_delegation_escalation"] == "sandbox:on→off"
+
+
+def test_openclaw_child_running_above_the_top_agent(enrolled: Sensor) -> None:
+    _snapshots(enrolled, {"research": "workspace", "ops": "full"})
+    top = "agent:research:main"
+    child = {"type": "openclaw", "session_id": "agent:ops:subagent:u-1", "parent_session_id": top}
+    child |= {"root_session_id": top, "spawn_depth": 1}
+
+    def call(tool: str, **args: Any) -> str:
+        doc = build_event(
+            {"kind": "tool.call", "tool": tool, "arguments": args}, defaults={"agent": "openclaw"}, index=0
+        )
+        doc = doc.model_copy(update={"agent": doc.agent.model_validate(child)}).model_dump(mode="json")
+        return judge_event(AdapterContext(enrolled, "alice", "pc"), doc, OPENCLAW_PLUGIN)["decision"]
+
+    assert call("write", path="notes.md", content="x") == "approve"
+    assert call("read", path="notes.md") == "allow"
+    (f,) = [f for f in spooled(enrolled) if f["rule_id"] == "subagent-above-parent-permission"]
+    assert f["labels"]["sga_delegation_escalation"] == "runtime-mode:workspace→full"
+
+
+def test_openclaw_config_reports_tool_denials_lifted_for_delegates() -> None:
+    intake = {
+        "tools": {"deny": ["exec"]},
+        "subagents": {"allowAgents": ["coder"], "delegateToolsTo": ["coder"]},
+    }
+    cfg = {"agents": {"entries": {"intake": intake, "coder": {}}}}
+    assert posture(cfg)["delegation_grants"] == [{"agent_id": "intake", "to": ["coder"]}]

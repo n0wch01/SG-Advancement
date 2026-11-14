@@ -168,14 +168,53 @@ def toolset(d: AgentDef | None) -> ToolSet:
     return ToolSet(only=d.tools - d.disallowed)
 
 
+# OpenClaw (2026-11-14). Session permission modes, narrowest first (docs: gateway/permission-modes).
+# A new session takes its agent's configured mode, so sessions_spawn with another ``agentId`` starts the
+# child at that agent's default. Tools are not compared: OpenClaw already passes the caller's tool
+# ceiling down (docs: tools/subagents/tool-policy), except ``delegateToolsTo`` grants (config rule).
+OPENCLAW_RANK = {"read-only": 0, "guarded": 1, "workspace": 2, "full": 3}
+_AGENT_KEY = re.compile(r"^agent:([^:]+):")
+
+
+def openclaw_agent(session_key: str | None) -> str | None:
+    m = _AGENT_KEY.match(session_key or "")
+    return m.group(1) if m else None
+
+
+def _sandboxed(mode: str | None, main: bool) -> bool:
+    """OpenClaw sandbox modes: off | non-main (every session but the agent's main one) | all."""
+    return mode == "all" or (mode == "non-main" and not main)
+
+
 class DelegationChecker:
     def __init__(self, home: Path | None = None) -> None:
         self.home = home or Path.home()
         self.root_modes: dict[str, str] = {}  # main conversation -> its last reported permission mode
+        self.openclaw_modes: dict[str, str] = {}  # agent id -> default permission mode (inventory)
+        self.openclaw_sandbox: dict[str, str] = {}  # "defaults" | agent id -> sandbox mode (config)
+
+    def observe(self, event: AgentEvent) -> None:
+        """Learn OpenClaw agents' default permission modes and sandboxes from the snapshots."""
+        p = event.payload
+        if event.kind is EventKind.INVENTORY_SNAPSHOT:
+            mode, aid = getattr(p, "permission_mode", None), getattr(p, "agent_id", None)
+            if isinstance(mode, str) and isinstance(aid, str) and mode in OPENCLAW_RANK:
+                self.openclaw_modes[aid] = mode
+        elif event.kind is EventKind.CONFIG_SNAPSHOT and getattr(p, "product", None) == "openclaw":
+            for sb in getattr(p, "sandboxes", ()) or ():
+                key = "defaults" if sb.scope == "defaults" else sb.scope.removeprefix("agent:")
+                if sb.mode:
+                    self.openclaw_sandbox[key] = sb.mode
+
+    def _sandbox_of(self, agent_id: str) -> str | None:
+        return self.openclaw_sandbox.get(agent_id) or self.openclaw_sandbox.get("defaults")
 
     def labels_for(self, event: AgentEvent) -> dict[str, str]:
         if event.kind is not EventKind.TOOL_CALL:
+            self.observe(event)
             return {}
+        if event.agent.type == "openclaw":
+            return self._openclaw(event)
         mode = event.labels.get("claude_code.permission_mode")
         child_id = event.labels.get("claude_code.agent_id")
         root = event.agent.root_session_id or event.agent.session_id
@@ -215,3 +254,39 @@ class DelegationChecker:
         if parts:
             out[LABEL] = ";".join(parts)[:500]
         return out
+
+    def _openclaw(self, event: AgentEvent) -> dict[str, str]:
+        labels: dict[str, str] = {}
+        me = openclaw_agent(event.agent.session_id)
+        root = openclaw_agent(event.agent.root_session_id)
+        mine, roots = self.openclaw_modes.get(me or ""), self.openclaw_modes.get(root or "")
+        cross = bool(event.agent.parent_session_id and me and root and me != root and mine and roots)
+        if cross and OPENCLAW_RANK[mine] > OPENCLAW_RANK[roots]:  # type: ignore[index]  # child above the top
+            labels[LABEL] = f"runtime-mode:{roots}→{mine}"
+        if getattr(event.payload, "tool", "") != "sessions_spawn" or not me:
+            return labels
+        args = getattr(event.payload, "arguments", {}) or {}
+        target = args.get("agentId") if isinstance(args.get("agentId"), str) else me
+        out: dict[str, str] = {
+            CHILD_LABEL: target[:100],
+            DEF_LABEL: f"openclaw:agents.entries.{target}"[:300],
+        }
+        parts: list[str] = []
+        parent_mode, child_mode = self.openclaw_modes.get(me), self.openclaw_modes.get(target)
+        if (
+            target != me
+            and parent_mode
+            and child_mode
+            and OPENCLAW_RANK[child_mode] > OPENCLAW_RANK[parent_mode]
+        ):
+            parts.append(f"mode:{parent_mode}→{child_mode}")
+        parent_main = event.agent.parent_session_id is None and (event.agent.session_id or "").endswith(
+            ":main"
+        )
+        parent_boxed = _sandboxed(self._sandbox_of(me), main=parent_main)
+        child_boxed = args.get("sandbox") == "require" or _sandboxed(self._sandbox_of(target), main=False)
+        if parent_boxed and not child_boxed:
+            parts.append("sandbox:on→off")
+        if parts:
+            out[LABEL] = ";".join(parts)
+        return labels | out

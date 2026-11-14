@@ -265,6 +265,14 @@ class RuntimePin(StrictModel):
     runtime: str = Field(description='Pinned runtime id, or "default" when nothing pins it')
 
 
+class DelegationGrant(StrictModel):
+    """openclaw ``agents.entries.<id>.subagents.delegateToolsTo``: the agent's own ``tools.deny`` is
+    lifted for these target agents when it hands work to them (follow-up scenario 3, 2026-11-14)."""
+
+    agent_id: str
+    to: tuple[str, ...] = ()
+
+
 class SandboxPolicy(StrictModel):
     """Where an agent's tools run. ``mode_source: default`` means not configured: the agent's
     built-in default applies (OpenClaw: ``off``, i.e. directly on the host)."""
@@ -309,6 +317,9 @@ class ConfigSnapshot(StrictModel):
     exec_policies: tuple[ExecPolicy, ...] = ()
     runtimes: tuple[RuntimePin, ...] = ()
     sandboxes: tuple[SandboxPolicy, ...] = ()
+    delegation_grants: tuple[DelegationGrant, ...] = Field(
+        default=(), description="openclaw: agents whose tool denials are lifted for named delegation targets"
+    )
 
 
 class ComponentIntegrity(StrictModel):

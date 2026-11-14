@@ -234,3 +234,19 @@ cases:
           # 고정되지 않은 모델(Sol)로 바꾼 대화가 만들어질 때의 openclaw를 유지: 따를 회사 설정이 없다(모델 쪽은 unpinned 룰이 본다).
           - {session_key: "agent:main:dashboard:y", model: openai/gpt-6.1-sol, runtime: openclaw, expected_runtime: codex, binding: unpinned}
     expect_not: [openclaw-session-runtime-stale, openclaw-session-runtime-unapproved]
+
+  # ── 위임으로 권한을 넘기는 설정 (후속 시나리오 ③, 2026-11-14) ──
+  # subagents.delegateToolsTo: 요청한 에이전트의 tools.deny를 그 대상에게는 풀어 준다(운영자 설정).
+  - name: 툴 금지를 하위 에이전트에게 풀어 주는 위임 설정
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, delegation_grants: [{agent_id: intake, to: [coder]}]}
+    expect: [openclaw-delegate-tools-grant]
+
+  - name: 위임 설정 없음
+    agent: openclaw
+    sensor: openclaw_config
+    events:
+      - {kind: config.snapshot, product: openclaw, guard_plugin: enabled}
+    expect_not: [openclaw-delegate-tools-grant]

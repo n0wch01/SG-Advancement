@@ -207,6 +207,17 @@ def sandboxes(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def delegation_grants(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    """``subagents.delegateToolsTo`` per agent: an operator lifting that agent's tool denials for its
+    delegation targets (the child gets tools the parent may not use)."""
+    out = []
+    for aid, entry in sorted((_get(cfg, "agents", "entries") or {}).items()):
+        to = _get(entry, "subagents", "delegateToolsTo") if isinstance(entry, dict) else None
+        if isinstance(to, list) and (names := sorted({str(t) for t in to if isinstance(t, str)})):
+            out.append({"agent_id": str(aid), "to": names})
+    return out
+
+
 def posture(cfg: dict[str, Any], guard_id: str = GUARD_PLUGIN_ID) -> dict[str, Any]:
     """The allowlisted, comparable view of the config (the payload minus kind/path/changed)."""
     state, detail = guard_state(cfg, guard_id)
@@ -217,6 +228,7 @@ def posture(cfg: dict[str, Any], guard_id: str = GUARD_PLUGIN_ID) -> dict[str, A
         "exec_policies": exec_policies(cfg),
         "runtimes": runtime_pins(cfg),
         "sandboxes": sandboxes(cfg),
+        "delegation_grants": delegation_grants(cfg),
     }
 
 

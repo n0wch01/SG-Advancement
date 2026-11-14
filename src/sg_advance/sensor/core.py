@@ -363,6 +363,8 @@ class Sensor:
             update["endpoint"] = ep.model_copy(update={"device_id": self.creds.device_id})
         if any(k in event.labels for k in self._OWN_LABELS):  # the sensor's own; never taken from input
             update["labels"] = {k: v for k, v in event.labels.items() if k not in self._OWN_LABELS}
+        if event.kind in (EventKind.INVENTORY_SNAPSHOT, EventKind.CONFIG_SNAPSHOT):
+            self.delegation.observe(event)  # OpenClaw agents' modes and sandboxes, for sessions_spawn
         if event.kind is EventKind.TOOL_CALL:
             base = update.get("labels", event.labels)
             clean = event.model_copy(update={"labels": base}) if "labels" in update else event

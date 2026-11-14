@@ -70,11 +70,12 @@ rules:
     recommended_action: 사용자가 승인했다면 보안팀 검토 큐에서 하위 에이전트 정의 파일(라벨 sga_delegation_def)과 더 받은 권한을 확인하세요. 저장소에 딸려 온 정의라면 출처를 확인하세요.
     response: require_approval
     tags: ["grade:2-1", owasp-agentic:ASI03, scenario:F3]
-    when: {payload.kind: tool.call, payload.tool: [Task, Agent]}
+    # OpenClaw(2026-11-14): sessions_spawn의 agentId 대상 에이전트의 기본 권한 모드·샌드박스를 부모 에이전트와 비교("mode:", "sandbox:").
+    when: {payload.kind: tool.call, payload.tool: [Task, Agent, sessions_spawn]}
     match:
       type: regex
       fields: [labels.sga_delegation_escalation]
-      pattern: '^(?:mode|tools|mcp):'
+      pattern: '^(?:mode|tools|mcp|sandbox):'
 
   # 실행 중 확인("승인된 툴도 계속 확인"): 하위 에이전트가 보고한 권한 모드가 최상위 대화보다 넓으면, 부모라면 물었을
   # 변경 행동을 사용자에게 묻는다(부모 수준으로 되돌림). 읽기 전용 툴은 그대로.
@@ -88,7 +89,8 @@ rules:
     response: require_approval
     tags: [action-independent, owasp-agentic:ASI03, scenario:F3]
     when: {payload.kind: tool.call}
-    unless: {payload.tool: [Read, Glob, Grep, LS, NotebookRead, TodoRead, TodoWrite, WebSearch]}
+    unless: {payload.tool: [Read, Glob, Grep, LS, NotebookRead, TodoRead, TodoWrite, WebSearch,
+                            read, web_search, sessions_list, sessions_history, memory_search]}
     match:
       type: regex
       fields: [labels.sga_delegation_escalation]

@@ -177,3 +177,19 @@ rules:
       fields: ["payload.changes[]"]
       pattern: '^(permissionMode=full|sandboxMode=off|execSecurity=full|execAsk=off|elevatedLevel=(on|full))$'
 
+  # 후속 시나리오 ③(2026-11-14): 위임으로 툴 금지를 풀어 주는 설정. OpenClaw는 하위 에이전트에게 부모의 툴 한도를 물려주지만,
+  # subagents.delegateToolsTo가 있으면 요청한 에이전트의 tools.deny가 그 대상에게는 풀린다(부모가 못 쓰는 툴을 자식이 씀).
+  # 운영자가 일부러 넣는 설정이라 경보만(보안팀이 의도한 설정인지 확인). 오탐 주의: 문서의 권장 구성(intake → coder)도 걸린다.
+  - id: openclaw-delegate-tools-grant
+    severity: medium
+    category: policy_violation
+    title: 위임 대상에게 툴 금지를 풀어 주는 설정
+    message: 에이전트 설정에 delegateToolsTo가 있어, 이 에이전트가 쓰지 못하는 툴을 위임받은 하위 에이전트가 쓸 수 있습니다.
+    recommended_action: 의도한 위임인지 확인하세요. 대상 에이전트의 권한 모드·샌드박스가 그 일에 맞게 좁은지도 확인하세요.
+    response: alert
+    tags: [owasp-agentic:ASI03, scenario:F3]
+    when: {payload.kind: config.snapshot, payload.product: openclaw}
+    match:
+      type: regex
+      fields: [payload.delegation_grants]
+      pattern: '.+'

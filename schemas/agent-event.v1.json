@@ -560,12 +560,44 @@
           },
           "title": "Sandboxes",
           "type": "array"
+        },
+        "delegation_grants": {
+          "default": [],
+          "description": "openclaw: agents whose tool denials are lifted for named delegation targets",
+          "items": {
+            "$ref": "#/$defs/DelegationGrant"
+          },
+          "title": "Delegation Grants",
+          "type": "array"
         }
       },
       "required": [
         "product"
       ],
       "title": "ConfigSnapshot",
+      "type": "object"
+    },
+    "DelegationGrant": {
+      "additionalProperties": false,
+      "description": "openclaw ``agents.entries.<id>.subagents.delegateToolsTo``: the agent's own ``tools.deny`` is\nlifted for these target agents when it hands work to them (follow-up scenario 3, 2026-11-14).",
+      "properties": {
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "to": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "To",
+          "type": "array"
+        }
+      },
+      "required": [
+        "agent_id"
+      ],
+      "title": "DelegationGrant",
       "type": "object"
     },
     "Endpoint": {
