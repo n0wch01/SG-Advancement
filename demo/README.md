@@ -12,6 +12,15 @@ uv run python demo/demo_runner.py all --pause 0   # 전부, 멈춤 없이
 마지막 줄에 `PASS`/`FAIL`이 나온다. 각 단계의 `expect`와 실제 판정이 모두 일치하면 PASS다.
 `uv run pytest`를 돌리면 모든 시나리오가 PASS인지도 함께 확인한다([test_demo.py](test_demo.py)).
 
+## 발표용 이야기 (콘솔)
+
+[live_story.py](live_story.py)는 실제 Claude Code hook 입력 형식으로 한 사람의 이야기(테스트 DB 조회 → 유출 차단 → 인젝션 → 파괴적 명령 차단 → 악성 패키지·도메인 차단, 다른 사람의 3-1 승인)를 지금 시각으로 만든다. 센서로 재생하면 출처 추적 라벨까지 붙어 콘솔에 그대로 보인다. 순서와 예상 결과는 [docs/demo.md](../docs/demo.md).
+
+```bash
+uv run python demo/live_story.py > /tmp/story.jsonl
+uv run sga-sensor --home /tmp/demo-laptop replay /tmp/story.jsonl
+```
+
 ## 시나리오 추가
 
 `scenarios/`에 YAML 파일 하나를 추가하면 끝이다. 코드는 고칠 필요가 없다.

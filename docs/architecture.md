@@ -21,11 +21,11 @@
 |---|---|---|---|---|
 | OpenClaw | `openclaw_plugin` (게이트웨이 플러그인) + `openclaw_gateway` (WS 관측) | **사전, 모든 툴**(`before_tool_call`에서 block). Codex 런타임 툴도 hook 중계로 차단. WS는 관측·탐지만(결정 B) | 플러그인이 `requireApproval`로 OpenClaw 승인 창에 넘긴다(한 번 허용·거절) | WS는 SG 코드 이전, [from-sg.md](from-sg.md). 상세 [sensor.md](sensor.md) |
 | Claude Code | `claude_code_hook` (`sga-hook`) + `claude_code_config` (hook 위치 점검) | **사전, 모든 툴**(PreToolUse에서 deny, 보안팀 승인은 hook이 대기) | PreToolUse가 `ask`를 돌려 Claude Code의 확인 창으로 넘긴다. 그 툴의 PostToolUse가 오면 승인으로 기록 | 관리 설정(managed-settings.d)으로 강제, 권한 없으면 사용자 설정 + 점검 룰. M6 ✅ |
-| Gemini CLI | `gemini_cli_hook` | 사전(가능 시) | X1에서 확인. 안 되면 차단 + 콘솔 승인 큐 | hook 사양은 선택 과제 X1에서 확인 |
-| Codex CLI | `codex_cli_hook` | 확인 필요 | X1에서 확인. 안 되면 차단 + 콘솔 승인 큐 | 연동 지점은 선택 과제 X1에서 조사 |
-| LangGraph | `langgraph_callback` | 사전(callback에서 예외) | 그래프를 멈추고(사람 개입 단계) 승인을 기다린다. 가상 직원은 승인자도 시뮬레이션 | Ollama 로컬 모델로 가상 직원 다수 시뮬레이션 |
-| 모든 MCP 클라이언트 | `mcp_proxy` (센서의 MCP 게이트웨이) | **사전**(`tools/call`을 서버에 보내기 전에 거부, 변조 툴은 목록에서 숨김) | 게이트웨이는 묻지 않고 에이전트의 확인 창에 맡김(Claude Code는 hook이 `ask`). 보안팀 승인은 게이트웨이가 대기 | 에이전트 종류와 무관한 범용 경로. M8 ✅ |
-| 모든 에이전트 | `egress_proxy` / `llm_proxy` | 사전 | 요청을 보류하고 콘솔 승인 큐 | 외부 유출, 비용 한도 |
+| Gemini CLI | - | 미구현(선택 과제 X1) | - | 설치·MCP 설정은 섀도 AI 스캔으로 찾는다(`ai-agent-outside-control`, `mcp-server-bypasses-gateway`) |
+| Codex CLI | - | 미구현(선택 과제 X1). OpenClaw의 Codex 런타임으로 도는 툴은 플러그인이 막는다 | - | 설치·MCP 설정은 섀도 AI 스캔으로 찾는다 |
+| LangGraph | - | 미구현(M10 미룸) | - | 시나리오 S3(denial of wallet)는 이벤트 재생으로만 보인다 |
+| 모든 MCP 클라이언트 | `mcp_proxy` (센서의 MCP 게이트웨이, 중앙 MCP 게이트웨이) | **사전**(`tools/call`을 서버에 보내기 전에 거부, 변조 툴은 목록에서 숨김). 사내 MCP 서버로 가는 유일한 길(중앙, 자격증명 보관) | 사람에게 물을 수 없어 **보안팀 보류**로 보낸다(승인 원칙 2026-11-14). 확인된 승인 없이는 서버로 보내지 않는다 | 에이전트 종류와 무관한 범용 경로. M8 ✅ |
+| 팀 게이트웨이의 에이전트 | `egress_proxy` | 사전(서명된 정책의 허용 도메인 밖은 차단) | 묻지 않고 차단 | 에이전트 망을 격리하고 이 프록시로만 내보낸다. LLM 비용 한도용 `llm_proxy`는 미구현 |
 
 ### 현재 구현: OpenClaw (M5c 기준)
 
@@ -53,9 +53,12 @@
 - **WS는 감시자**: 플러그인 판정 없이 실행된 툴 → `openclaw-plugin-bypass`. 플러그인 인사가 150초 끊기면 → `openclaw-plugin-heartbeat-lost`.
 - **판정을 못 할 때는 단계적으로**: 데몬 → 캐시 판정(`sga_verdict: degraded`) → 툴 위험도(읽기 전용 툴은 통과, 나머지는 사용자 승인 요청).
 
-`require_approval`은 **사용자가 에이전트 화면에서 승인**하는 것이 기본이고, 그게 불가능한 에이전트는 **차단한 뒤 콘솔 승인 큐**(M11)에 올린다.
-누가 언제 승인·거절했는지는 finding의 `response`에 남는다. 보안팀은 승인을 미리 막는 대신 **사후 감사**한다:
-콘솔에서 사용자가 승인한 위험 행동을 모아 보고, 이상하면 세션 중단·격리 같은 원격 조치를 한다.
+승인 원칙(2026-11-14, [zero-trust.md](zero-trust.md#승인-원칙-2026-11-14)): **사용자가 먼저 승인하고, 매우 위험한 것만 바로 차단하고, 보안팀은 사후에 확인한다.**
+
+- 바로 차단: 공격 진행 신호(인젝션 뒤 민감 행동, 위임 전파)와 외부 유출.
+- 사용자 승인: 그 밖의 위험 행동(되돌릴 수 없는 3-1 포함). 에이전트의 확인 창으로 묻고, 3-1은 "되돌릴 수 없음" 경고 문구로 따로 보인다. 사람에게 물을 수 없는 MCP 게이트웨이는 보안팀 보류로 보낸다.
+- 보안팀 사후 검토: 사용자가 승인한 high·critical 호출은 콘솔 승인 감사의 검토 대기 큐에 오르고, 확인 결과는 감사 체인에 남는다. 문제가 있으면 대화·사람 차단 같은 원격 조치를 한다.
+- 장애·판정 실패, 보안팀이 이미 내린 결정은 사용자 승인으로 넘기지 않는다([fail-closed.md](fail-closed.md)).
 
 하나의 에이전트를 여러 센서가 동시에 관측할 수 있다(예: Claude Code를 hook과 MCP 프록시가 함께 관측).
 `AgentEvent.agent`(무엇이)와 `AgentEvent.source`(어떻게 봤는지)를 분리한 이유다.
@@ -70,12 +73,20 @@
    정책이 그룹별로 단계를 정하고, `Finding.response.enforced`에 실제 집행 여부를 남긴다.
 5. **데모 재현성.** `docker compose up` 하나로 중앙 서버와 가상 직원 N명, 가상 외부망(악성 MCP, 유출 수신 서버)이 뜬다.
 
-## 데모 토폴로지 (목표)
+## 데모 토폴로지 (실제 구성, compose.yaml)
 
 ```
-[corp-net]      control-plane(api, db, console) · endpoint-alice(OpenClaw) · endpoint-bob(Claude Code)
-                endpoint-carol(LangGraph+MCP proxy) · endpoint-erin(Gemini CLI) · endpoint-frank(Codex CLI) · ollama
-[internet-sim]  evil-mcp · exfil-sink · poisoned-repo
+[이 Mac]        sga-sensor (LaunchAgent) · Claude Code hook · 개인 OpenClaw + sg-advance 플러그인
+[corp-net]      control-plane(API · DB · SGA-Dashboard)
+                carol-pc(shadow: 직원 PC의 비관리 OpenClaw)  lan-gateway(lan: 장비 인증서 mTLS)
+                mcp-gateway(mcp: 중앙 MCP 게이트웨이, 사내 서버 자격증명 보관)
+[team-net]      team-proxy(직원별 포트, 신원) → team-gateway(team: 팀 공용 OpenClaw + 플러그인·센서)
+                  WebSocket은 team-audit(감사 프록시: 승인·중단·보관·삭제한 사람 기록)을 거친다
+                team-egress(egress 프록시: 에이전트 망의 유일한 출구)
+[crm-net]       corp-crm(사내 MCP 서버, 중앙 MCP 게이트웨이와만 연결)
+[internet-sim]  공격 시나리오용 가상 외부(악성 MCP, 유출 수신 서버 등). 룰 케이스·평가·데모 재생에서 주소로 쓴다
 ```
 
-이후 단계에서는 실제 다른 PC나 VM의 센서가 등록 토큰으로 LAN이나 Tailscale을 통해 중앙에 붙는다.
+- 실행: `SGA_ADMIN_TOKEN=x docker compose up -d --build`, 프로필을 더하면 `--profile team --profile shadow --profile mcp --profile lan`.
+- 처음 계획했던 가상 직원(LangGraph + Ollama, M10)과 Gemini·Codex 엔드포인트는 만들지 않았다(미룬 과제).
+- 다른 PC(Windows 노트북)는 한 줄 설치로 붙는다([multi-host.md](multi-host.md)). 실설치 확인은 남아 있다.
