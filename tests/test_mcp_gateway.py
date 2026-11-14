@@ -290,3 +290,102 @@ async def test_an_upstream_refusal_reaches_the_agent_as_an_mcp_error(enrolled: S
     finally:
         await gw.close()
         up.close()
+
+
+class BatchSseMcp(FakeMcp):
+    """Answers each request over SSE as a JSON array (a batch) in one data: event."""
+
+    def answer(self, msg: dict[str, Any]) -> Any:  # type: ignore[override]
+        return [super().answer(msg)]
+
+
+async def test_a_batch_in_one_sse_event_is_still_inspected(enrolled: Sensor) -> None:
+    """Review 2026-11-15: an SSE data: event holding a JSON array skipped the input PEP (only dicts were
+    inspected). Each message in it is now checked like the plain JSON path does."""
+    upstream = BatchSseMcp(sse=True)
+    server = await upstream.start()
+    gw = McpGatewayAdapter("127.0.0.1:0", {"crm": f"http://127.0.0.1:{upstream.port}/mcp"})
+    await gw.start(AdapterContext(enrolled, "dev@corp.test", "dev-pc"))
+    try:
+        _, fine = await rpc(gw.port, "/mcp/crm", call(2, "query_customers", name="Kim"))
+        assert fine[0]["result"]["content"][0]["text"] == "query_customers ok"  # normal answers pass
+        _, out = await rpc(gw.port, "/mcp/crm", call(3, "read_doc"))
+    finally:
+        await gw.close()
+        server.close()
+    assert isinstance(out, list) and len(out) == 1
+    assert "Ignore all previous instructions" not in json.dumps(out)  # withheld before the model
+    results = [e for e in spooled(enrolled, "event") if e["payload"]["kind"] == "tool.result"]
+    assert {r["payload"]["tool"] for r in results} >= {"query_customers", "read_doc"}  # both recorded
+
+
+# ── body size limits (review 2026-11-15: the only path to company MCP servers must not be starved) ──
+
+
+def _reader(raw: bytes) -> asyncio.StreamReader:
+    r = asyncio.StreamReader()
+    r.feed_data(raw)
+    r.feed_eof()
+    return r
+
+
+async def _drain(raw: bytes, headers: dict[str, str], **kw: Any) -> bytes:
+    from sg_advance.sensor.adapters.mcp_gateway import body_chunks
+
+    return b"".join([c async for c in body_chunks(_reader(raw), headers, **kw)])
+
+
+@pytest.mark.parametrize(
+    ("raw", "headers"),
+    [
+        (b"FFFFFFFF\r\n" + b"x" * 10, {"transfer-encoding": "chunked"}),  # one huge chunk announced
+        (b"-1\r\n", {"transfer-encoding": "chunked"}),  # negative chunk size
+        (b"zz\r\n", {"transfer-encoding": "chunked"}),  # not hex
+        (b"x" * 10, {"content-length": "-1"}),  # read(-1) would read to EOF
+        (b"x" * 10, {"content-length": "ten"}),
+        (b"x" * 64, {"content-length": "64"}),  # over the limit
+        (b"x" * 64, {}),  # until close, over the limit
+        (b"20\r\n" + b"x" * 32 + b"\r\n20\r\n" + b"x" * 32 + b"\r\n0\r\n\r\n",
+         {"transfer-encoding": "chunked"}),
+    ],
+    ids=["huge-chunk", "negative-chunk", "bad-hex", "negative-length", "bad-length", "length-over",
+         "eof-over", "chunks-over"],  # fmt: skip
+)
+async def test_bodies_over_the_limit_or_malformed_are_refused(raw: bytes, headers: dict[str, str]) -> None:
+    from sg_advance.sensor.adapters.mcp_gateway import HttpError
+
+    with pytest.raises(HttpError):
+        await _drain(raw, headers, max_total=40)
+
+
+async def test_bodies_within_the_limit_still_pass() -> None:
+    chunked = b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
+    assert await _drain(chunked, {"transfer-encoding": "chunked"}, max_total=40) == b"hello world"
+    assert await _drain(b"hello", {"content-length": "5"}, max_total=40) == b"hello"
+    assert await _drain(b"x" * 64, {}, max_total=None) == b"x" * 64  # a stream: no total limit
+
+
+async def test_an_sse_event_over_the_limit_is_cut_not_passed_unchecked(enrolled: Sensor, monkeypatch) -> None:
+    from sg_advance.sensor.adapters import mcp_gateway
+
+    monkeypatch.setattr(mcp_gateway, "MAX_BODY", 256)
+    upstream = FakeMcp(sse=True)
+    huge = "row " * 300  # benign but over the (lowered) limit: only the size can stop it
+    upstream.answer = lambda msg: {"jsonrpc": "2.0", "id": msg.get("id"),  # type: ignore[method-assign]
+                                   "result": {"content": [{"type": "text", "text": huge}]}}  # fmt: skip
+    server = await upstream.start()
+    gw = McpGatewayAdapter("127.0.0.1:0", {"crm": f"http://127.0.0.1:{upstream.port}/mcp"})
+    await gw.start(AdapterContext(enrolled, "dev@corp.test", "dev-pc"))
+    try:
+        r, w = await asyncio.open_connection("127.0.0.1", gw.port)
+        body = json.dumps(call(2, "query_customers", name="Kim")).encode()
+        w.write(b"POST /mcp/crm HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                b"Accept: application/json, text/event-stream\r\nUser-Agent: claude-code/2.1\r\n"
+                + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)  # fmt: skip
+        await w.drain()
+        got = await asyncio.wait_for(r.read(), timeout=10)
+        w.close()
+    finally:
+        await gw.close()
+        server.close()
+    assert b"row row row" not in got  # the oversized event was cut, not buffered and passed on

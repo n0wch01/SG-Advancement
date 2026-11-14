@@ -298,3 +298,34 @@ def test_post_tool_use_hook_also_fails_closed() -> None:
     doc = cc.hooks_block("/v/sga-hook", Path("/sga"), "bob")
     assert doc["PostToolUse"][0]["hooks"][0]["onFailure"] == "block"
     assert "onFailure" not in doc["UserPromptSubmit"][0]["hooks"][0]  # a prompt is not an action
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {},  # the daemon went away during the wait: empty reply → json {}
+        {"ok": False, "error": "unauthorized"},
+        {"ok": False, "error": "security approval is not available"},
+        {"ok": True},  # no decision at all
+        {"ok": True, "decision": "hold"},  # never a final answer
+    ],
+)
+def test_a_held_call_runs_only_on_an_explicit_allow(monkeypatch, tmp_path: Path, answer: dict) -> None:
+    """Fail closed (review 2026-11-15): the answer to await_hold must say allow, or the call is blocked.
+    Before, an empty or ok:false answer had no decision and respond() let the call run."""
+    replies = iter([{"ok": True, "decision": "hold", "hold_id": "h1", "wait_ms": 1000}, answer])
+    monkeypatch.setattr(hook, "ask", lambda *_a, **_k: next(replies))
+    ev = hook.hook_event(pre("Bash", command="psql -c 'DELETE FROM users;'"), user_id="bob", hostname="pc")
+    verdict = hook.judge(tmp_path, ev)  # type: ignore[arg-type]
+    assert verdict["decision"] == "block" and "SG-Advance" in verdict["reason"]
+    code, out, _ = hook.respond("PreToolUse", verdict)
+    assert code == 0 and json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_a_held_call_follows_securitys_answer(monkeypatch, tmp_path: Path) -> None:
+    for final, want in (({"ok": True, "decision": "allow"}, "allow"), ({"ok": True, "decision": "block",
+                        "reason": "SG-Advance: 보안팀이 거부"}, "block")):  # fmt: skip
+        replies = iter([{"ok": True, "decision": "hold", "hold_id": "h1", "wait_ms": 1000}, final])
+        monkeypatch.setattr(hook, "ask", lambda *_a, _r=replies, **_k: next(_r))
+        ev = hook.hook_event(pre("Bash", command="ls"), user_id="bob", hostname="pc")
+        assert hook.judge(tmp_path, ev)["decision"] == want  # type: ignore[arg-type]

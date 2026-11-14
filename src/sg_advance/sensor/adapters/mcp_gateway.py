@@ -92,22 +92,50 @@ async def read_head(reader: asyncio.StreamReader) -> tuple[str, dict[str, str]]:
     return lines[0], headers
 
 
-async def body_chunks(reader: asyncio.StreamReader, headers: dict[str, str]) -> AsyncIterator[bytes]:
-    """Decoded body: chunked, Content-Length, or until the peer closes."""
+_LIMIT = object()  # body_chunks default: MAX_BODY as it is when called (tests lower it)
+
+
+async def body_chunks(
+    reader: asyncio.StreamReader, headers: dict[str, str], max_total: Any = _LIMIT
+) -> AsyncIterator[bytes]:
+    """Decoded body: chunked, Content-Length, or until the peer closes.
+
+    Review 2026-11-15: sizes are checked *before* reading. A chunk larger than MAX_BODY, a negative or
+    non-numeric size and a body over ``max_total`` raise HttpError instead of buffering without
+    limit. ``max_total=None`` is for a long-lived SSE stream: no total, but each chunk still bounded
+    (the relay bounds each event)."""
+    limit = MAX_BODY if max_total is _LIMIT else max_total
+    total = 0
+
+    def count(n: int) -> None:
+        nonlocal total
+        total += n
+        if limit is not None and total > limit:
+            raise HttpError("body too large")
+
     if "chunked" in headers.get("transfer-encoding", "").lower():
         while True:
             size_line = await reader.readline()
-            size = int(size_line.split(b";")[0].strip() or b"0", 16)
+            try:
+                size = int(size_line.split(b";")[0].strip() or b"0", 16)
+            except ValueError as e:
+                raise HttpError("bad chunk size") from e
+            if size < 0 or size > MAX_BODY:
+                raise HttpError("bad or oversized chunk")
             if size == 0:
                 await reader.readline()  # trailer end (no trailers expected)
                 return
+            count(size)
             data = await reader.readexactly(size)
             await reader.readexactly(2)
             yield data
     elif "content-length" in headers:
-        left = int(headers["content-length"])
-        if left > MAX_BODY:
-            raise HttpError("body too large")
+        try:
+            left = int(headers["content-length"])
+        except ValueError as e:
+            raise HttpError("bad content-length") from e
+        if left < 0 or (limit is not None and left > limit):
+            raise HttpError("body too large" if left >= 0 else "bad content-length")
         while left:
             data = await reader.read(min(left, 65536))
             if not data:
@@ -116,6 +144,7 @@ async def body_chunks(reader: asyncio.StreamReader, headers: dict[str, str]) -> 
             yield data
     else:
         while data := await reader.read(65536):
+            count(len(data))
             yield data
 
 
@@ -349,6 +378,8 @@ class McpGatewayAdapter:
     def _inspect(
         self, ctx: AdapterContext, name: str, who: dict[str, str], msg: Any, pending: dict[Any, Any]
     ) -> Any:
+        if isinstance(msg, list):  # a JSON-RPC batch (plain JSON or one SSE data: event): each one
+            return [self._inspect(ctx, name, who, m, pending) for m in msg]
         if not isinstance(msg, dict) or msg.get("id") not in pending:
             return msg
         what, info = pending[msg["id"]]
@@ -580,8 +611,12 @@ class McpGatewayAdapter:
         """Re-emit server-sent events one by one, inspecting (and maybe rewriting) JSON-RPC data."""
         buf = b""
         event: list[str] = []
-        async for chunk in body_chunks(up_r, up_headers):
+        async for chunk in body_chunks(up_r, up_headers, max_total=None):
             buf += chunk
+            # One event (or a line still waiting for its end) over MAX_BODY: cut the stream. Nothing
+            # of it was passed on, and the waiting calls get no unchecked answer (fail closed).
+            if len(buf) > MAX_BODY or sum(len(e) for e in event) > MAX_BODY:
+                raise HttpError("server-sent event too large")
             while b"\n" in buf:
                 raw, buf = buf.split(b"\n", 1)
                 line = raw.rstrip(b"\r").decode("utf-8", "replace")

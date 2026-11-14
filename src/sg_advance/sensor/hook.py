@@ -207,13 +207,19 @@ def judge(home: Path, event: dict[str, Any]) -> dict[str, Any]:
             if r.get("decision") == "hold":
                 wait = float(r.get("wait_ms") or 300_000) / 1000 + 15
                 try:
-                    return ask(home, {"op": "await_hold", "hold_id": r.get("hold_id")}, timeout=wait)
+                    final = ask(home, {"op": "await_hold", "hold_id": r.get("hold_id")}, timeout=wait)
                 except (OSError, ValueError) as e:
-                    return {
-                        "ok": True,
-                        "decision": "block",
-                        "reason": f"SG-Advance: 보안팀 승인 대기 중 센서 연결이 끊겨 차단 ({e})",
-                    }
+                    final = {"error": str(e)}
+                # Fail closed (review 2026-11-15): run only on an explicit answer from the hold. An
+                # empty reply (the daemon went away mid-wait), ok:false or no decision is a block.
+                if final.get("ok") and final.get("decision") in ("allow", "block"):
+                    return final
+                why = final.get("error") or "no decision"
+                return {
+                    "ok": True,
+                    "decision": "block",
+                    "reason": f"SG-Advance: 보안팀 승인 대기 중 센서 응답을 받지 못해 차단 ({why})",
+                }
             return r
     except (OSError, ValueError, KeyError):
         pass
