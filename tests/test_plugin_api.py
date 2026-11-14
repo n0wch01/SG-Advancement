@@ -451,3 +451,57 @@ async def test_windows_loopback_tcp_needs_the_endpoint_token(enrolled: Sensor, t
     finally:
         await server.close()
     assert not endpoint.exists()
+
+
+# ── 3-1 approvals look different (2026-11-14, KISA scenario 4: approval fatigue) ──────────────
+
+
+def _verdict(spec: dict[str, Any]):
+    from sg_advance.detect import Engine, RuleSet
+    from sg_advance.shorthand import build_event
+
+    engine = Engine(RuleSet.load(ROOT / "rules"))
+    defaults = {"agent": "claude_code", "sensor": "claude_code_hook"}
+    return engine.process(build_event(spec, defaults=defaults))
+
+
+def test_irreversible_approvals_carry_their_own_warning() -> None:
+    from sg_advance.sensor.plugin_api import IRREVERSIBLE_TITLE, plugin_response
+
+    sql = "psql -c 'DELETE FROM users;'"
+    v = _verdict({"kind": "tool.call", "tool": "Bash", "arguments": {"command": sql}})
+    resp, enforcement = plugin_response(v)
+    assert resp["decision"] == "approve" and resp["grade"] == "3-1"
+    assert resp["title"] == IRREVERSIBLE_TITLE
+    r = resp["reason"]
+    assert r.startswith("[되돌릴 수 없음 · 3-1]")
+    assert "DELETE FROM users" in r  # what will run, so the person reads it before approving
+    assert "보안팀" in r  # approving sends it to security's review queue
+    assert enforcement is not None and enforcement.action.value == "require_approval"
+
+
+def test_irreversible_warning_clips_and_masks_what_it_shows() -> None:
+    from sg_advance.sensor.plugin_api import _what_runs, plugin_response
+    from sg_advance.shorthand import build_event
+
+    long_cmd = "rm -rf /srv/data/" + "x" * 500
+    v = _verdict({"kind": "tool.call", "tool": "Bash", "arguments": {"command": long_cmd}})
+    resp, _ = plugin_response(v)
+    assert resp["grade"] == "3-1" and len(resp["reason"]) < 400 and "…" in resp["reason"]
+    # A secret in what would run is masked in the prompt (redact_text, as for events leaving the PC).
+    cmd = "aws s3 rb s3://logs --force AKIAIOSFODNN7EXAMPLE"
+    ev = build_event({"kind": "tool.call", "tool": "Bash", "arguments": {"command": cmd}})
+    shown = _what_runs(ev)
+    assert shown.startswith("Bash: aws s3 rb") and "AKIAIOSFODNN7EXAMPLE" not in shown
+
+
+def test_other_approvals_keep_the_plain_prompt() -> None:
+    from sg_advance.sensor.plugin_api import plugin_response
+
+    v = _verdict({"kind": "tool.call", "tool": "Task",
+                  "arguments": {"subagent_type": "fixer", "prompt": "fix"},
+                  "labels": {"sga_delegation_escalation": "mode:default→acceptEdits"}})  # fmt: skip
+    assert v.rule_ids == ["delegation-grants-more-permission"]  # grade 2-1, asks the person
+    resp, _ = plugin_response(v)
+    assert resp["decision"] == "approve" and resp["title"] == "SG-Advance"
+    assert "grade" not in resp and not resp["reason"].startswith("[되돌릴 수 없음")

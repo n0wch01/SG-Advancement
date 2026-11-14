@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { buildRequest, cliAsk, decide, endpointAsk, hookTimeoutMs, settingsFrom, socketAsk, startHeartbeat, type Verdict } from "./policy.ts";
+import { buildRequest, cliAsk, decide, endpointAsk, hookTimeoutMs, settingsFrom, socketAsk, startHeartbeat, toHookResult, type Verdict } from "./policy.ts";
 
 const s = settingsFrom({ sensorHome: "/tmp/x" }, {});
 const event = { toolName: "exec", toolCallId: "c1", runId: "r1", params: { command: "rm -rf ~/x" } };
@@ -277,4 +277,18 @@ test("TCP endpoint round trip sends the token; a missing endpoint file fails cle
     server.close();
   }
   await assert.rejects(endpointAsk(join(dir, "missing.json"), 500)({}), /unreadable/);
+});
+
+test("irreversible (3-1) approval gets the critical card and keeps the daemon's warning text", () => {
+  const text = "[되돌릴 수 없음 · 3-1] 파괴적 SQL. 실행할 것: Bash: psql -c 'DELETE FROM users;'";
+  const v = { ok: true, decision: "approve", action: "require_approval", grade: "3-1",
+              title: "SG-Advance: 되돌릴 수 없는 작업 확인", reason: text } as Verdict;
+  const ra = (toHookResult(v, s, "daemon") as any).requireApproval;
+  assert.equal(ra.severity, "critical");
+  assert.equal(ra.title, "SG-Advance: 되돌릴 수 없는 작업 확인");
+  assert.equal(ra.description, text);
+  assert.deepEqual(ra.allowedDecisions, ["allow-once", "deny"]);
+  const plain = (toHookResult({ ok: true, decision: "approve", action: "require_approval" } as Verdict,
+                              s, "daemon") as any).requireApproval;
+  assert.equal(plain.severity, "warning"); // other approvals stay as they were
 });

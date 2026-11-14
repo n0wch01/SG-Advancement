@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from ..detect import Verdict
+from ..redact import redact_text
 from ..schema import AgentEvent, Enforcement, EventKind, ResponseAction, SensorType
 from ..schema.events import ApprovalResolution
 from .adapters.base import AdapterContext
@@ -230,6 +231,36 @@ def held_enforcement(point: EnforcementPoint, why: str) -> Enforcement:
     )
 
 
+# Irreversible (grade 3-1) calls the person approves get their own prompt (2026-11-14, KISA guide
+# scenario 4: approval fatigue; the user chose "warning text only", the flow stays one click). The
+# same text reaches Claude Code's ask dialog (permissionDecisionReason) and OpenClaw's approval card,
+# where the plugin also raises the severity to critical. What will run is shown clipped and masked:
+# the prompt is local, but a secret in a command has no business in an approval dialog either.
+IRREVERSIBLE_TAG = "grade:3-1"
+IRREVERSIBLE_TITLE = "SG-Advance: 되돌릴 수 없는 작업 확인"
+_WHAT_KEYS = ("command", "cmd", "sql", "query", "statement", "url", "file_path", "path", "prompt")
+_WHAT_MAX = 160
+
+
+def _what_runs(event: AgentEvent) -> str:
+    p = event.payload
+    args: dict[str, Any] = getattr(p, "arguments", None) or {}
+    text = next((str(args[k]) for k in _WHAT_KEYS if isinstance(args.get(k), str) and args[k]), None)
+    if text is None:
+        text = json.dumps(args, ensure_ascii=False, default=str) if args else ""
+    text = " ".join(redact_text(text).split())
+    tool = getattr(p, "tool", "") or "tool"
+    clipped = text if len(text) <= _WHAT_MAX else text[: _WHAT_MAX - 1] + "…"
+    return f"{tool}: {clipped}" if clipped else tool
+
+
+def irreversible_prompt(verdict: Verdict, titles: str) -> str:
+    return (
+        f"[되돌릴 수 없음 · 3-1] {titles}. 실행할 것: {_what_runs(verdict.event)}. "
+        "한 번 실행하면 되돌릴 수 없습니다. 승인하면 보안팀이 사후 검토합니다."
+    )
+
+
 def plugin_response(
     verdict: Verdict, point: EnforcementPoint = OPENCLAW_PLUGIN, action: ResponseAction | None = None
 ) -> tuple[dict[str, Any], Enforcement | None]:
@@ -260,7 +291,12 @@ def plugin_response(
         )  # fmt: skip
     if action is ResponseAction.REQUIRE_APPROVAL:
         detail = f"pre-exec: user approval requested through {point.asks}"
-        return base | {"decision": "approve", "title": "SG-Advance", "reason": reason}, Enforcement(
+        if any(IRREVERSIBLE_TAG in h.rule.tags for h in verdict.hits):
+            base |= {"grade": "3-1"}  # the plugin raises its approval card to critical
+            prompt = {"title": IRREVERSIBLE_TITLE, "reason": irreversible_prompt(verdict, reason)}
+        else:
+            prompt = {"title": "SG-Advance", "reason": reason}
+        return base | {"decision": "approve"} | prompt, Enforcement(
             action=action, enforced=True, enforcer=sensor, detail=detail
         )
     return base | {"decision": "allow"}, None

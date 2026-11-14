@@ -20,6 +20,7 @@ export type Verdict = {
   action?: string;
   rules?: string[];
   severity?: string;
+  grade?: string; // "3-1": irreversible, the person gets the critical approval card (2026-11-14)
   title?: string;
   reason?: string;
   error?: string;
@@ -156,7 +157,7 @@ export function toHookResult(
       requireApproval: {
         title: v.title || "SG-Advance",
         description: `${why}${source === "daemon" ? "" : ` [${source}]`}`,
-        severity: v.action === "require_approval" ? "warning" : "critical",
+        severity: v.action === "require_approval" && v.grade !== "3-1" ? "warning" : "critical",
         timeoutMs: s.approvalTimeoutMs,
         allowedDecisions: ["allow-once", "deny"], // a policy hit must not become a permanent allow rule
         onResolution,
