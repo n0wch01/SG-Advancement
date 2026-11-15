@@ -28,6 +28,30 @@ docker compose up -d --build
 | `SGA_AUTO_VERIFY` | `1` | 센서가 보고한 버전을 서버가 npm에서 받아 자동 검증 (`0`이면 관리자 명령만) |
 | `SGA_NPM_REGISTRY` | `https://registry.npmjs.org` | 패키지 메타데이터·서명·출처를 받을 레지스트리 |
 
+### 데모 환경 다시 배포 (`scripts/deploy.sh`)
+
+코드를 바꾼 뒤 이 Mac의 데모 환경 전체에 반영한다. 지금까지 손으로 하던 순서를 그대로 묶었다. 한 단계라도 실패하면 거기서 멈춘다(백업이 실패하면 배포하지 않는다).
+
+| 단계 | 하는 일 |
+|---|---|
+| 1 | 관제 서버 DB 백업 (`/data/sga.db.<이름>`, 기본 이름 `pre-<커밋>-<시각>`) |
+| 2 | 콘솔 빌드 (`dashboard/dist`, 관제 서버가 읽기 전용으로 붙여 씀) |
+| 3 | 관제 서버 다시 빌드, `/healthz` 응답까지 대기 |
+| 4 | Mac 센서 재시작 (LaunchAgent가 있을 때만) |
+| 5 | 팀 게이트웨이를 다시 빌드하고 team-audit, team-egress, carol-pc, mcp-gateway, corp-crm을 다시 띄움 |
+| 6 | LAN 게이트웨이: nginx는 시작할 때만 템플릿을 읽으므로, 템플릿이 컨테이너 시작보다 새것이면 다시 만들고 `nginx -t`로 확인 |
+| 7 | 최근 24시간 안에 연락한 장비가 모두 새 정책을 받았는지 확인 (최대 150초 대기, 못 받은 장비가 있으면 실패) |
+
+```bash
+scripts/deploy.sh --dry-run                 # 실행할 명령만 출력
+scripts/deploy.sh --label pre-t15           # 백업 이름 지정
+scripts/deploy.sh --no-team --no-dashboard  # 관제 서버와 Mac 센서만
+scripts/deploy.sh --recreate-lan            # 템플릿이 그대로여도 LAN 게이트웨이를 다시 만듦
+```
+
+관리자 토큰은 `.env`에서 읽는다. 화면에 출력하지 않고, 프로세스 목록에도 남지 않는다(curl 헤더를 파일 디스크립터로 넘김).
+커밋하지 않은 변경이 있으면 경고만 하고 그대로 배포한다.
+
 ## 인증
 
 토큰은 네 종류이고, 모두 `Authorization: Bearer <token>` 헤더로 보낸다.
