@@ -422,7 +422,7 @@ def respond(hook: str, verdict: dict[str, Any], inp: dict[str, Any] | None = Non
                 "updatedToolOutput": masked((inp or {}).get("tool_response", ""), notice),
             },
         }
-        return 0, json.dumps(out, ensure_ascii=False), ""
+        return 0, json.dumps(out), ""  # ASCII JSON: readable under any code page
     if hook == "PreToolUse" and decision in ("block", "approve"):
         out = {
             "hookSpecificOutput": {
@@ -431,10 +431,34 @@ def respond(hook: str, verdict: dict[str, Any], inp: dict[str, Any] | None = Non
                 "permissionDecisionReason": reason,
             }
         }
-        return 0, json.dumps(out, ensure_ascii=False), ""
+        return 0, json.dumps(out), ""  # ASCII JSON: readable under any code page
     if hook == "UserPromptSubmit" and decision == "block":
         return 2, "", reason  # exit 2 stops the prompt; stderr is shown
     return 0, "", ""
+
+
+# Claude Code writes hook input and reads hook output as UTF-8. Python's text streams use the console
+# code page on Windows (cp949 on Korean Windows): Korean input failed to decode (blocked as "not
+# JSON"), and a reason with a character cp949 lacks crashed the hook with exit 1, which Claude Code
+# treats as a non-blocking error, so the call ran (laptop, 2026-11-15). Bytes in, UTF-8 out.
+
+
+def read_stdin() -> str:
+    raw = getattr(sys.stdin, "buffer", None)
+    if raw is None:
+        return sys.stdin.read()
+    return raw.read().decode("utf-8-sig")
+
+
+def emit(stream: Any, text: str) -> None:
+    raw = getattr(stream, "buffer", None)
+    if raw is None:
+        stream.write(text + "\n")
+        stream.flush()
+        return
+    stream.flush()  # anything already written through the text layer goes first
+    raw.write((text + "\n").encode("utf-8"))
+    raw.flush()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -453,10 +477,10 @@ def main(argv: list[str] | None = None) -> int:
     home = (args.home or Path(os.environ.get("SGA_HOME") or DEFAULT_HOME)).expanduser()
     started = time.monotonic()
     try:
-        inp = json.loads(sys.stdin.read() or "{}")
+        inp = json.loads(read_stdin() or "{}")  # invalid UTF-8 is a ValueError too
     except ValueError:
         # Fail closed: exit 2 blocks the tool (PreToolUse) or the prompt; nothing could be judged.
-        print("SG-Advance hook: input is not JSON; blocked", file=sys.stderr)
+        emit(sys.stderr, "SG-Advance hook: input is not JSON; blocked")
         return 2
     try:
         event = hook_event(inp, user_id=args.user, hostname=socket.gethostname())
@@ -464,14 +488,17 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         code, out, err = respond(str(inp.get("hook_event_name")), judge(home, event), inp)
     except Exception as e:  # noqa: BLE001 - an unexpected error must not let the call through
-        print(f"SG-Advance hook failed ({type(e).__name__}); blocked", file=sys.stderr)
+        emit(sys.stderr, f"SG-Advance hook failed ({type(e).__name__}); blocked")
         return 2
-    if out:
-        print(out)
-    if err:
-        print(err, file=sys.stderr)
+    try:
+        if out:
+            emit(sys.stdout, out)
+        if err:
+            emit(sys.stderr, err)
+    except (OSError, ValueError):
+        return 2  # the answer did not reach Claude Code: an exit code other than 0/2 would let it run
     if os.environ.get("SGA_HOOK_DEBUG"):
-        print(f"sga-hook {inp.get('hook_event_name')} {time.monotonic() - started:.3f}s", file=sys.stderr)
+        emit(sys.stderr, f"sga-hook {inp.get('hook_event_name')} {time.monotonic() - started:.3f}s")
     return code
 
 

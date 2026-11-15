@@ -481,3 +481,68 @@ def test_cached_policy_still_asks_the_person_for_untagged_approvals(tmp_path: Pa
     plain = hook.hook_event(pre("Bash", command="ls"), user_id="bob", hostname="pc")
     plain_answer, _ = hook.degraded_response(_verdict_with(tmp_path, plain))  # type: ignore[arg-type]
     assert plain_answer["decision"] == "allow"
+
+
+# ── Windows console encoding (laptop 2026-11-15: Korean Windows pipes are cp949) ──────────────
+
+
+class _Stdio:
+    """sys.stdin/stdout/stderr as a Korean Windows console gives them to a hook: cp949 text streams."""
+
+    def __init__(self, data: bytes) -> None:
+        import io
+
+        self.stdin = io.TextIOWrapper(io.BytesIO(data), encoding="cp949")
+        self._out, self._err = io.BytesIO(), io.BytesIO()
+        self.stdout = io.TextIOWrapper(self._out, encoding="cp949")
+        self.stderr = io.TextIOWrapper(self._err, encoding="cp949")
+
+    def out(self) -> bytes:
+        self.stdout.flush()
+        return self._out.getvalue()
+
+    def err(self) -> bytes:
+        self.stderr.flush()
+        return self._err.getvalue()
+
+
+def _with_stdio(monkeypatch, data: bytes) -> _Stdio:
+    s = _Stdio(data)
+    monkeypatch.setattr(hook.sys, "stdin", s.stdin)
+    monkeypatch.setattr(hook.sys, "stdout", s.stdout)
+    monkeypatch.setattr(hook.sys, "stderr", s.stderr)
+    return s
+
+
+def test_utf8_hook_input_on_a_cp949_console(tmp_path: Path, monkeypatch) -> None:
+    """Claude Code sends UTF-8. Read as cp949, every Korean prompt was 'not JSON' and blocked."""
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(hook, "judge", lambda home, ev: seen.append(ev) or {"ok": True, "decision": "allow"})
+    text = "현재 폴더 파일 목록 보여줘 — ✅"
+    inp = {"session_id": "s", "hook_event_name": "UserPromptSubmit", "prompt": text}
+    s = _with_stdio(monkeypatch, json.dumps(inp, ensure_ascii=False).encode("utf-8"))
+    assert hook.main(["--home", str(tmp_path)]) == 0, s.err()
+    assert seen[0]["payload"]["text"] == text
+
+
+def test_block_answer_reaches_claude_code_as_utf8(tmp_path: Path, monkeypatch) -> None:
+    """A deny whose reason was written in cp949 could not be parsed as UTF-8 JSON: the deny is lost."""
+    reason = "SG-Advance: 파괴적 셸 명령 — 차단 ✅"
+    monkeypatch.setattr(hook, "judge", lambda home, ev: {"ok": True, "decision": "block", "reason": reason})
+    s = _with_stdio(monkeypatch, json.dumps(pre("PowerShell", command="Remove-Item -Recurse C:\\x")).encode())
+    assert hook.main(["--home", str(tmp_path)]) == 0
+    out = json.loads(s.out().decode("utf-8"))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert out["hookSpecificOutput"]["permissionDecisionReason"] == reason
+
+    monkeypatch.setattr(hook, "judge", lambda home, ev: {"ok": True, "decision": "block", "reason": reason})
+    prompt = {"session_id": "s", "hook_event_name": "UserPromptSubmit", "prompt": "x"}
+    s = _with_stdio(monkeypatch, json.dumps(prompt).encode())
+    assert hook.main(["--home", str(tmp_path)]) == 2
+    assert s.err().decode("utf-8").strip() == reason  # exit 2: stderr is shown to the person
+
+
+def test_invalid_utf8_input_is_still_blocked(tmp_path: Path, monkeypatch) -> None:
+    s = _with_stdio(monkeypatch, b'{"hook_event_name": "PreToolUse", "x": "\xff\xfe"}')
+    assert hook.main(["--home", str(tmp_path)]) == 2
+    assert b"blocked" in s.err()

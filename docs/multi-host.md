@@ -120,7 +120,7 @@ docker compose exec -e SGA_SERVER=http://127.0.0.1:8000 control-plane \
 | 플러그인 ↔ 데몬 | 유닉스 소켓(0600) | 127.0.0.1의 임의 포트 + 실행마다 바뀌는 토큰. `.sg-advance\sga-api.json`에 `{host, port, token}`. 토큰 없는 요청은 거부 |
 | 설치 탐지 | npm·nvm·pnpm·volta, launchd/systemd | `%APPDATA%\npm`, nvm-windows, pnpm, 작업 스케줄러의 OpenClaw 작업(`OpenClaw Gateway`), 시작프로그램 폴더 |
 | 비밀 파일 권한 | 0600 확인, 폴더 0700 | 모드 비트가 없어 확인 생략. 폴더도 모드를 주지 않고 사용자 프로필의 상속 ACL에 맡김(아래 실기기 확인) |
-| 문자 인코딩 | UTF-8 | OpenClaw 출력은 UTF-8로, `schtasks` 출력은 콘솔 코드 페이지로 읽음(한국어 Windows는 cp949) |
+| 문자 인코딩 | UTF-8 | OpenClaw 출력은 UTF-8로, `schtasks` 출력은 콘솔 코드 페이지로 읽음(한국어 Windows는 cp949). `sga-hook`과 `sga-sensor evaluate`는 입력을 바이트로 받아 UTF-8로 풀고, 답도 UTF-8로 씀(hook의 JSON 답은 ASCII) |
 
 ## 실기기 설치 (2026-11-15, Windows 노트북 `ez`)
 
@@ -141,6 +141,19 @@ docker compose exec -e SGA_SERVER=http://127.0.0.1:8000 control-plane \
 - 고친 것: 센서 폴더는 POSIX에서만 0700으로 만들고, Windows에서는 사용자 프로필의 상속 ACL에 맡긴다(`state.private_dir`).
   - 상속 ACL은 그 사람, SYSTEM, 관리자에게만 열려 있다.
   - 이미 설치한 PC는 `icacls <폴더> /reset /T`로 상속 ACL을 되살린다.
+
+권한을 복구한 뒤 로그온 작업이 `Running`이 되었고, 관제 서버에서 `ez`의 정책 수신(`policy_current`)과 Claude Code hook 이벤트를 확인했다.
+Windows의 Claude Code는 셸 명령을 `Bash`가 아니라 `PowerShell` 툴로 실행한다.
+
+**hook 인코딩.** Claude Code는 hook 입력을 UTF-8로 쓰고 답도 UTF-8로 읽는다. Python은 Windows에서 파이프를 콘솔 코드 페이지(cp949)로 다룬다.
+- 입력: 한글이 든 프롬프트·인자를 풀지 못해 "input is not JSON"으로 막았다. 막는 쪽으로 실패했다.
+- 출력: cp949에 없는 문자(`—` 등)가 차단 사유에 들어 있으면 hook이 예외로 종료 코드 1을 냈다.
+  Claude Code는 0과 2가 아닌 종료 코드를 막지 않는 오류로 보므로 **차단해야 할 호출이 실행된다**. 뚫리는 쪽으로 실패했다.
+- 고친 것: 입력은 바이트로 받아 UTF-8로 푼다. JSON 답은 ASCII로, 사람에게 보이는 사유는 UTF-8로 쓴다.
+  - 답을 쓰지 못하면 종료 코드 2(차단)로 끝낸다.
+  - `sga-sensor evaluate`(데몬이 없을 때 OpenClaw 플러그인의 캐시 판정)도 같이 고쳤다.
+- 확인: cp949 스트림을 흉내 낸 테스트로 확인했다. 고치기 전에는 실패하고 고친 뒤에는 통과한다.
+  실제 `sga-hook`에 `PYTHONIOENCODING=cp949`로 한글·이모지 입력을 넣어도 통과·차단이 정상이었다.
 
 ## 남은 단계
 

@@ -153,6 +153,16 @@ def test_evaluate_cli_degraded_path(enrolled: Sensor, monkeypatch, capsys) -> No
     assert ev["labels"]["sga_verdict"] == "degraded"
 
 
+def test_evaluate_cli_reads_utf8_on_a_cp949_console(enrolled: Sensor, monkeypatch, capsys) -> None:
+    """Laptop 2026-11-15: Korean Windows pipes are cp949; the plugin writes UTF-8."""
+    body = json.dumps(req("c10", command="echo 한글 — 확인"), ensure_ascii=False).encode("utf-8")
+    monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(body), encoding="cp949"))
+    assert sensor_main(["--home", str(enrolled.home.root), "evaluate", "--user", "alice"]) == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+    ev = next(e for e in spooled(enrolled, "event") if e["payload"]["call_id"] == "c10")
+    assert ev["payload"]["arguments"]["command"] == "echo 한글 — 확인"
+
+
 def test_evaluate_cli_without_cache_says_so(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(req("c9"))))
     assert sensor_main(["--home", str(tmp_path / "none"), "evaluate"]) == 3

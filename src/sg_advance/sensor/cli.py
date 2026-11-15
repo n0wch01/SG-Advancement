@@ -316,10 +316,11 @@ def _cmd_evaluate(home: SensorHome, args: argparse.Namespace) -> int:
     import json
 
     from .adapters.base import AdapterContext
+    from .hook import read_stdin
     from .plugin_api import judge
 
     try:
-        req = json.loads(sys.stdin.read())
+        req = json.loads(read_stdin())  # the plugin writes UTF-8; Windows' console code page is not
         sensor = Sensor(home)
     except (ValueError, SensorError) as e:
         print(json.dumps({"ok": False, "error": str(e)}))
