@@ -28,11 +28,11 @@ def test_the_evaluation_matches_the_design() -> None:
 
 
 # Known Windows gaps (2026-11-15, docs/windows-test.md step 1), waiting for the user's decision on the rules.
+# W10 (download tracking) closed the same day: PowerShell is a shell tool (sensor/tools.py).
 # When one is fixed, remove it here: the evaluation must then match the design for it too.
 WINDOWS_GAPS = [
     "W04 claude_code: allow (기대 block)",  # credential paths with backslashes (.aws\credentials)
     "W04 openclaw: allow (기대 block)",
-    "W10 claude_code: allow (기대 approve)",  # PowerShell is not a shell tool for download tracking
 ]
 
 

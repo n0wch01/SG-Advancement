@@ -23,7 +23,8 @@ def _rule(rule_id: str) -> dict:
 def test_modules_use_the_shared_sets_unchanged() -> None:
     """The refactor kept every decision as it was: the same sets as the old copies."""
     assert {"Read", "Glob", "Grep", "LS", "NotebookRead", "TodoRead", "TodoWrite"} == hook.READ_ONLY_TOOLS
-    assert hook.READ_ONLY_TOOLS | {"read"} == lineage.LOCAL_TOOLS
+    # 2026-11-15: Claude Code's internal no-I/O tools (ToolSearch, …) joined "local" for input sources only.
+    assert hook.READ_ONLY_TOOLS | tools.CLAUDE_INTERNAL | {"read"} == lineage.LOCAL_TOOLS
     assert hook.READ_ONLY_TOOLS | {"WebFetch", "WebSearch"} == delegation.READ_ONLY
     assert downloads.SHELL_TOOLS is tools.SHELL is lineage.SHELL_TOOLS
 
