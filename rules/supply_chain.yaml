@@ -81,7 +81,7 @@ rules:
       type: regex
       fields: ["payload.tools[].description", "payload.skills[].description"]   # [] 가 들어간 경로는 따옴표 필수
       ignore_case: true
-      pattern: '<important>|<system>|before using this tool|ignore (all )?previous|do not (tell|mention|inform)|~/\.ssh|id_rsa|\.aws/credentials|(^|[^\w.])\.env\b'
+      pattern: '<important>|<system>|before using this tool|ignore (all )?previous|do not (tell|mention|inform)|~[/\\]\.ssh|id_rsa|\.aws[/\\]credentials|(^|[^\w.])\.env\b'
 
   # 스킬: SKILL.md 지시문 + 스크립트라서 플러그인과 같은 공급망 경로다(ClawHavoc 2026: ClawHub 악성 스킬 341개 이상).
   # 기본 허용은 이미지에 들어 있는 스킬(openclaw-bundled)과 설치된 플러그인이 넣은 스킬(openclaw-extra, 플러그인 자체는

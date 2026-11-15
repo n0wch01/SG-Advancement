@@ -7,6 +7,54 @@ cases:
       - {kind: tool.call, tool: Bash, arguments: {command: "git push origin main --force"}}
     expect: [destructive-shell-command]
 
+  # 룰 손보기(2026-11-15): 대문자 R, 나눠 쓴 옵션, 긴 옵션도 같은 명령이다.
+  - name: rm 재귀·강제 삭제의 다른 표기
+    events:
+      - {kind: tool.call, tool: Bash, arguments: {command: "rm -Rf ~/projects"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "rm -fR ~/projects"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "rm -f -r ~/projects"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "rm --recursive --force ~/projects"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "rm -r --force ~/projects"}}
+    expect: [destructive-shell-command]
+
+  - name: 재귀나 강제 하나만 있으면 묻지 않음 (기존 기준 유지)
+    events:
+      - {kind: tool.call, tool: Bash, arguments: {command: "rm -r build/tmp"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "rm --force build/output.log"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "rm -f a.log; ls -R ."}}
+    expect_not: [destructive-shell-command]
+
+  # 룰 손보기(2026-11-15, 사용자 결정: rm -rf와 같은 사용자 승인). rm 없이 지우기(평가 E07)와 작업 내용을 통째로 날리는 git 명령.
+  - name: rm 없이 지우기
+    events:
+      - {kind: tool.call, tool: Bash, arguments: {command: "find ~/projects -mindepth 1 -delete"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "find . -name '*.log' -exec rm {} +"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "git clean -fdx"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "git clean -f -d"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "shred -u secrets.txt"}}
+    expect: [destructive-shell-command]
+
+  - name: 작업 내용을 통째로 되돌리는 git 명령
+    events:
+      - {kind: tool.call, tool: Bash, arguments: {command: "git reset --hard origin/main"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "git checkout -- ."}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "git restore ."}}
+      - {kind: tool.call, tool: PowerShell, arguments: {command: "git reset --hard HEAD; git status"}}
+    expect: [destructive-shell-command]
+
+  - name: 미리 보기, 파일 하나, 스테이징만 바꾸는 git 명령과 찾기는 묻지 않음
+    events:
+      - {kind: tool.call, tool: Bash, arguments: {command: "find . -name '*.py' -newer setup.cfg"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "git clean -n"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "git clean -fdn"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "git reset --soft HEAD~1"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "git reset HEAD src/app.py"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "git checkout -- src/app.py"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "git restore --staged ."}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "git restore src/app.py"}}
+      - {kind: tool.call, tool: Bash, arguments: {command: "git checkout main && git pull"}}
+    expect_not: [destructive-shell-command]
+
   - name: 안전한 정리 명령
     events:
       - {kind: tool.call, tool: Bash, arguments: {command: "rm build/output.log && git push origin feature"}}

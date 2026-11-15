@@ -27,16 +27,12 @@ def test_the_evaluation_matches_the_design() -> None:
     assert "## 지점별 탐지율" in ev.markdown(results)
 
 
-# Known Windows gaps (2026-11-15, docs/windows-test.md step 1), waiting for the user's decision on the rules.
-# W10 (download tracking) closed the same day: PowerShell is a shell tool (sensor/tools.py).
-# When one is fixed, remove it here: the evaluation must then match the design for it too.
-WINDOWS_GAPS = [
-    "W04 claude_code: allow (기대 block)",  # credential paths with backslashes (.aws\credentials)
-    "W04 openclaw: allow (기대 block)",
-]
+# Windows gaps found 2026-11-15 (docs/windows-test.md step 1), all closed the same day:
+# W10 download tracking (PowerShell is a shell tool), W04 backslash credential paths (rule tuning).
+WINDOWS_GAPS: list[str] = []
 
 
-def test_the_windows_evaluation_has_only_the_known_gaps() -> None:
+def test_the_windows_evaluation_matches_the_design() -> None:
     ev = _evaluate()
     results = ev.run(ev.WINDOWS_CORPUS)
     assert ev.mismatches(results) == WINDOWS_GAPS

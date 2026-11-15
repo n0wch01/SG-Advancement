@@ -164,3 +164,23 @@ uv run pytest tests/test_rule_cases.py     # 방금 추가한 케이스가 실�
 - `destructive-cloud-command`: `gcloud`/`az`의 delete는 범위가 넓어 아직 넣지 않았다(미탐). 단일 자원 삭제(`kubectl delete pod`)도 뺐다.
 - `agent-safety-bypass`, `agent-unattended-safety-bypass`: 샌드박스나 CI에서 일부러 확인을 끄는 정상 사용이 있다. 그룹별 예외는 M9 정책에서 다룬다. Claude Code는 hook이 실행 인자와 `CLAUDE_CODE_SESSION_ATTENDED`로 채운다(설정 `defaultMode`로만 켠 경우 세션 시작에서는 못 본다). 실제 차단은 툴 호출의 `agent-unattended-bypass-tool-call`이 한다.
 - 허용목록은 아직 룰 파일에 직접 적혀 있다. M9에서 중앙 정책(그룹별 대상, 버전)으로 옮긴다.
+
+## 룰 손보기 (2026-11-15)
+
+운영 관제 서버의 finding 695건(11-11~11-15)을 룰별로 세어, 시끄러운 룰과 시험에서 드러난 빈틈을 함께 고쳤다. 사용자가 네 묶음을 모두 고르기로 결정했다.
+
+| 묶음 | 무엇을 | 근거 | 오탐·미탐 |
+|---|---|---|---|
+| 상태 경보를 하루 한 번 | 설정·설치·인벤토리 스냅샷에서 나온, 집행되지 않은 finding은 같은 장비·대상·내용이면 24시간에 한 번만 기록한다. 재시작해도 기억한다(`<home>/standing-findings.json`). 상태가 풀리면 잊으므로 다시 생기면 바로 경보한다 | 약 450건이 같은 상태의 반복이었다(`openclaw-agent-permission-full` 108, `unapproved-plugin-installed` 103 등). 엔진의 중복 억제가 메모리에만 있어 센서를 재시작할 때마다 다시 났다 | 계속 나쁜 상태는 하루 한 번만 보인다(현재 상태는 인벤토리 화면에 있음). 집행된 기록(격리 등)은 그대로 매번 남긴다 |
+| Windows 경로 | 자격증명 경로 패턴이 `/`와 `\`를 모두 본다(`.ssh`, `.aws\credentials`, `.kube\config`). 5개 룰 | 평가 W04 | 변수로 만든 경로는 여전히 못 본다 |
+| `rm` 표기 | 재귀(`-r`, `-R`, `--recursive`)와 강제(`-f`, `--force`)가 같은 명령에 함께 있으면 순서·표기와 상관없이 본다 | `rm -Rf`, `rm -f -r`, `rm --recursive --force`가 통과했다 | 하나만 있는 `rm -r`, `rm --force`는 지금처럼 묻지 않는다 |
+| egress 통계 전송 | `telemetry.openclaw.ai`는 새 룰 `egress-vendor-telemetry-blocked`(info)가 막는다. 차단과 매 기록은 그대로다 | egress 차단 167건 중 143건이 OpenClaw 자체 통계였다(high로 쌓여 진짜 시도를 묻음) | 정확히 그 이름만 해당한다. `www.gravatar.com`은 결정(이메일 해시 전송)대로 high |
+| IPv4 | `vigil-ipv4`에서 사설(10/8, 172.16/12, 192.168/16)·루프백(127/8) 대역을 뺀다 | 사내망 주소마다 났다(Windows 시험의 192.168.0.9) | 내부 주소를 노린 SSRF는 이 룰로는 못 본다(egress·인젝션 룰이 본다) |
+| rm 없이 지우기 | `find -delete`, `find -exec rm`, `shred`, `git clean`(강제 옵션)을 사용자 승인으로 묻는다 | 평가 E07(`find -delete`)이 통과했다 | `git clean -fdx`처럼 개발자가 자주 쓰는 명령에도 승인 창이 뜬다. 미리 보기(`-n`)는 묻지 않는다 |
+| 작업 내용 날리기 | `git reset --hard`, `git checkout -- .`, `git restore .`을 사용자 승인으로 묻는다 | 사용자 결정 | 파일 하나 되돌리기, `--staged`는 묻지 않는다. `git stash drop`, 별칭은 못 본다 |
+
+결과:
+- 평가는 34/34 그대로 설계대로다.
+- 멈춘 비율은 Claude Code hook이 74%에서 78%로, OpenClaw가 67%에서 72%로 올랐다.
+- 정상 작업 오탐은 0%로 그대로다.
+- Windows 평가는 27/27이다(W04, W10 모두 닫힘).

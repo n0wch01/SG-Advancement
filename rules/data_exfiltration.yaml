@@ -12,7 +12,7 @@ rules:
     match:
       type: regex
       fields: [payload.arguments]
-      pattern: '(^|[^\w.])\.env\b(?!\.example|\.sample|\.template)|\bid_(rsa|ed25519|ecdsa)\b|\.ssh/|\.aws/credentials|\.netrc\b|\.git-credentials\b|\.kube/config'
+      pattern: '(^|[^\w.])\.env\b(?!\.example|\.sample|\.template)|\bid_(rsa|ed25519|ecdsa)\b|\.ssh[/\\]|\.aws[/\\]credentials|\.netrc\b|\.git-credentials\b|\.kube[/\\]config'
 
   # 한 명령 안에 "민감 파일"과 "보내는 동작"이 같이 있으면 인젝션 여부와 상관없이 차단한다.
   # 오탐 주의: 내려받기(curl -o .env)는 보내는 동작이 아니라 걸리지 않는다. 사내 비밀 저장소로 일부러 올리는
@@ -32,7 +32,7 @@ rules:
       type: regex
       ignore_case: true
       fields: [payload.arguments]
-      pattern: '(?s)^(?=.*(?:(^|[^\w.])\.env\b(?!\.example|\.sample|\.template)|\bid_(rsa|ed25519|ecdsa)\b|\.ssh/|\.aws/credentials|\.netrc\b|\.git-credentials\b|\.kube/config)).*?(?:\bcurl\b[^|;&]*?(?:\s(?:-d|--data(?:-binary|-raw|-urlencode)?|-F|--form|-T|--upload-file)\b|\s-X\s*(?:POST|PUT)\b)|\bwget\b[^|;&]*?--post-(?:file|data)\b|\bscp\b|\brsync\b[^|;&]*?\S+:|\bnc\s|\binvoke-(?:webrequest|restmethod)\b)'
+      pattern: '(?s)^(?=.*(?:(^|[^\w.])\.env\b(?!\.example|\.sample|\.template)|\bid_(rsa|ed25519|ecdsa)\b|\.ssh[/\\]|\.aws[/\\]credentials|\.netrc\b|\.git-credentials\b|\.kube[/\\]config)).*?(?:\bcurl\b[^|;&]*?(?:\s(?:-d|--data(?:-binary|-raw|-urlencode)?|-F|--form|-T|--upload-file)\b|\s-X\s*(?:POST|PUT)\b)|\bwget\b[^|;&]*?--post-(?:file|data)\b|\bscp\b|\brsync\b[^|;&]*?\S+:|\bnc\s|\binvoke-(?:webrequest|restmethod)\b)'
 
   # 탐지는 마스킹 "전"의 원본 이벤트에서 돈다. 그래서 실제 키 형식을 볼 수 있다.
   - id: secret-in-output
@@ -85,6 +85,8 @@ rules:
     response: block
     tags: [campaign, owasp-llm:LLM02, scenario:S1, scenario:S2]
     when: {payload.kind: net.egress, payload.destination: external}
+    # 손보기(2026-11-15): OpenClaw 자체 통계 전송은 아래 info 룰이 따로 막는다(정확히 같은 이름만).
+    unless: {payload.host: telemetry.openclaw.ai}
     match:
       type: allowlist
       field: payload.host
@@ -98,6 +100,23 @@ rules:
         - pypi.org
         - files.pythonhosted.org
         - registry.npmjs.org
+
+  # 손보기(2026-11-15): 운영 기록 egress 차단 167건 중 143건이 OpenClaw 자체 통계 전송(telemetry.openclaw.ai)이었다.
+  # 업무 데이터 유출 신호가 아닌데 high로 쌓여 진짜 유출 시도를 묻었다. 차단은 그대로, 기록도 매번 남기고 심각도만 info.
+  # 오탐 주의: 없음(정확히 이 이름만). 미탐 주의: 제품이 통계에 업무 데이터를 싣는다면 info로만 보인다(차단은 된다).
+  - id: egress-vendor-telemetry-blocked
+    severity: info
+    category: data_exfiltration
+    title: 에이전트 제품의 통계 전송 차단
+    message: OpenClaw가 자체 사용 통계를 외부(telemetry.openclaw.ai)로 보내려는 것을 막았습니다. 업무 데이터 유출 신호는 아닙니다.
+    recommended_action: 조치할 필요는 없습니다. 차단 기록만 남깁니다.
+    response: block
+    tags: [owasp-llm:LLM02]
+    when: {payload.kind: net.egress, payload.destination: external}
+    match:
+      type: regex
+      fields: [payload.host]
+      pattern: '^telemetry\.openclaw\.ai$'
 
   # ── 2차 시나리오 (CLAUDE.md): 테스트 DB에서 조회한 보호 데이터를 미승인 외부 목적지로 전송 ──
   # 범위: 테스트 DB(MCP 서버 testdb)의 툴, 데이터를 밖으로 싣는 툴 호출(셸, 웹 요청, MCP 툴, 파일 쓰기). 일반 DLP가 아니다.
