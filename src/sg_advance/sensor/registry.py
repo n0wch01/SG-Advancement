@@ -19,6 +19,9 @@ class PluginRegistry:
       daemon, must not silently switch bypass detection off.
     - ``check()`` reports ``"lost"`` once when heartbeats stop for ``lost_after`` seconds, or sooner
       (``bye_grace``) after the plugin said goodbye; the next hello reports ``"recovered"``.
+    - ``excuse(seconds)``: the host was asleep (gateway and sensor frozen together), so that time
+      does not count towards ``lost_after`` or ``bye_grace``. Only the daemon calls it, from its own
+      clocks; nothing the plugin sends can excuse time.
     """
 
     def __init__(
@@ -40,6 +43,8 @@ class PluginRegistry:
         self.lost_reported = False
         self.bye_grace = bye_grace
         self.bye_at: float | None = None  # the plugin said it was unloaded (not persisted)
+        self.excused = 0.0  # host sleep since the last contact (not persisted: a restart counts it)
+        self._excused_at_bye = 0.0  # only sleep after the goodbye extends bye_grace
         self._started = time.time()
         self._load()
 
@@ -75,6 +80,7 @@ class PluginRegistry:
         """Any message from the plugin. Returns ``"recovered"`` after a reported loss."""
         self.last_contact = now if now is not None else time.time()
         self.bye_at = None  # a new instance (gateway restart, plugin re-enabled) is talking to us
+        self.excused = 0.0
         transition = None
         if self.lost_reported:
             self.lost_reported = False
@@ -95,21 +101,27 @@ class PluginRegistry:
         if not self.expected or self.lost_reported:
             return None
         now = now if now is not None else time.time()
-        if self.bye_at is not None and now - self.bye_at > self.bye_grace:
+        slept_since_bye = self.excused - self._excused_at_bye
+        if self.bye_at is not None and now - self.bye_at - slept_since_bye > self.bye_grace:
             self.lost_reported = True  # unloaded and no successor said hello
             self._save()
             return "lost"
         since = self.last_contact if self.last_contact is not None else self._started
-        if now - since > self.lost_after:
+        if now - since - self.excused > self.lost_after:
             self.lost_reported = True
             self._save()
             return "lost"
         return None
 
+    def excuse(self, seconds: float) -> None:
+        """The host was suspended for ``seconds``: the plugin could not have sent a heartbeat."""
+        self.excused += seconds
+
     def goodbye(self, now: float | None = None) -> None:
         """The plugin instance is being disposed. A gateway restart or plugin update says hello
         again within seconds; if nothing does within ``bye_grace``, ``check()`` reports the loss."""
         self.bye_at = now if now is not None else time.time()
+        self._excused_at_bye = self.excused
 
     @property
     def active(self) -> bool:

@@ -328,6 +328,70 @@ def test_daemon_reports_lost_heartbeat_as_finding(enrolled: Sensor) -> None:
     assert f["severity"] == "high"
 
 
+def test_host_sleep_is_not_a_lost_heartbeat(enrolled: Sensor) -> None:
+    """Live 2026-11-15: a sleeping Mac froze the gateway and the sensor together; each DarkWake
+    reported "lost" and "recovered" in the same second. Wall time ran on, the monotonic clock
+    (mach_absolute_time / CLOCK_MONOTONIC in the Docker VM) did not: that time is excused."""
+    from sg_advance.sensor.daemon import Daemon
+    from sg_advance.sensor.registry import PluginRegistry
+
+    ctx = AdapterContext(enrolled, "alice", plugins=PluginRegistry(lost_after=150))
+    ctx.plugins.heartbeat(now=1_000)
+    daemon = Daemon(enrolled, [], ctx)
+    assert daemon.check_plugin_health(now=1_030, mono=30) is None
+    # asleep for an hour: wall +3600 s, monotonic +10 s (the tick that was due when it slept)
+    assert daemon.check_plugin_health(now=4_640, mono=40) is None
+    assert ctx.plugins.heartbeat(now=4_660) is None  # the plugin's next hello after wake
+    assert not [e for e in spooled(enrolled, "event") if e["payload"]["kind"] == "sensor.health"]
+
+
+def test_plugin_silent_after_wake_is_still_lost(enrolled: Sensor) -> None:
+    """Only the frozen time is excused: a plugin that stays quiet after wake is reported."""
+    from sg_advance.sensor.daemon import Daemon
+    from sg_advance.sensor.registry import PluginRegistry
+
+    ctx = AdapterContext(enrolled, "alice", plugins=PluginRegistry(lost_after=150))
+    ctx.plugins.heartbeat(now=1_000)
+    daemon = Daemon(enrolled, [], ctx)
+    daemon.check_plugin_health(now=1_100, mono=100)  # 100 s quiet before sleep
+    daemon.check_plugin_health(now=4_700, mono=110)  # slept 3590 s
+    assert daemon.check_plugin_health(now=4_740, mono=150) is None  # 100 + 10 + 40 = 150 s awake
+    assert daemon.check_plugin_health(now=4_750, mono=160) == "lost"
+    ev = next(e for e in spooled(enrolled, "event") if e["payload"]["kind"] == "sensor.health")
+    assert ev["payload"]["detail"] == (
+        "no heartbeat for 160s while the host was awake (3590s asleep not counted)"
+    )
+
+
+def test_stopped_sensor_is_not_excused(enrolled: Sensor) -> None:
+    """SIGSTOP (or a blocked event loop) freezes the sensor but not the monotonic clock: the
+    plugin may have been disabled meanwhile, so the whole gap counts."""
+    from sg_advance.sensor.daemon import Daemon
+    from sg_advance.sensor.registry import PluginRegistry
+
+    ctx = AdapterContext(enrolled, "alice", plugins=PluginRegistry(lost_after=150))
+    ctx.plugins.heartbeat(now=1_000)
+    daemon = Daemon(enrolled, [], ctx)
+    daemon.check_plugin_health(now=1_010, mono=10)
+    assert daemon.check_plugin_health(now=4_610, mono=3_610) == "lost"
+
+
+def test_sleep_after_goodbye_does_not_shorten_the_grace() -> None:
+    from sg_advance.sensor.registry import PluginRegistry
+
+    r = PluginRegistry(lost_after=150, bye_grace=30)
+    r.heartbeat(now=1_000)
+    r.goodbye(now=1_010)
+    r.excuse(3_600)  # the host slept right after the gateway restart began
+    assert r.check(now=4_620) is None  # 10 s of grace used, not 3610 s
+    assert r.check(now=4_641) == "lost"
+    assert r.heartbeat(now=4_650) == "recovered" and r.excused == 0
+
+    r.excuse(3_600)  # slept before the goodbye: the 30 s grace is not stretched by it
+    r.goodbye(now=8_300)
+    assert r.check(now=8_331) == "lost"
+
+
 async def test_hello_after_loss_reports_recovery(api, enrolled: Sensor) -> None:
     server, path = api
     server.ctx.plugins.heartbeat()

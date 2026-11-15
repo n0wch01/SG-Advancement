@@ -28,6 +28,9 @@ from .spool import FlushResult
 
 log = logging.getLogger(__name__)
 
+# Wall-vs-monotonic drift below this is clock adjustment noise (NTP slew, VM time sync), not sleep.
+HOST_SLEEP_MIN = 10.0
+
 
 @dataclass
 class DaemonStats:
@@ -67,6 +70,7 @@ class Daemon:
         self.flush_interval = flush_interval
         self.local_api = local_api
         self.health_interval = health_interval
+        self._health_tick: tuple[float, float] | None = None  # (wall, monotonic) at the last check
         self.stats = DaemonStats()
         self.ready = asyncio.Event()  # set once a policy is loaded and adapters are running
 
@@ -90,16 +94,38 @@ class Daemon:
             except Exception as e:  # noqa: BLE001 - keep the last good policy
                 log.warning("policy sync failed, keeping current policy: %s", e)
 
-    def check_plugin_health(self, now: float | None = None) -> str | None:
-        """Emit a sensor.health event when the gateway plugin's heartbeats stop."""
+    def _excuse_host_sleep(self, now: float, mono: float) -> None:
+        """Time the wall clock moved but the monotonic clock did not is time the host slept
+        (macOS mach_absolute_time and Linux CLOCK_MONOTONIC, Docker Desktop's VM included, stop
+        in sleep). The gateway was frozen too, so it could not send heartbeats: don't count it.
+        A stopped sensor (SIGSTOP, a blocked loop) leaves both clocks running and is not excused."""
+        last, self._health_tick = self._health_tick, (now, mono)
+        if last is None:
+            return
+        slept = (now - last[0]) - (mono - last[1])
+        if slept > HOST_SLEEP_MIN:
+            log.info("host was suspended for %.0fs; not counted against the plugin heartbeat", slept)
+            self.ctx.plugins.excuse(slept)
+
+    def check_plugin_health(self, now: float | None = None, mono: float | None = None) -> str | None:
+        """Emit a sensor.health event when the gateway plugin's heartbeats stop.
+        ``now``/``mono``: wall and monotonic clocks (tests). A ``now`` without ``mono`` moves both."""
+        if now is None:
+            now, mono = time.time(), time.monotonic()
+        self._excuse_host_sleep(now, now if mono is None else mono)
         plugins = self.ctx.plugins
         said_bye = plugins.bye_at is not None
         if plugins.check(now) != "lost":
             return None
         last = plugins.last_contact
-        quiet = (now or time.time()) - last if last is not None else None
+        quiet = now - last - plugins.excused if last is not None else None
         if said_bye:
             detail = f"plugin was unloaded by the gateway and did not return within {plugins.bye_grace:.0f}s"
+        elif quiet is not None and plugins.excused:
+            detail = (
+                f"no heartbeat for {quiet:.0f}s while the host was awake "
+                f"({plugins.excused:.0f}s asleep not counted)"
+            )
         elif quiet is not None:
             detail = f"no heartbeat for {quiet:.0f}s"
         else:

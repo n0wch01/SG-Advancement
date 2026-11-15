@@ -292,6 +292,7 @@ OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──
 | 플러그인이 언로드되며 `bye`를 보냈고 30초 안에 새 인사가 없음 (10초마다 점검) | `sensor.health` `status: lost` | `openclaw-plugin-heartbeat-lost` (alert, high) |
 | 마지막 인사 후 150초가 지남 (게이트웨이가 죽는 등 `bye`를 못 보낸 경우) | `sensor.health` `status: lost` (한 번만) | 같은 룰 |
 | 끊긴 뒤 다시 인사가 옴 | `sensor.health` `status: recovered` | 없음 (기록만) |
+| 호스트가 잠자기에 들어감 (벽시계는 흘렀는데 단조 시계는 멈춤) | 없음. 잠든 시간은 150초·30초 계산에서 빠짐 (데몬 로그 `host was suspended`) | 없음 |
 | 신호가 끊긴 동안 실행된 툴 호출 | `tool.call` + `labels.sga_plugin: missing` | `openclaw-plugin-bypass` |
 
 `sensor.health`는 이번에 추가한 이벤트 종류다. 툴 호출이 아니라 **통제 장치 자체의 상태**를 나타낸다.
@@ -299,6 +300,20 @@ OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──
 플러그인은 OpenClaw가 인스턴스를 정리할 때(`api.lifecycle.onDispose`) 인사 타이머를 멈추고 `bye`를 보낸다.
 OpenClaw는 플러그인의 타이머를 대신 멈추지 않으므로, 이걸 안 하면 판정 hook이 빠진 뒤에도 인사가 계속 간다(아래 실환경 결과).
 `bye` 뒤 30초를 기다리는 이유는 정상적인 게이트웨이 재시작이나 플러그인 교체에서는 새 인스턴스가 몇 초 안에 인사하기 때문이다.
+
+**호스트 잠자기.** Mac이 잠들면 게이트웨이(Docker VM 포함)와 센서가 함께 멈춘다. 그 동안에는 플러그인이 인사를 보낼 수 없고 툴 호출도 돌지 않는다.
+- 전에는 깨어날 때마다(DarkWake 포함) 150초가 지난 것으로 보고 `lost`와 `recovered`를 같은 초에 냈다.
+  - 실환경: 2026-11-14~15 밤에 team-gateway·my-mac에서 5분 간격으로 반복됐다.
+- 데몬은 점검할 때마다 벽시계(`time.time`)와 단조 시계(`time.monotonic`)의 차이를 잰다.
+  - 단조 시계는 잠자기 동안 멈춘다. macOS는 `mach_absolute_time`, Docker Desktop VM 안의 Linux는 `CLOCK_MONOTONIC`이다.
+  - 2026-11-15 확인: 부팅 후 호스트의 벽시계는 203,814초, 단조 시계는 100,933초였고, VM의 단조 시계는 100,334초였다.
+  - 그래서 벽시계만 흐른 시간은 잠든 시간이다. 10초가 넘으면 그 시간을 끊김 계산에서 뺀다(`PluginRegistry.excuse`).
+- 빼는 것은 **잠든 시간뿐**이다.
+  - 깨어난 뒤에도 플러그인이 150초 동안 말이 없으면 그대로 `lost`다. 상세 내용에 "while the host was awake (Ns asleep not counted)"가 붙는다.
+  - `bye` 뒤의 30초 유예는 `bye` 이후에 잠든 시간만큼만 늘어난다.
+- `SIGSTOP`이나 이벤트 루프 멈춤으로 센서만 서는 경우는 단조 시계가 계속 흐르므로 빼지 않는다. 그 사이 플러그인이 꺼졌을 수 있다.
+- 플러그인이 보내는 값으로는 시간을 뺄 수 없다. 데몬 자신의 두 시계만 본다.
+- 이 판단을 속이려면 벽시계를 앞으로 돌려야 한다. 그건 관리자 권한이 필요한 일이다.
 
 ### 상시 운영
 
