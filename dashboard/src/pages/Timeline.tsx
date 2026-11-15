@@ -5,7 +5,7 @@ import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
 import { eventSummary, formatTime, sessionTree, shortSession, timelineHref } from "../format";
 import type { AgentEvent, Finding, Timeline as TimelineData } from "../types";
-import { useAsync } from "../useAsync";
+import { REFRESH_MS, useAsync } from "../useAsync";
 
 type Item = { ts: string; event?: AgentEvent; finding?: Finding };
 
@@ -65,6 +65,7 @@ function TimelineBody({ api, query }: { api: Api; query: Record<string, string> 
   const { data, error, loading } = useAsync(
     () => api.timeline({ user_id: query.user_id, session_id: query.session_id }),
     [api, query.user_id, query.session_id],
+    REFRESH_MS,
   );
   const [focus, setFocus] = useState<string | null>(null);
   const [onlyFindings, setOnlyFindings] = useState(false);

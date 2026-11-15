@@ -4,13 +4,13 @@ import { ApiError, type Api } from "../api";
 import { Empty, ErrorBox, Loading } from "../components/States";
 import { ACTION_STATUS_LABEL, REMOTE_ACTION_LABEL, activeBlocks, formatTime, relativeTime, timelineHref } from "../format";
 import type { RemoteAction, Role } from "../types";
-import { useAsync } from "../useAsync";
+import { REFRESH_MS, useAsync } from "../useAsync";
 
 const STATUS_TONE: Record<string, string> = { done: "good", failed: "bad", pending: "warn", delivered: "warn" };
 
 export function Actions({ api, role }: { api: Api; role: Role | null }) {
   const [tick, setTick] = useState(0);
-  const { data, error, loading } = useAsync(() => api.actions(), [api, tick]);
+  const { data, error, loading } = useAsync(() => api.actions(), [api, tick], REFRESH_MS);
   const admin = role === "admin";
   return (
     <section>

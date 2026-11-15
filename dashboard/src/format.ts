@@ -451,3 +451,11 @@ export function riskBand(score: number): { label: string; fill: "high" | "medium
   if (score >= 20) return { label: "주의", fill: "medium" };
   return { label: "낮음", fill: "low" };
 }
+
+/** Live Finding list: findings newer than what is shown go on top; rows already shown stay as they are
+ * (a reader who loaded more pages keeps their place). */
+export function mergeNewest<T extends { finding_id: string }>(shown: T[], latest: T[]): T[] {
+  const seen = new Set(shown.map((f) => f.finding_id));
+  const fresh = latest.filter((f) => !seen.has(f.finding_id));
+  return fresh.length ? [...fresh, ...shown] : shown;
+}

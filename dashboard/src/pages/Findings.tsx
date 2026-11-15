@@ -3,8 +3,9 @@ import { useEffect, useState } from "react";
 import type { Api } from "../api";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
-import { SEVERITIES, SEVERITY_LABEL, findingsHref, formatTime, relativeTime, responseText } from "../format";
+import { SEVERITIES, SEVERITY_LABEL, findingsHref, formatTime, mergeNewest, relativeTime, responseText } from "../format";
 import type { Finding } from "../types";
+import { REFRESH_MS } from "../useAsync";
 
 const PAGE = 50;
 const FILTERS = ["severity", "min_severity", "rule_id", "user_id"] as const;
@@ -33,6 +34,20 @@ export function Findings({ api, query }: { api: Api; query: Record<string, strin
   useEffect(() => {
     setRows([]);
     void load(0);
+    // Live: new findings appear on top without a reload; pages already loaded stay where they are.
+    let busy = false;
+    const timer = setInterval(() => {
+      if (busy || document.visibilityState !== "visible") return;
+      busy = true;
+      api
+        .findings({ ...query, limit: PAGE, offset: 0 })
+        .then((page) => setRows((prev) => mergeNewest(prev, page)))
+        .catch(() => undefined) // a failed refresh keeps the list; the next tick tries again
+        .finally(() => {
+          busy = false;
+        });
+    }, REFRESH_MS);
+    return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, key]);
 

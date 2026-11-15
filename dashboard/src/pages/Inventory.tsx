@@ -3,7 +3,7 @@ import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
 import { GUARD_LABEL, SEVERITIES, agentPosture, findingsHref, formatTime, reasonText, relativeTime } from "../format";
 import type { DeviceInventory, Snapshot } from "../types";
-import { useAsync } from "../useAsync";
+import { REFRESH_MS, useAsync } from "../useAsync";
 
 type Row = Record<string, unknown>;
 const s = (v: unknown) => (typeof v === "string" ? v : v === undefined || v === null ? "" : String(v));
@@ -15,7 +15,7 @@ function Chip({ tone, children }: { tone: "good" | "bad" | "warn" | "neutral"; c
 }
 
 export function Inventory({ api }: { api: Api }) {
-  const { data, error, loading } = useAsync(() => api.inventory(), [api]);
+  const { data, error, loading } = useAsync(() => api.inventory(), [api], REFRESH_MS);
   return (
     <section>
       <div className="page-head">

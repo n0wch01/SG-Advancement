@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeBlocks,
+  mergeNewest,
   campaignPeople,
   remainingText,
   agentPosture,
@@ -263,5 +264,20 @@ describe("riskBand", () => {
     expect(riskBand(59).label).toBe("주의");
     expect(riskBand(60)).toEqual({ label: "높음", fill: "high" });
     expect(riskBand(100).label).toBe("높음");
+  });
+});
+
+describe("mergeNewest", () => {
+  const f = (id: string) => ({ finding_id: id });
+  it("puts findings that are not shown yet on top", () => {
+    expect(mergeNewest([f("b"), f("a")], [f("c"), f("b"), f("a")]).map((x) => x.finding_id)).toEqual(["c", "b", "a"]);
+  });
+  it("keeps the same array when nothing is new (no re-render)", () => {
+    const shown = [f("b"), f("a")];
+    expect(mergeNewest(shown, [f("b")])).toBe(shown);
+  });
+  it("keeps rows a reader loaded from later pages", () => {
+    const shown = [f("z"), f("y"), f("old")];
+    expect(mergeNewest(shown, [f("new"), f("z")]).map((x) => x.finding_id)).toEqual(["new", "z", "y", "old"]);
   });
 });

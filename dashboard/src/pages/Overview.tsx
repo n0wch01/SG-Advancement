@@ -5,7 +5,7 @@ import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
 import { SEVERITIES, SEVERITY_LABEL, approvalsHref, findingsHref, relativeTime, responseText, riskBand, sinceFor, timelineHref } from "../format";
 import type { PersonRisk, Summary } from "../types";
-import { useAsync } from "../useAsync";
+import { REFRESH_MS, useAsync } from "../useAsync";
 
 const RANGES: [string, string][] = [
   ["24h", "24시간"],
@@ -16,9 +16,9 @@ const RANGES: [string, string][] = [
 
 export function Overview({ api }: { api: Api }) {
   const [range, setRange] = useState("7d");
-  const { data, error, loading } = useAsync(() => api.summary(sinceFor(range)), [api, range]);
-  const review = useAsync(() => api.reviewCount(), [api]);
-  const risk = useAsync(() => api.risk(), [api]);
+  const { data, error, loading } = useAsync(() => api.summary(sinceFor(range)), [api, range], REFRESH_MS);
+  const review = useAsync(() => api.reviewCount(), [api], REFRESH_MS);
+  const risk = useAsync(() => api.risk(), [api], REFRESH_MS);
   return (
     <section>
       <div className="page-head">
