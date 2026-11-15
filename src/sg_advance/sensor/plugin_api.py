@@ -552,7 +552,9 @@ class LocalApiServer:
         self._server: asyncio.base_events.Server | None = None
 
     async def start(self) -> None:
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        from .state import private_dir
+
+        private_dir(self.path.parent)
         if self.tcp:
             import secrets
 

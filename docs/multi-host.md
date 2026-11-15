@@ -119,8 +119,28 @@ docker compose exec -e SGA_SERVER=http://127.0.0.1:8000 control-plane \
 | 서비스 | launchd LaunchAgent | 작업 스케줄러 작업 "SG-Advance Sensor"(로그온 시, 그 사용자로, 권한 상승 없음, 실패 시 1분마다 재시작), `pythonw`로 창 없이, 로그 `.sg-advance\logs\sensor.log`. 작업을 만들 수 없는 PC면 시작프로그램 폴더의 숨김 실행기 |
 | 플러그인 ↔ 데몬 | 유닉스 소켓(0600) | 127.0.0.1의 임의 포트 + 실행마다 바뀌는 토큰. `.sg-advance\sga-api.json`에 `{host, port, token}`. 토큰 없는 요청은 거부 |
 | 설치 탐지 | npm·nvm·pnpm·volta, launchd/systemd | `%APPDATA%\npm`, nvm-windows, pnpm, 작업 스케줄러의 OpenClaw 작업(`OpenClaw Gateway`), 시작프로그램 폴더 |
-| 비밀 파일 권한 | 0600 확인 | 모드 비트가 없어 확인 생략(사용자 프로필 ACL에 맡김) |
+| 비밀 파일 권한 | 0600 확인, 폴더 0700 | 모드 비트가 없어 확인 생략. 폴더도 모드를 주지 않고 사용자 프로필의 상속 ACL에 맡김(아래 실기기 확인) |
 | 문자 인코딩 | UTF-8 | OpenClaw 출력은 UTF-8로, `schtasks` 출력은 콘솔 코드 페이지로 읽음(한국어 Windows는 cp949) |
+
+## 실기기 설치 (2026-11-15, Windows 노트북 `ez`)
+
+관리자 PowerShell로 한 줄 설치를 실행했다.
+
+| 단계 | 결과 |
+|---|---|
+| 설치 파일 받기·해시 확인, 등록(CSR) | ✅ 장비 인증서 발급, 주인 `1002` 지정 |
+| Claude Code hook | ✅ 회사 관리 설정에 들어감(센서가 `hook in managed settings`로 보고) |
+| 로그온 작업으로 센서 시작 | ❌ 작업이 종료 코드 1로 바로 끝남, 로그 파일도 없음 |
+| 같은 명령을 창에서 직접 실행 | ✅ 정책을 받고 이벤트 전송(관제 서버에서 `policy_current` 확인) |
+
+- 원인: Python 3.12.4부터 Windows의 `mkdir(mode=0o700)`은 폴더에 SYSTEM, Administrators, 소유자만 쓰는 보호된 ACL을 건다(CVE-2024-4030 수정).
+  관리자 셸에서 만든 폴더는 소유자가 Administrators 그룹이다. 그래서 같은 사람의 일반 권한 프로세스는 `.sg-advance`를 열지 못했다(`PermissionError: [WinError 5]`).
+  - 일반 권한 프로세스: 로그온 작업(`RunLevel: Limited`), Claude Code hook
+  - 같은 작업 설정에 `cmd`로 오류 출력을 받는 진단 작업을 만들어 찾았다.
+- 영향: hook도 센서 폴더를 읽지 못해 비상 판정(읽기만 허용)으로 돌았다. 막는 쪽으로 실패했다.
+- 고친 것: 센서 폴더는 POSIX에서만 0700으로 만들고, Windows에서는 사용자 프로필의 상속 ACL에 맡긴다(`state.private_dir`).
+  - 상속 ACL은 그 사람, SYSTEM, 관리자에게만 열려 있다.
+  - 이미 설치한 PC는 `icacls <폴더> /reset /T`로 상속 ACL을 되살린다.
 
 ## 남은 단계
 

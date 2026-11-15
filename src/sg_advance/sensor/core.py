@@ -34,7 +34,7 @@ from . import lineage as lineage_mod
 from .client import ControlPlaneClient, ControlPlaneError, Offline, Transport, urllib_transport
 from .priority import event_priority
 from .spool import FlushResult, Spool
-from .state import Credentials, SensorHome, now_utc, write_private
+from .state import Credentials, SensorHome, now_utc, private_dir, write_private
 
 log = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def enroll(
         ca_back = resp.get("ca_certificate")
         if not cert or not ca_back or fingerprint(ca_back) != fingerprint(ca_pem):  # type: ignore[arg-type]
             raise SensorError("the control plane did not return a certificate from the pinned CA; not saving")
-        home.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        private_dir(home.root)
         write_private(home.key_path, key_pem(key))  # type: ignore[arg-type]
         write_private(home.cert_path, cert)
         write_private(home.ca_path, ca_pem)  # type: ignore[arg-type]

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import ssl
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -35,6 +36,18 @@ class Credentials(BaseModel):
     client_certificate: bool = Field(
         default=False, description="M12: talks to the control plane with device.pem/device-key.pem (mTLS)"
     )
+
+
+def private_dir(path: Path) -> None:
+    """A directory only its owner can read. POSIX: 0700. Windows: no mode. Python >= 3.12.4 turns
+    0o700 into a protected ACL for SYSTEM, Administrators and the owner, and a directory made from an
+    administrator shell is owned by Administrators: the same person's normal processes (the sensor
+    task, Claude Code hooks) were then denied (laptop, 2026-11-15). The user profile's inherited ACL
+    already keeps it to that person, SYSTEM and administrators."""
+    if sys.platform == "win32":
+        path.mkdir(parents=True, exist_ok=True)
+    else:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
 
 
 def write_private(path: Path, data: str) -> None:
@@ -92,7 +105,7 @@ class SensorHome:
         return Credentials.model_validate_json(p.read_text("utf-8")) if p.exists() else None
 
     def save_credentials(self, creds: Credentials) -> None:
-        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        private_dir(self.root)
         write_private(self.credentials_path, creds.model_dump_json(indent=2))
 
 

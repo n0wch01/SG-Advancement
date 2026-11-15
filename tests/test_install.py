@@ -115,3 +115,46 @@ def test_plugin_is_zipped_reproducibly_and_pinned(served: TestClient) -> None:
     script = served.get("/install/install.ps1").text
     assert f"$PluginSha256  = '{sha(a.content)}'" in script
     assert "plugins install --link $PluginDir" in script and "openclaw-token" in script
+
+
+# ── private directories on Windows (live 2026-11-15, laptop installed from an administrator shell) ──
+
+
+def test_private_dir_has_no_mode_on_windows(tmp_path, monkeypatch) -> None:
+    """Python >= 3.12.4 turns mkdir(mode=0o700) on Windows into an ACL for SYSTEM, Administrators and
+    the owner only. A directory made by an elevated installer is owned by Administrators, so the
+    same person's normal processes (the sensor task, Claude Code hooks) were denied. Windows keeps
+    the user profile's inherited ACL instead."""
+    from pathlib import Path
+
+    from sg_advance.sensor import state
+
+    calls: list[dict] = []
+    real = Path.mkdir
+
+    def spy(self, mode=0o777, parents=False, exist_ok=False):  # noqa: ANN001
+        calls.append({"mode": mode})
+        return real(self, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", spy)
+    monkeypatch.setattr(state.sys, "platform", "win32")
+    state.private_dir(tmp_path / "home")
+    assert calls[-1]["mode"] == 0o777
+    monkeypatch.setattr(state.sys, "platform", "darwin")
+    state.private_dir(tmp_path / "home2")
+    assert calls[-1]["mode"] == 0o700
+
+
+def test_no_restrictive_mkdir_left_in_the_sensor() -> None:
+    """Every private directory goes through state.private_dir."""
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "src" / "sg_advance" / "sensor"
+    hits = [
+        f"{p.name}:{n}"
+        for p in src.rglob("*.py")
+        for n, line in enumerate(p.read_text("utf-8").splitlines(), 1)
+        if re.search(r"mkdir\(mode=0o7", line) and p.name != "state.py"
+    ]
+    assert not hits, hits
