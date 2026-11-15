@@ -5,7 +5,7 @@ rules:
     severity: high
     category: tool_misuse
     title: 파괴적 셸 명령
-    message: 되돌리기 어려운 셸 명령(rm -rf, mkfs, dd, force push 등)이 실행되려 합니다.
+    message: 되돌리기 어려운 셸 명령(rm -rf, Remove-Item -Recurse, rd /s, mkfs, dd, force push 등)이 실행되려 합니다.
     recommended_action: 사용자가 승인한 경우 보안팀 검토 큐에서 명령과 대상을 확인하세요.
     # 결정(2026-11-14): 사용자 승인 먼저, 매우 위험한 것(공격 진행 신호·외부 유출)만 바로 차단, 보안팀은 사후 검토.
     #   되돌릴 수 없는 삭제는 "매우 위험"에 넣지 않아 차단 → 사용자 승인으로 바꿨다.
@@ -18,7 +18,13 @@ rules:
     match:
       type: regex
       fields: [payload.arguments]
-      pattern: '\brm\s+-[a-zA-Z]*(rf|fr)[a-zA-Z]*\b|\brm\s+-[a-zA-Z]*r[a-zA-Z]*\s+-[a-zA-Z]*f|\bmkfs(\.\w+)?\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:|\bchmod\s+-R\s+777\s+/|\bgit\s+push\s+.*(--force\b|-f\b)'
+      # Windows(2026-11-15, 사용자 결정: rm -rf와 같은 사용자 승인). PowerShell은 대소문자를 가리지 않아 (?i:) 안에 둔다.
+      #   Remove-Item ... -Recurse(-r…), 별칭 rm/ri/del/erase/rmdir/rd ... -Recurse(-rec…), cmd rd·rmdir /s, del·erase /s,
+      #   Format-Volume, Clear-Disk, format D:. 문장 구분(; | & 줄바꿈)을 넘지 않는다.
+      # 오탐 주의: 빌드 폴더(node_modules 등)를 지우는 일상 작업도 묻는다(리눅스 rm -rf와 같은 수준).
+      # 미탐 주의: 별칭에 짧은 인자(rm -r C:\x), 변수·문자열 조합으로 만든 명령, -EncodedCommand,
+      #   .NET 직접 호출([IO.Directory]::Delete($p, $true)), 스크립트 파일 안의 삭제는 못 잡는다.
+      pattern: '\brm\s+-[a-zA-Z]*(rf|fr)[a-zA-Z]*\b|\brm\s+-[a-zA-Z]*r[a-zA-Z]*\s+-[a-zA-Z]*f|\bmkfs(\.\w+)?\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:|\bchmod\s+-R\s+777\s+/|\bgit\s+push\s+.*(--force\b|-f\b)|(?i:\bremove-item\b[^;|&\n]*?\s-r\w*\b|(?<!git\s)\b(?:ri|rm|del|erase|rmdir|rd)\s(?:[^;|&\n]*?\s)?-rec\w*\b|\b(?:rd|rmdir)\s+(?:\S+\s+)*?/s\b|\b(?:del|erase)\s+(?:\S+\s+)*?/s\b|\bformat-volume\b|\bclear-disk\b|\bformat\s+[a-z]:(?![\w\\/]))'
 
   # T17 (docs/incidents.md: Replit, Amazon Q). 셸 룰이 못 보는 DB·클라우드 경로.
   # 오탐 주의: 개발 DB를 일부러 초기화하는 작업도 걸린다. 그래서 block이 아니라 require_approval.
@@ -100,6 +106,7 @@ rules:
           ignore_case: true
           pattern: &destructive >-
             (?x)\brm\s+-[a-z]*(rf|fr)[a-z]*\b|\brm\s+-[a-z]*r[a-z]*\s+-[a-z]*f|\bmkfs(\.\w+)?\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:|\bchmod\s+-R\s+777\s+/|\bgit\s+push\s+.*(--force\b|-f\b)
+            |\bremove-item\b[^;|&\n]*?\s-r\w*\b|(?<!git\s)\b(?:ri|rm|del|erase|rmdir|rd)\s(?:[^;|&\n]*?\s)?-rec\w*\b|\b(?:rd|rmdir)\s+(?:\S+\s+)*?/s\b|\b(?:del|erase)\s+(?:\S+\s+)*?/s\b|\bformat-volume\b|\bclear-disk\b|\bformat\s+[a-z]:(?![\w\\/])
             |\baws\s+s3\s+rb\b|\baws\s+s3\s+rm\b.*--recursive|\baws\s+[\w-]+\s+(delete|terminate)-[\w-]+|\bterraform\s+destroy\b|\bkubectl\s+delete\s+(ns|namespaces?|all)\b|\bkubectl\s+delete\b.*--all\b
             |(?:^|;)(?:\s|--[^\n]*\n)*(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))
             |\b(?:psql|mysql|mariadb|sqlite3|sqlcmd|clickhouse-client|duckdb|snowsql|mongosh|cqlsh|cockroach\s+sql|bq\s+query)\b[\s\S]*?\b(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))
