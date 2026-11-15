@@ -43,10 +43,12 @@ def queue(cp: TestClient, **params: str) -> list[dict[str, Any]]:
     return cp.get("/v1/admin/security-approvals", params=params, headers=CP_ADMIN).json()
 
 
-async def registered(cp: TestClient) -> dict[str, Any]:
-    for _ in range(300):
+async def registered(cp: TestClient, holds: Any = None) -> dict[str, Any]:
+    """The hold reached the control plane, and (with ``holds``) the sensor knows it did: a poll in
+    between fetches nothing (see test_security_approval.registered)."""
+    for _ in range(500):
         rows = await asyncio.to_thread(queue, cp, status="pending")
-        if rows:
+        if rows and (holds is None or holds.waiting):
             return rows[0]
         await asyncio.sleep(0.01)
     raise AssertionError("hold never reached the control plane")
@@ -140,7 +142,7 @@ async def test_gateway_releases_only_an_approved_matching_request(enrolled: Sens
     upstream, server, gw, ctx = await _gateway(enrolled, holds=Holds(wait_seconds=30))
     try:
         task = asyncio.create_task(rpc(gw.port, "/mcp/db", call(1, "run_sql", **SQL)))
-        row = await registered(cp)
+        row = await registered(cp, ctx.holds)
         assert row["request_digest"] and len(row["request_digest"]) == 64 and upstream.seen == []
         await asyncio.to_thread(decide, cp, row["id"])
         assert await ctx.holds.poll(ctx) == 1  # type: ignore[union-attr]
@@ -156,7 +158,7 @@ async def test_an_approval_for_another_request_is_refused(enrolled: Sensor, cp: 
     upstream, server, gw, ctx = await _gateway(enrolled, holds=Holds(wait_seconds=30))
     try:
         task = asyncio.create_task(rpc(gw.port, "/mcp/db", call(1, "run_sql", **SQL)))
-        row = await registered(cp)
+        row = await registered(cp, ctx.holds)
         with cp.app.state.db._sessions() as db:  # the record now names a different request
             db.execute(
                 update(SecurityApproval)
@@ -181,7 +183,7 @@ async def test_a_block_that_appears_while_waiting_wins_over_the_approval(
     upstream, server, gw, ctx = await _gateway(enrolled, holds=Holds(wait_seconds=30))
     try:
         task = asyncio.create_task(rpc(gw.port, "/mcp/db", call(1, "run_sql", **SQL)))
-        row = await registered(cp)
+        row = await registered(cp, ctx.holds)
         enrolled.set_trusted("remote_blocked_users", {"bob"})  # security blocks bob meanwhile
         await asyncio.to_thread(decide, cp, row["id"])
         await ctx.holds.poll(ctx)  # type: ignore[union-attr]
@@ -370,7 +372,7 @@ async def test_a_gateway_hold_whose_client_left_never_reaches_the_server(
                 b"Accept: application/json\r\nUser-Agent: claude-code/2.1\r\n"
                 + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)  # fmt: skip
         await w.drain()
-        row = await registered(cp)
+        row = await registered(cp, ctx.holds)
         w.close()  # the client gives up
         for _ in range(200):
             if queue(cp)[0]["outcome"]:

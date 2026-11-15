@@ -62,10 +62,13 @@ def queue(cp: TestClient, **params: str) -> list[dict[str, Any]]:
     return cp.get("/v1/admin/security-approvals", params=params, headers=CP_ADMIN).json()
 
 
-async def registered(cp: TestClient) -> dict[str, Any]:
-    for _ in range(200):
+async def registered(cp: TestClient, holds: Any = None) -> dict[str, Any]:
+    """The hold reached the control plane, and (with ``holds``) the sensor knows it did. The server
+    row appears before the sensor marks the hold registered; a poll in between fetches nothing, and
+    the next poll is a flush tick away (CI failure 2026-11-15)."""
+    for _ in range(500):
         rows = await asyncio.to_thread(queue, cp, status="pending")
-        if rows:
+        if rows and (holds is None or holds.waiting):
             return rows[0]
         await asyncio.sleep(0.01)
     raise AssertionError("hold never reached the control plane")
@@ -76,7 +79,7 @@ async def test_security_approves_and_the_call_runs(cp: TestClient, ctx: AdapterC
     assert held["decision"] == "hold" and held["action"] == "security_approval" and held["wait_ms"] == 30_000
     waiting = asyncio.create_task(ctx.holds.wait(ctx, held["hold_id"]))  # type: ignore[union-attr]
 
-    row = await registered(cp)
+    row = await registered(cp, ctx.holds)
     assert row["id"] == held["hold_id"] and row["user_id"] == "alice@corp.test" and row["tool"] == "exec"
     assert "DELETE FROM users" in row["arguments_preview"] and row["rule_ids"] == ["destructive-sql"]
     assert row["severity"] == "high" and row["event_id"] and row["finding_ids"]
@@ -113,7 +116,7 @@ async def test_denied_timed_out_and_unreachable_calls_are_blocked(
 ) -> None:
     held = judge(ctx, sql_call("c1"))
     waiting = asyncio.create_task(ctx.holds.wait(ctx, held["hold_id"]))  # type: ignore[union-attr]
-    row = await registered(cp)
+    row = await registered(cp, ctx.holds)
     cp.post(
         f"/v1/admin/security-approvals/{row['id']}/decision",
         json={"decision": "deny", "by": "lead@corp.test", "reason": "not during business hours"},
