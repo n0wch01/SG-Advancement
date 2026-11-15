@@ -209,6 +209,8 @@ class Sensor:
         # Outcome model (2026-11-13): tool calls refused by handing the decision to the agent, kept until
         # their result shows up (then the refusal was not applied) or they age out.
         self._refused: dict[str, tuple[list[str], datetime]] = {}
+        # Rule tuning (2026-11-15): snapshot findings already reported, kept across restarts.
+        self._standing: dict[str, str] | None = None
 
     POSTURE_MAX_AGE = timedelta(hours=1)
 
@@ -481,12 +483,61 @@ class Sensor:
                 and enforcement.confirmation == "unconfirmed"
             ):
                 self._remember_refused(result.event.payload.call_id, [f.finding_id for f in findings])  # type: ignore[union-attr]
+        else:
+            findings = self._standing_once(result, findings)
         findings = self._lineage(result, findings)
         result.verdict.findings = findings
         event = redact_event(_short_result(self._mask_protected(result.event)))
         if not self.keep_chat_text and not result.verdict.hits:
             event = withhold_chat_text(event)
         self.spool.add([event, *findings], event_priority(result.event, result.verdict))
+
+    # ── standing state (rule tuning 2026-11-15) ──────────────────────────────
+
+    STANDING_KINDS = frozenset(
+        {EventKind.INVENTORY_SNAPSHOT, EventKind.CONFIG_SNAPSHOT, EventKind.INSTALL_SNAPSHOT}
+    )
+    STANDING_EVERY = timedelta(hours=24)
+
+    @property
+    def _standing_path(self) -> Path:
+        return self.home.root / "standing-findings.json"
+
+    def _standing_once(self, result: ProcessResult, findings: list[Any]) -> list[Any]:
+        """A snapshot describes a state. The same state (device, subject, rule, matched value) is
+        recorded once per ``STANDING_EVERY``, across restarts: production had ~450 of 695 findings
+        that were one unchanged state reported again after every sensor restart, because the
+        engine's dedup lives in memory. A state that clears is forgotten, so its return alerts at
+        once. Only unenforced findings come here (``record`` keeps every enforced one)."""
+        if result.event.kind not in self.STANDING_KINDS:
+            return findings
+        if self._standing is None:
+            try:
+                loaded = json.loads(self._standing_path.read_text("utf-8"))
+                ok = isinstance(loaded, dict)
+                self._standing = {str(k): str(v) for k, v in loaded.items()} if ok else {}
+            except (OSError, ValueError):
+                self._standing = {}
+        store = self._standing
+        subject = result.event.agent.session_id or ""
+        holding = {h.rule.id: json.dumps([h.rule.id, subject, h.key]) for h in result.verdict.hits}
+        for key in [k for k in store if json.loads(k)[1] == subject and k not in holding.values()]:
+            del store[key]  # cleared (or changed to another value): the next occurrence is news
+        now = now_utc()
+        kept = []
+        for f in findings:
+            key = holding.get(f.rule_id)
+            seen = store.get(key) if key else None
+            if seen is not None and now - datetime.fromisoformat(seen) < self.STANDING_EVERY:
+                continue
+            if key:
+                store[key] = now.isoformat()
+            kept.append(f)
+        try:
+            write_private(self._standing_path, json.dumps(store))
+        except OSError as e:  # a failed write means a repeat later, never a missed finding
+            log.warning("could not keep reported states: %s", e)
+        return kept
 
     def _lineage(self, result: ProcessResult, findings: list[Any]) -> list[Any]:
         """Register protected values a ``lineage:source`` rule found (hashes only), and point a
