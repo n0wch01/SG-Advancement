@@ -1,63 +1,35 @@
 import { useEffect, useState } from "react";
 
 import type { Api } from "../api";
+import { RefreshStatus } from "../components/RefreshStatus";
+import { ResponseBadge } from "../components/ResponseBadge";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
-import { SEVERITIES, SEVERITY_LABEL, findingsHref, formatTime, mergeNewest, relativeTime, responseText } from "../format";
-import type { Finding } from "../types";
-import { REFRESH_MS } from "../useAsync";
+import { SEVERITIES, SEVERITY_LABEL, TIME_RANGES, findingFilters, findingHref, findingsHref, formatTime, rangeQuery, relativeTime, timeRange } from "../format";
+import type { FindingFeedCache } from "../findingFeed";
+import { useFindingFeed } from "../useFindingFeed";
 
-const PAGE = 50;
 const FILTERS = ["severity", "min_severity", "rule_id", "user_id"] as const;
 
-export function Findings({ api, query }: { api: Api; query: Record<string, string> }) {
-  const [rows, setRows] = useState<Finding[]>([]);
-  const [error, setError] = useState<Error | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [more, setMore] = useState(false);
-  const key = JSON.stringify(query);
-
-  async function load(offset: number) {
-    setLoading(true);
-    setError(null);
-    try {
-      const page = await api.findings({ ...query, limit: PAGE, offset });
-      setRows((prev) => (offset === 0 ? page : [...prev, ...page]));
-      setMore(page.length === PAGE);
-    } catch (e) {
-      setError(e as Error);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    setRows([]);
-    void load(0);
-    // Live: new findings appear on top without a reload; pages already loaded stay where they are.
-    let busy = false;
-    const timer = setInterval(() => {
-      if (busy || document.visibilityState !== "visible") return;
-      busy = true;
-      api
-        .findings({ ...query, limit: PAGE, offset: 0 })
-        .then((page) => setRows((prev) => mergeNewest(prev, page)))
-        .catch(() => undefined) // a failed refresh keeps the list; the next tick tries again
-        .finally(() => {
-          busy = false;
-        });
-    }, REFRESH_MS);
-    return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, key]);
+export function Findings({ api, query, cache }: { api: Api; query: Record<string, string>; cache: FindingFeedCache }) {
+  const { feed, rows, pending, error, loading, loadingMore, refreshing, updatedAt, more, paused } = useFindingFeed(api, query, cache);
+  const filters = findingFilters(query);
 
   return (
-    <section>
+    <section onClickCapture={(event) => {
+      if ((event.target as HTMLElement).closest("a")) feed.scrollY = window.scrollY;
+    }}>
       <div className="page-head">
-        <h1>Finding</h1>
+        <div className="page-intro"><p className="eyebrow">Findings</p><h1>탐지</h1><p className="muted">에이전트의 위험 행동과 실제 처리 결과를 조사합니다.</p></div>
       </div>
       <FilterBar query={query} />
+      {query.since && <p className="filter-period muted small">조회 시작 시각: <time dateTime={query.since}>{formatTime(query.since)}</time></p>}
+      <RefreshStatus updatedAt={updatedAt} refreshing={refreshing || loadingMore} error={error} paused={paused} onTogglePause={feed.togglePause} onRefresh={feed.refresh} />
       {error && <ErrorBox error={error} />}
+      {pending.length > 0 && <div className="new-findings">
+        <span role="status">새 탐지 <strong>{pending.length}건</strong>이 있습니다. 읽던 목록은 그대로 유지됩니다.</span>
+        <button type="button" className="quiet-button" onClick={() => { feed.applyPending(); feed.scrollY = 0; window.scrollTo(0, 0); }}>목록에 반영</button>
+      </div>}
       {!loading && !error && rows.length === 0 && <Empty>조건에 맞는 Finding이 없습니다.</Empty>}
       {rows.length > 0 && (
         <div className="card flush">
@@ -82,26 +54,26 @@ export function Findings({ api, query }: { api: Api; query: Record<string, strin
                     <SeverityBadge severity={f.severity} />
                   </td>
                   <td>
-                    <a href={`#/findings/${encodeURIComponent(f.finding_id)}`}>{f.title}</a>
+                    <a href={findingHref(f.finding_id, filters)}>{f.title}</a>
                     <div className="mono muted small">{f.rule_id}</div>
                   </td>
                   <td>
-                    <a href={findingsHref({ user_id: f.principal.user_id })}>{f.principal.user_id}</a>
+                    <a href={findingsHref({ ...filters, user_id: f.principal.user_id })}>{f.principal.user_id}</a>
                   </td>
                   <td className="small">
                     {f.endpoint.device_id}
                     <div className="muted">{f.agent.type}</div>
                   </td>
-                  <td className="small">{responseText(f.response)}</td>
+                  <td className="small"><ResponseBadge response={f.response} /></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      {loading && <Loading />}
+      {(loading || loadingMore) && <Loading />}
       {more && !loading && (
-        <button className="more" onClick={() => void load(rows.length)}>
+        <button className="more" disabled={loadingMore || refreshing} onClick={() => void feed.loadMore()}>
           더 보기
         </button>
       )}
@@ -113,8 +85,7 @@ function FilterBar({ query }: { query: Record<string, string> }) {
   const [draft, setDraft] = useState(query);
   useEffect(() => setDraft(query), [query]);
   const apply = (next: Record<string, string>) => {
-    const clean = Object.fromEntries(FILTERS.map((k) => [k, next[k]]).filter(([, v]) => v));
-    window.location.hash = findingsHref(clean);
+    window.location.hash = findingsHref(findingFilters(next));
   };
   return (
     <form
@@ -124,6 +95,12 @@ function FilterBar({ query }: { query: Record<string, string> }) {
         apply(draft);
       }}
     >
+      <label>
+        기간
+        <select value={timeRange(draft.range)} onChange={(event) => apply({ ...draft, since: "", ...rangeQuery(timeRange(event.target.value)) })}>
+          {TIME_RANGES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </select>
+      </label>
       <label>
         심각도
         <select
@@ -159,7 +136,7 @@ function FilterBar({ query }: { query: Record<string, string> }) {
       </label>
       <button type="submit">적용</button>
       {FILTERS.some((k) => query[k]) && (
-        <a className="reset" href={findingsHref()}>
+        <a className="reset" href={findingsHref({ range: query.range, since: query.since })}>
           필터 지우기
         </a>
       )}

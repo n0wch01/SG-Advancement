@@ -87,6 +87,62 @@ def test_finding_detail_has_evidence_and_the_conversation(cp_view: TestClient, e
     assert cp_view.get("/v1/admin/findings/nope", headers=VIEWER).status_code == 404
 
 
+def test_finding_period_matches_summary_and_combines_with_filters(cp_view: TestClient, enrolled: Sensor) -> None:
+    replay(enrolled, "claude_code.jsonl")
+    template = cp_view.get("/v1/admin/findings", headers=VIEWER).json()[0]
+    boundary = datetime(2026, 12, 1, tzinfo=UTC)
+    documents = [
+        dict(template, finding_id=name, ts=(boundary + timedelta(seconds=seconds)).isoformat(), severity=severity)
+        for name, seconds, severity in (
+            ("period-old", -1, "high"), ("period-edge", 0, "high"),
+            ("period-new", 1, "critical"), ("period-low", 1, "low"),
+        )
+    ]
+    documents.append(dict(documents[-1], finding_id="period-other", principal={"user_id": "other"}, severity="high"))
+    assert enrolled.client.post("/v1/findings", {"findings": documents})["status"] == 200
+    period = {"since": boundary.isoformat()}
+    listed = cp_view.get("/v1/admin/findings", params=period, headers=VIEWER).json()
+    summary = cp_view.get("/v1/admin/summary", params=period, headers=VIEWER).json()
+    assert len(listed) == summary["findings"]["total"] == 4
+    response = cp_view.get(
+        "/v1/admin/findings", headers=VIEWER,
+        params={**period, "min_severity": "high", "user_id": template["principal"]["user_id"]},
+    )
+    assert response.status_code == 200
+    assert [f["finding_id"] for f in response.json()] == ["period-new", "period-edge"]
+
+
+def test_finding_cursor_survives_new_arrivals_and_equal_timestamps(cp_view: TestClient, enrolled: Sensor) -> None:
+    replay(enrolled, "claude_code.jsonl")
+    template = cp_view.get("/v1/admin/findings", headers=VIEWER).json()[0]
+    boundary = datetime(2026, 12, 1, tzinfo=UTC)
+    documents = [dict(template, finding_id=f"page-{suffix}", ts=boundary.isoformat()) for suffix in "abcd"]
+    assert enrolled.client.post("/v1/findings", {"findings": documents})["status"] == 200
+    params = {"since": boundary.isoformat(), "limit": 2}
+    first = cp_view.get("/v1/admin/findings", params=params, headers=VIEWER).json()
+    assert [f["finding_id"] for f in first] == ["page-a", "page-b"]
+    arrivals = [
+        dict(documents[0], finding_id="page-new", ts=(boundary + timedelta(seconds=1)).isoformat()),
+        dict(documents[0], finding_id="page-aa"),
+    ]
+    assert enrolled.client.post("/v1/findings", {"findings": arrivals})["status"] == 200
+    next_page = cp_view.get(
+        "/v1/admin/findings", headers=VIEWER,
+        params={**params, "before": first[-1]["ts"], "before_id": first[-1]["finding_id"]},
+    )
+    assert next_page.status_code == 200
+    assert [f["finding_id"] for f in next_page.json()] == ["page-c", "page-d"]
+
+
+@pytest.mark.parametrize("params", [
+    {"since": "not-a-date"}, {"since": "2026-11-15T12:00:00"},
+    {"before": "2026-11-15T12:00:00Z"}, {"before_id": "f1"},
+    {"before": "2026-11-15T12:00:00", "before_id": "f1"},
+])
+def test_finding_invalid_period_and_cursor_return_422(cp_view: TestClient, params: dict[str, str]) -> None:
+    assert cp_view.get("/v1/admin/findings", params=params, headers=VIEWER).status_code == 422
+
+
 def test_built_dashboard_is_served_with_strict_headers(cp: TestClient, tmp_path) -> None:
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)

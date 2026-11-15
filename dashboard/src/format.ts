@@ -160,9 +160,9 @@ export function waitText(ms: number | null): string {
 }
 
 export type Route =
-  | { page: "overview" }
+  | { page: "overview"; query?: Record<string, string> }
   | { page: "findings"; query: Record<string, string> }
-  | { page: "finding"; id: string }
+  | { page: "finding"; id: string; query?: Record<string, string> }
   | { page: "approvals"; query: Record<string, string> }
   | { page: "inventory" }
   | { page: "timeline"; query: Record<string, string> }
@@ -173,7 +173,9 @@ export type Route =
 export function parseHash(hash: string): Route {
   const [path, qs = ""] = hash.replace(/^#/, "").split("?", 2);
   const parts = path.split("/").filter(Boolean);
-  if (parts[0] === "findings" && parts[1]) return { page: "finding", id: decodeURIComponent(parts[1]) };
+  const query = Object.fromEntries(new URLSearchParams(qs));
+  const context = qs ? { query } : {};
+  if (parts[0] === "findings" && parts[1]) return { page: "finding", id: decodeURIComponent(parts[1]), ...context };
   if (parts[0] === "findings") return { page: "findings", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "inventory") return { page: "inventory" };
   if (parts[0] === "actions") return { page: "actions" };
@@ -181,7 +183,7 @@ export function parseHash(hash: string): Route {
   if (parts[0] === "policy") return { page: "policy", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "timeline") return { page: "timeline", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "approvals") return { page: "approvals", query: Object.fromEntries(new URLSearchParams(qs)) };
-  return { page: "overview" };
+  return { page: "overview", ...context };
 }
 
 function href(path: string, query: Record<string, string | undefined>): string {
@@ -193,6 +195,35 @@ function href(path: string, query: Record<string, string | undefined>): string {
 
 export function findingsHref(query: Record<string, string | undefined> = {}): string {
   return href("findings", query);
+}
+
+export const TIME_RANGES = [["24h", "24시간"], ["7d", "7일"], ["30d", "30일"], ["all", "전체"]] as const;
+export type TimeRange = typeof TIME_RANGES[number][0];
+export const FINDING_FILTERS = ["range", "since", "severity", "min_severity", "rule_id", "user_id"] as const;
+
+export function timeRange(value: string | undefined, fallback: TimeRange = "all"): TimeRange {
+  return TIME_RANGES.some(([key]) => key === value) ? value as TimeRange : fallback;
+}
+
+export function rangeQuery(range: TimeRange, since: string | null = sinceFor(range)): Record<string, string> {
+  return since && range !== "all" ? { range, since } : { range };
+}
+
+/** Keep route context out of API requests and use a stable key for cached lists. */
+export function findingFilters(query: Record<string, string | undefined>): Record<string, string> {
+  return Object.fromEntries(FINDING_FILTERS.filter((key) => query[key]).map((key) => [key, query[key]!]));
+}
+
+export function overviewHref(query: Record<string, string | undefined> = {}): string {
+  return href("", query);
+}
+
+export function findingHref(id: string, query: Record<string, string | undefined> = {}): string {
+  return href(`findings/${encodeURIComponent(id)}`, query);
+}
+
+export function findingBackHref(query: Record<string, string>): string {
+  return query.from === "overview" ? overviewHref({ range: query.range }) : findingsHref(findingFilters(query));
 }
 
 export function timelineHref(query: Record<string, string | undefined> = {}): string {

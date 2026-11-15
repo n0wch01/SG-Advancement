@@ -16,6 +16,11 @@ import {
   clip,
   eventSummary,
   findingsHref,
+  findingBackHref,
+  findingFilters,
+  findingHref,
+  overviewHref,
+  rangeQuery,
   parseHash,
   relativeTime,
   responseText,
@@ -279,5 +284,27 @@ describe("mergeNewest", () => {
   it("keeps rows a reader loaded from later pages", () => {
     const shown = [f("z"), f("y"), f("old")];
     expect(mergeNewest(shown, [f("new"), f("z")]).map((x) => x.finding_id)).toEqual(["new", "z", "y", "old"]);
+  });
+});
+
+describe("investigation navigation", () => {
+  it("round-trips the period and filters through the finding detail", () => {
+    const query = { ...rangeQuery("7d", "2026-11-08T00:00:00Z"), min_severity: "high", user_id: "alice@corp.test", rule_id: "rule-a" };
+    const detail = findingHref("f/a", query);
+    expect(parseHash(detail)).toEqual({ page: "finding", id: "f/a", query });
+    expect(parseHash(findingBackHref(query))).toEqual({ page: "findings", query });
+  });
+
+  it("returns to the selected overview period when the finding came from overview", () => {
+    const query = { ...rangeQuery("30d", "2026-10-15T00:00:00Z"), from: "overview" };
+    expect(findingBackHref(query)).toBe(overviewHref({ range: "30d" }));
+    expect(parseHash(overviewHref({ range: "30d" }))).toEqual({ page: "overview", query: { range: "30d" } });
+  });
+
+  it("drops navigation context from list filters and treats all-time as unbounded", () => {
+    expect(findingFilters({ from: "overview", range: "7d", since: "start", user_id: "alice", extra: "ignored" }))
+      .toEqual({ range: "7d", since: "start", user_id: "alice" });
+    expect(rangeQuery("all", "2026-11-08T00:00:00Z")).toEqual({ range: "all" });
+    expect(findingBackHref({ from: "https://example.com" })).toBe("#/findings");
   });
 });

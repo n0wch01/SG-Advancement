@@ -301,7 +301,7 @@ function FatiguePanel({ api, range }: { api: Api; range: string }) {
       <ChannelTiles title="사용자 승인 (에이전트 확인 창)" s={m.user} />
       <ChannelTiles title="보안팀 승인 (콘솔)" s={m.security} />
       {candidates.length > 0 && (
-        <table className="small">
+        <div className="table-wrap"><table className="small">
           <thead>
             <tr>
               <th>자동화·룰 조정 후보</th>
@@ -322,7 +322,7 @@ function FatiguePanel({ api, range }: { api: Api; range: string }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
       )}
     </div>
   );

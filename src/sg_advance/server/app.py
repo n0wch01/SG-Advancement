@@ -16,8 +16,8 @@ from datetime import datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from .. import __version__
@@ -578,6 +578,9 @@ def list_findings(
     category: str | None = None,
     severity: Severity | None = None,
     min_severity: Severity | None = None,
+    since: AwareDatetime | None = None,
+    before: AwareDatetime | None = None,
+    before_id: str | None = None,
     limit: Limit = 100,
     offset: Offset = 0,
 ) -> list[dict[str, Any]]:
@@ -595,6 +598,15 @@ def list_findings(
             q = q.where(col == val)
     if min_severity is not None:
         q = q.where(FindingRow.severity.in_([str(s) for s in Severity if s.at_least(min_severity)]))
+    if since is not None:
+        q = q.where(FindingRow.ts >= since)
+    if (before is None) != (before_id is None):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "before and before_id are required together")
+    if before is not None:
+        # Stable pagination while newer findings arrive: timestamp descending, ID ascending.
+        q = q.where(
+            or_(FindingRow.ts < before, and_(FindingRow.ts == before, FindingRow.finding_id > before_id))
+        )
     q = q.order_by(FindingRow.ts.desc(), FindingRow.finding_id).limit(limit).offset(offset)
     return list(db.scalars(q))
 

@@ -66,26 +66,36 @@ export class Api {
   }
 
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await fetch(`/v1/admin${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      credentials: "omit",
-    });
-    if (!res.ok) {
-      let detail = res.statusText;
-      try {
-        const body = await res.json();
-        if (typeof body?.detail === "string") detail = body.detail;
-      } catch {
-        // not JSON
+    const controller = method === "GET" ? new AbortController() : undefined;
+    const timer = controller ? setTimeout(() => controller.abort(), 10_000) : undefined;
+    try {
+      const res = await fetch(`/v1/admin${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        credentials: "omit",
+        signal: controller?.signal,
+      });
+      if (!res.ok) {
+        let detail = res.statusText;
+        try {
+          const body = await res.json();
+          if (typeof body?.detail === "string") detail = body.detail;
+        } catch {
+          // not JSON
+        }
+        throw new ApiError(res.status, detail);
       }
-      throw new ApiError(res.status, detail);
+      return (await res.json()) as T;
+    } catch (error) {
+      if (controller?.signal.aborted) throw new Error("관제 서버 응답이 10초 안에 도착하지 않았습니다.");
+      throw error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
-    return (await res.json()) as T;
   }
 
   whoami() {
@@ -96,7 +106,7 @@ export class Api {
     return this.get<Summary>("/summary", { since });
   }
 
-  findings(q: { severity?: string; min_severity?: string; rule_id?: string; user_id?: string; limit?: number; offset?: number }) {
+  findings(q: { severity?: string; min_severity?: string; rule_id?: string; user_id?: string; since?: string; before?: string; before_id?: string; limit?: number; offset?: number }) {
     return this.get<Finding[]>("/findings", q);
   }
 

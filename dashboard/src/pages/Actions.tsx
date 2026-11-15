@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { ApiError, type Api } from "../api";
+import { RefreshStatus } from "../components/RefreshStatus";
 import { Empty, ErrorBox, Loading } from "../components/States";
 import { ACTION_STATUS_LABEL, REMOTE_ACTION_LABEL, activeBlocks, formatTime, relativeTime, timelineHref } from "../format";
 import type { RemoteAction, Role } from "../types";
@@ -9,28 +10,27 @@ import { REFRESH_MS, useAsync } from "../useAsync";
 const STATUS_TONE: Record<string, string> = { done: "good", failed: "bad", pending: "warn", delivered: "warn" };
 
 export function Actions({ api, role }: { api: Api; role: Role | null }) {
-  const [tick, setTick] = useState(0);
-  const { data, error, loading } = useAsync(() => api.actions(), [api, tick], REFRESH_MS);
+  const [paused, setPaused] = useState(false);
+  const result = useAsync(() => api.actions(), [api], REFRESH_MS, paused);
+  const { data, error, loading } = result;
   const admin = role === "admin";
   return (
     <section>
       <div className="page-head">
         <h1>원격 대응</h1>
-        <button className="link" onClick={() => setTick((t) => t + 1)}>
-          새로고침
-        </button>
       </div>
       <p className="muted small">
         보안팀이 장비에 보낸 대응과 결과입니다. 센서가 몇 초 안에 받아 실행하고 결과를 보고합니다. 대화·사람 차단은 게이트웨이 플러그인이 이후 툴 호출을 실행 전에
         막습니다. 실행 중단은 센서에 관리자 권한이 없어(결정 B) 다른 사람의 실행이면 실패로 기록됩니다. 새 대응은 Finding 상세에서 보냅니다.
       </p>
+      <RefreshStatus {...result} paused={paused} onTogglePause={() => setPaused((value) => !value)} onRefresh={result.refresh} />
       {error && <ErrorBox error={error} />}
       {loading && !data && <Loading />}
       {data && (
         <>
           <div className="card">
             <h2>지금 차단 중</h2>
-            <Blocks api={api} admin={admin} actions={data} onDone={() => setTick((t) => t + 1)} />
+            <Blocks api={api} admin={admin} actions={data} onDone={() => void result.refresh()} />
           </div>
           <div className="card flush">
             <table>

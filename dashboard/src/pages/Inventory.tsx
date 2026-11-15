@@ -1,4 +1,7 @@
+import { useState } from "react";
+
 import type { Api } from "../api";
+import { RefreshStatus } from "../components/RefreshStatus";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
 import { GUARD_LABEL, SEVERITIES, agentPosture, findingsHref, formatTime, reasonText, relativeTime } from "../format";
@@ -15,13 +18,16 @@ function Chip({ tone, children }: { tone: "good" | "bad" | "warn" | "neutral"; c
 }
 
 export function Inventory({ api }: { api: Api }) {
-  const { data, error, loading } = useAsync(() => api.inventory(), [api], REFRESH_MS);
+  const [paused, setPaused] = useState(false);
+  const result = useAsync(() => api.inventory(), [api], REFRESH_MS, paused);
+  const { data, error, loading } = result;
   return (
     <section>
       <div className="page-head">
         <h1>인벤토리</h1>
       </div>
       <p className="muted small">장비마다 센서가 마지막으로 보낸 상태입니다: 에이전트 설치(관리 여부), 에이전트별 구성, 설정 기준선, 설치된 코드의 무결성.</p>
+      <RefreshStatus {...result} paused={paused} onTogglePause={() => setPaused((value) => !value)} onRefresh={result.refresh} />
       {error && <ErrorBox error={error} />}
       {loading && !data && <Loading />}
       {data && data.length === 0 && <Empty>등록된 장비가 없습니다.</Empty>}
@@ -62,7 +68,7 @@ function Installs({ rows }: { rows: Snapshot[] }) {
   return (
     <>
       <h3>에이전트 설치</h3>
-      <table>
+      <div className="table-wrap"><table>
         <thead>
           <tr>
             <th>설치</th>
@@ -116,7 +122,7 @@ function Installs({ rows }: { rows: Snapshot[] }) {
             );
           })}
         </tbody>
-      </table>
+      </table></div>
     </>
   );
 }
@@ -125,7 +131,7 @@ function Agents({ rows }: { rows: Snapshot[] }) {
   return (
     <>
       <h3>에이전트</h3>
-      <table>
+      <div className="table-wrap"><table>
         <thead>
           <tr>
             <th>에이전트</th>
@@ -188,7 +194,7 @@ function Agents({ rows }: { rows: Snapshot[] }) {
             );
           })}
         </tbody>
-      </table>
+      </table></div>
     </>
   );
 }

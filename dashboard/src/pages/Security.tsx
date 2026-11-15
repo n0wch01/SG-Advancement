@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ApiError, type Api } from "../api";
+import { RefreshStatus } from "../components/RefreshStatus";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
 import {
@@ -12,6 +13,7 @@ import {
   timelineHref,
 } from "../format";
 import type { Role, SecurityApproval } from "../types";
+import { useAsync } from "../useAsync";
 
 const REFRESH_MS = 2000;
 const STATUS_TONE: Record<string, string> = { approved: "good", denied: "bad", expired: "neutral", pending: "warn" };
@@ -19,27 +21,15 @@ const STATUS_TONE: Record<string, string> = { approved: "good", denied: "bad", e
 // Security approval queue (M11, decision 2026-11-12): a rule with the "보안팀 승인" response holds the
 // tool call on the device until someone here decides; nobody within 5 minutes → denied.
 export function Security({ api, role }: { api: Api; role: Role | null }) {
-  const [rows, setRows] = useState<SecurityApproval[] | null>(null);
-  const [error, setError] = useState<Error | null>(null);
+  const [paused, setPaused] = useState(false);
+  const result = useAsync(() => api.securityApprovals(), [api], REFRESH_MS, paused);
+  const { data: rows, error } = result;
   const [now, setNow] = useState(() => new Date());
-  const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    let live = true;
-    const load = () =>
-      api
-        .securityApprovals()
-        .then((r) => live && (setRows(r), setError(null)))
-        .catch((e) => live && setError(e as Error));
-    void load();
-    const poll = setInterval(load, REFRESH_MS);
     const clock = setInterval(() => setNow(new Date()), 1000);
-    return () => {
-      live = false;
-      clearInterval(poll);
-      clearInterval(clock);
-    };
-  }, [api, tick]);
+    return () => clearInterval(clock);
+  }, []);
 
   const pending = (rows ?? []).filter((r) => r.status === "pending" && new Date(r.expires_at) > now);
   const done = (rows ?? []).filter((r) => !pending.includes(r));
@@ -52,6 +42,8 @@ export function Security({ api, role }: { api: Api; role: Role | null }) {
         룰의 대응이 "보안팀 승인"이면 툴 호출이 그 장비에서 멈추고 여기서 결정을 기다립니다. 5분 안에 아무도 결정하지 않으면 거부됩니다.
         결정은 1~2초 안에 장비에 닿습니다. 어떤 룰을 보안팀 승인으로 둘지는 정책 화면에서 정합니다.
       </p>
+      <RefreshStatus {...result} paused={paused} onTogglePause={() => setPaused((value) => !value)} onRefresh={result.refresh} intervalMs={REFRESH_MS} />
+      {paused && <p className="muted small">화면의 자동 갱신만 멈춥니다. 승인 요청의 남은 시간은 계속 줄어듭니다.</p>}
       {error && <ErrorBox error={error} />}
       {!rows && !error && <Loading />}
       {rows && (
@@ -63,7 +55,7 @@ export function Security({ api, role }: { api: Api; role: Role | null }) {
             </div>
           )}
           {pending.map((r) => (
-            <Pending key={r.id} api={api} r={r} now={now} admin={role === "admin"} onDone={() => setTick((t) => t + 1)} />
+            <Pending key={r.id} api={api} r={r} now={now} admin={role === "admin"} onDone={() => void result.refresh()} />
           ))}
           <h2>최근 결정</h2>
           <div className="card flush">

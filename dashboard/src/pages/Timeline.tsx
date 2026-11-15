@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type { Api } from "../api";
+import { RefreshStatus } from "../components/RefreshStatus";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
 import { eventSummary, formatTime, sessionTree, shortSession, timelineHref } from "../format";
@@ -40,7 +41,7 @@ function ScopeForm({ query, api }: { query: Record<string, string>; api: Api }) 
       className="filters"
       onSubmit={(e) => {
         e.preventDefault();
-        window.location.hash = timelineHref({ user_id: user.trim() || undefined, session_id: session.trim() || undefined });
+        window.location.hash = timelineHref({ range: query.range, since: query.since, user_id: user.trim() || undefined, session_id: session.trim() || undefined });
       }}
     >
       <label>
@@ -62,35 +63,41 @@ function ScopeForm({ query, api }: { query: Record<string, string>; api: Api }) 
 }
 
 function TimelineBody({ api, query }: { api: Api; query: Record<string, string> }) {
-  const { data, error, loading } = useAsync(
-    () => api.timeline({ user_id: query.user_id, session_id: query.session_id }),
-    [api, query.user_id, query.session_id],
-    REFRESH_MS,
+  const [paused, setPaused] = useState(false);
+  const result = useAsync(
+    () => api.timeline({ user_id: query.user_id, session_id: query.session_id, since: query.since }),
+    [api, query.user_id, query.session_id, query.since],
+    REFRESH_MS, paused,
   );
+  const { data, error, loading } = result;
   const [focus, setFocus] = useState<string | null>(null);
   const [onlyFindings, setOnlyFindings] = useState(false);
   useEffect(() => setFocus(null), [query.user_id, query.session_id]);
-  if (error) return <ErrorBox error={error} />;
-  if (loading && !data) return <Loading />;
-  if (!data) return null;
-  if (data.events.length === 0 && data.findings.length === 0) return <Empty>이 범위의 활동이 없습니다.</Empty>;
   return (
-    <div className="timeline-layout">
-      <SessionTree data={data} focus={focus} setFocus={setFocus} />
-      <div className="card">
-        <div className="timeline-head">
-          <h2>
-            {query.session_id ? `대화 ${shortSession(query.session_id)}와 위임된 대화` : `${query.user_id}의 활동`}
-            {focus && <span className="muted small"> · {shortSession(focus)}만</span>}
-          </h2>
-          <label className="small check">
-            <input type="checkbox" checked={onlyFindings} onChange={(e) => setOnlyFindings(e.target.checked)} /> Finding만
-          </label>
+    <>
+      {query.since && <p className="filter-period muted small">조회 시작 시각: {formatTime(query.since)}</p>}
+      <RefreshStatus {...result} paused={paused} onTogglePause={() => setPaused((value) => !value)} onRefresh={result.refresh} />
+      {error && <ErrorBox error={error} />}
+      {loading && !data && <Loading />}
+      {data && (data.events.length === 0 && data.findings.length === 0 ? <Empty>이 범위의 활동이 없습니다.</Empty> : (
+        <div className="timeline-layout">
+          <SessionTree data={data} focus={focus} setFocus={setFocus} />
+          <div className="card">
+            <div className="timeline-head">
+              <h2>
+                {query.session_id ? `대화 ${shortSession(query.session_id)}와 위임된 대화` : `${query.user_id}의 활동`}
+                {focus && <span className="muted small"> · {shortSession(focus)}만</span>}
+              </h2>
+              <label className="small check">
+                <input type="checkbox" checked={onlyFindings} onChange={(e) => setOnlyFindings(e.target.checked)} /> Finding만
+              </label>
+            </div>
+            {data.truncated && <p className="muted small">최근 활동만 보여 줍니다(범위를 좁히면 더 볼 수 있습니다).</p>}
+            <Items data={data} focus={focus} onlyFindings={onlyFindings} />
+          </div>
         </div>
-        {data.truncated && <p className="muted small">최근 활동만 보여 줍니다(범위를 좁히면 더 볼 수 있습니다).</p>}
-        <Items data={data} focus={focus} onlyFindings={onlyFindings} />
-      </div>
-    </div>
+      ))}
+    </>
   );
 }
 

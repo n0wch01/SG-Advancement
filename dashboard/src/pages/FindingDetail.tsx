@@ -1,6 +1,8 @@
 import { useState } from "react";
 
 import { ApiError, type Api } from "../api";
+import { Icon } from "../components/Icon";
+import { ResponseBadge } from "../components/ResponseBadge";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
 import {
@@ -9,75 +11,99 @@ import {
   REMOTE_ACTION_LABEL,
   campaignPeople,
   eventSummary,
+  findingBackHref,
+  findingFilters,
+  findingHref,
   findingsHref,
   formatTime,
   lineageFlow,
   relativeTime,
-  responseText,
   timelineHref,
 } from "../format";
 import type { AgentEvent, FindingDetail as Detail, Finding, Role } from "../types";
 import { useAsync } from "../useAsync";
 
-export function FindingDetail({ api, id, role }: { api: Api; id: string; role: Role | null }) {
+export function FindingDetail({ api, id, role, query }: { api: Api; id: string; role: Role | null; query: Record<string, string> }) {
   const { data, error, loading } = useAsync(() => api.finding(id), [api, id]);
   return (
-    <section>
-      <p>
-        <a href="#/findings">← Finding 목록</a>
-      </p>
+    <section className="finding-detail">
+      <a className="back-link" href={findingBackHref(query)}><Icon name="arrow" />{query.from === "overview" ? "개요로" : "탐지 목록으로"}</a>
       {error && <ErrorBox error={error} />}
       {loading && !data && <Loading />}
-      {data && <DetailBody d={data} />}
+      {data && <DetailBody d={data} query={query} />}
       {data && data.finding.rule_id !== CAMPAIGN_RULE && role === "admin" && <Respond api={api} f={data.finding} />}
     </section>
   );
 }
 
-function DetailBody({ d }: { d: Detail }) {
+function DetailBody({ d, query }: { d: Detail; query: Record<string, string> }) {
   const f = d.finding;
   const evidence = new Set(f.evidence_event_ids);
+  const filters = findingFilters(query);
   return (
     <>
-      <div className="page-head">
-        <h1>
-          <SeverityBadge severity={f.severity} /> {f.title}
-        </h1>
+      <div className="finding-heading">
+        <p className="eyebrow">Finding investigation <SeverityBadge severity={f.severity} /></p>
+        <h1>{f.title}</h1>
+        <div className="finding-meta"><time dateTime={f.ts}>{formatTime(f.ts)}</time><span className="mono">{f.finding_id}</span></div>
       </div>
 
       {(d.campaigns ?? []).map((c) => (
         <p key={c.finding_id} className="notice" role="note">
           <span className="chip chip-bad">캠페인</span> 같은 지표가 {c.labels.people_count}명 이상에게 나타난 캠페인의 일부입니다.{" "}
-          <a href={`#/findings/${encodeURIComponent(c.finding_id)}`}>캠페인 보기 →</a>
+          <a href={findingHref(c.finding_id, query)}>캠페인 보기 →</a>
         </p>
       ))}
-      {f.rule_id === CAMPAIGN_RULE && <Campaign f={f} members={d.campaign_members ?? []} />}
-      <DataFlow d={d} />
+      {f.rule_id === CAMPAIGN_RULE && <Campaign f={f} members={d.campaign_members ?? []} query={query} />}
+      <ol className="investigation-trace" aria-label="사람, 에이전트, 적용 정책과 실제 결과">
+        <li><span className="trace-label"><Icon name="user" />사람</span><a className="trace-value" href={timelineHref({ range: filters.range, since: filters.since, user_id: f.principal.user_id })}>{f.principal.user_id}</a></li>
+        <li><span className="trace-label"><Icon name="activity" />에이전트</span><span className="trace-value">{f.agent.type}</span></li>
+        <li><span className="trace-label"><Icon name="policy" />적용 정책</span><a className="trace-value mono" href={findingsHref({ ...filters, rule_id: f.rule_id })}>{f.rule_id}</a></li>
+        <li><span className="trace-label"><Icon name="shield" />실행 결과</span><ResponseBadge response={f.response} /></li>
+      </ol>
 
-      <div className="grid-2">
-        <div className="card">
-          <h2>무슨 일인가</h2>
-          <p>{f.message}</p>
-          {f.explanation && <p className="muted">{f.explanation}</p>}
-          <h3>권장 조치</h3>
-          <p>{f.recommended_action || "-"}</p>
+      <div className="investigation-layout">
+        <div className="investigation-story">
+          <section className="card">
+            <div className="card-heading"><div><p className="eyebrow">What happened</p><h2>무슨 일이 있었나요?</h2></div></div>
+            <p className="story-summary">{f.message}</p>
+            {f.explanation && <p className="muted small">{f.explanation}</p>}
+            <div className="recommended-action"><h3>권장 조치</h3><p>{f.recommended_action || "등록된 권장 조치가 없습니다."}</p></div>
+          </section>
+          <DataFlow d={d} />
+          <section className="card">
+            <div className="card-heading"><div><p className="eyebrow">Event trace</p><h2>같은 대화의 행동 흐름</h2></div><span className="muted small">이 탐지까지 · 오래된 순</span></div>
+            {d.session_events.length === 0 ? <Empty>이 대화의 다른 이벤트가 없습니다.</Empty> : <ol className="investigation-events">
+              {d.session_events.map((e) => <li key={e.event_id} className={evidence.has(e.event_id) ? "hit" : ""}>
+                <time dateTime={e.ts} title={formatTime(e.ts)}>{formatTime(e.ts).slice(11)}</time>
+                <div><span className="kind mono">{e.payload.kind}</span><p>{eventSummary(e)}</p></div>
+                {evidence.has(e.event_id) && <span className="chip chip-neutral">증거</span>}
+              </li>)}
+            </ol>}
+          </section>
+          <section className="card">
+            <div className="card-heading"><div><p className="eyebrow">Evidence</p><h2>증거 이벤트</h2></div><span className="muted small">{d.evidence.length}건</span></div>
+            <p className="muted small">센서가 비밀값을 마스킹한 기록입니다. 이벤트를 펼치면 원본 필드를 볼 수 있습니다.</p>
+            {d.evidence.length === 0 ? <Empty>연결된 이벤트가 없습니다.</Empty> : d.evidence.map((e) => <EventCard key={e.event_id} e={e} />)}
+          </section>
         </div>
-        <div className="card">
-          <h2>근거</h2>
+        <aside className="investigation-context" aria-label="조사 정보">
+        <section className="card">
+          <div className="card-heading"><h2>조사 정보</h2></div>
           <dl className="facts">
             <dt>시각</dt>
             <dd>{formatTime(f.ts)}</dd>
             <dt>룰</dt>
             <dd>
-              <a className="mono" href={findingsHref({ rule_id: f.rule_id })}>
+              <a className="mono" href={findingsHref({ ...filters, rule_id: f.rule_id })}>
                 {f.rule_id}
               </a>
               {f.category && <span className="muted"> · {f.category}</span>}
             </dd>
             <dt>사람</dt>
             <dd>
-              <a href={findingsHref({ user_id: f.principal.user_id })}>{f.principal.user_id}</a>
-              <a className="small side" href={timelineHref({ user_id: f.principal.user_id })}>
+              <a href={findingsHref({ ...filters, user_id: f.principal.user_id })}>{f.principal.user_id}</a>
+              <a className="small side" href={timelineHref({ range: filters.range, since: filters.since, user_id: f.principal.user_id })}>
                 타임라인
               </a>
             </dd>
@@ -89,7 +115,7 @@ function DetailBody({ d }: { d: Detail }) {
             <dt>에이전트 · 대화</dt>
             <dd className="mono small">
               {f.agent.type} · {f.agent.session_id}
-              <a className="side" href={timelineHref({ session_id: f.agent.root_session_id ?? f.agent.session_id })}>
+              <a className="side" href={timelineHref({ range: filters.range, since: filters.since, session_id: f.agent.root_session_id ?? f.agent.session_id })}>
                 대화 타임라인
               </a>
               {f.agent.parent_session_id && (
@@ -100,7 +126,7 @@ function DetailBody({ d }: { d: Detail }) {
             </dd>
             <dt>대응</dt>
             <dd>
-              {responseText(f.response)}
+              <ResponseBadge response={f.response} />
               {f.response?.detail && <div className="muted small">{f.response.detail}</div>}
               {f.response?.evidence && <div className="muted small">근거: {f.response.evidence}</div>}
             </dd>
@@ -117,53 +143,31 @@ function DetailBody({ d }: { d: Detail }) {
               </>
             )}
           </dl>
-        </div>
-      </div>
-
-      <div className="card">
-        <h2>증거 이벤트</h2>
-        <p className="muted small">센서가 엔드포인트에서 비밀값을 마스킹한 뒤 보낸 그대로입니다.</p>
-        {d.evidence.length === 0 ? <Empty>연결된 이벤트가 없습니다.</Empty> : d.evidence.map((e) => <EventCard key={e.event_id} e={e} open />)}
-      </div>
-
-      <div className="card">
-        <h2>같은 대화의 흐름 (이 Finding까지, 오래된 순)</h2>
-        {d.session_events.length === 0 ? (
-          <Empty>이 대화의 다른 이벤트가 없습니다.</Empty>
-        ) : (
-          <ol className="timeline">
-            {d.session_events.map((e) => (
-              <li key={e.event_id} className={evidence.has(e.event_id) ? "hit" : ""}>
-                <span className="mono muted small">{formatTime(e.ts).slice(11)}</span>
-                <span className="kind mono small">{e.payload.kind}</span>
-                <span>{eventSummary(e)}</span>
-                {evidence.has(e.event_id) && <span className="tag">증거</span>}
-              </li>
-            ))}
-          </ol>
-        )}
-      </div>
+        </section>
 
       {d.session_findings.length > 0 && (
-        <div className="card">
-          <h2>같은 대화의 다른 Finding</h2>
+        <section className="card">
+          <h2>같은 대화의 다른 탐지</h2>
           <ul className="feed">
             {d.session_findings.map((x) => (
               <li key={x.finding_id}>
                 <SeverityBadge severity={x.severity} />
-                <a href={`#/findings/${encodeURIComponent(x.finding_id)}`}>{x.title}</a>
+                <a href={findingHref(x.finding_id, query)}>{x.title}</a>
                 <span className="muted">{formatTime(x.ts)}</span>
               </li>
             ))}
           </ul>
-        </div>
+        </section>
       )}
+        </aside>
+      </div>
     </>
   );
 }
 
 // Campaign (M11): who got the same indicator, on which device, and where to respond for each person.
-function Campaign({ f, members }: { f: Finding; members: Finding[] }) {
+function Campaign({ f, members, query }: { f: Finding; members: Finding[]; query: Record<string, string> }) {
+  const filters = findingFilters(query);
   const people = campaignPeople(members);
   const raised = Number(f.labels.people_count ?? 0);
   return (
@@ -172,7 +176,7 @@ function Campaign({ f, members }: { f: Finding; members: Finding[] }) {
       <dl className="facts">
         <dt>원래 룰</dt>
         <dd>
-          <a className="mono" href={findingsHref({ rule_id: f.labels.source_rule })}>
+          <a className="mono" href={findingsHref({ ...filters, rule_id: f.labels.source_rule })}>
             {f.labels.source_rule}
           </a>
         </dd>
@@ -188,7 +192,7 @@ function Campaign({ f, members }: { f: Finding; members: Finding[] }) {
         관제 서버가 24시간 안에 서로 다른 사람 3명 이상에게서 같은 룰·같은 지표를 보고 만든 Finding입니다. 차단은 사람마다 그 사람의 Finding에서
         보냅니다(Finding이 나온 장비로 가야 효과가 있습니다).
       </p>
-      <table>
+      <div className="table-wrap"><table>
         <thead>
           <tr>
             <th>사람</th>
@@ -205,7 +209,7 @@ function Campaign({ f, members }: { f: Finding; members: Finding[] }) {
               <tr key={p.user_id}>
                 <td>
                   {p.user_id}
-                  <a className="small side" href={timelineHref({ user_id: p.user_id })}>
+                  <a className="small side" href={timelineHref({ range: filters.range, since: filters.since, user_id: p.user_id })}>
                     타임라인
                   </a>
                 </td>
@@ -215,13 +219,13 @@ function Campaign({ f, members }: { f: Finding; members: Finding[] }) {
                   {p.findings.length > 1 && ` · ${relativeTime(last.ts)} (${p.findings.length}건)`}
                 </td>
                 <td className="small">
-                  <a href={`#/findings/${encodeURIComponent(last.finding_id)}`}>Finding에서 대응 →</a>
+                  <a href={findingHref(last.finding_id, query)}>Finding에서 대응 →</a>
                 </td>
               </tr>
             );
           })}
         </tbody>
-      </table>
+      </table></div>
     </div>
   );
 }
@@ -320,12 +324,12 @@ function DataFlow({ d }: { d: Detail }) {
   const steps = lineageFlow(d.finding, d.evidence);
   if (!steps) return null;
   return (
-    <div className="card">
-      <h2>데이터 흐름</h2>
+    <section className="card">
+      <div className="card-heading"><div><p className="eyebrow">Data lineage</p><h2>데이터가 이동한 경로</h2></div></div>
       <p className="muted small">테스트 DB에서 조회한 보호 데이터가 어디로 가려 했는지. 값은 PC 밖으로 보내지 않아 가려져 있습니다.</p>
       <ol className="flow">
         {steps.map((s, i) => (
-          <li key={`${s.key}-${i}`} className={`flow-${s.key}`}>
+          <li key={`${s.key}-${i}`} className={`flow-${s.key}`} data-confirmation={s.key === "result" ? d.finding.response?.confirmation : undefined}>
             <strong>{s.title}</strong>
             {s.lines.map((l) => (
               <div key={l} className="small">
@@ -336,6 +340,6 @@ function DataFlow({ d }: { d: Detail }) {
           </li>
         ))}
       </ol>
-    </div>
+    </section>
   );
 }
