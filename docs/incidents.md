@@ -15,7 +15,7 @@ AI 에이전트에서 실제로 일어난 사건을 [위협 모델](threat-model
 | [Supabase MCP + Cursor](#supabase-mcp--cursor) | 2025.07 | T1, T16 | 인젝션 패턴, 툴 인자 속 비밀값 | 비밀값 형식이 아닌 데이터 |
 | [Replit DB 삭제](#replit-운영-db-삭제) | 2025.07 | T17 | 파괴적 셸 명령, `destructive-sql` | 사용자 지시 위반 |
 | [Amazon Q 확장 오염](#amazon-q-vs-code-확장-오염) | 2025.07 | T2, T17 | 파괴적 셸 명령, `destructive-cloud-command` | 에이전트 확장 자체의 변조 |
-| [Nx s1ngularity](#nx-s1ngularity) | 2025.08 | T15 | 민감 파일 접근, `agent-unattended-safety-bypass` | 센서가 실행 방식을 수집해야 함 (M6) |
+| [Nx s1ngularity](#nx-s1ngularity) | 2025.08 | T15 | 민감 파일 접근, `agent-unattended-safety-bypass`, `agent-unattended-bypass-tool-call` | Claude Code hook이 실행 방식을 수집 (2026-11-15) |
 | [postmark-mcp](#postmark-mcp) | 2025.09 | T3, T4 | 미허가 MCP 서버, 외부 호스트 | 허가된 서버가 나중에 악성화 |
 | [GTG-1002](#gtg-1002) | 2025.11 | T14 | 빈도 룰, 민감 파일 | 악의적 사용자 자신 |
 | [OpenClaw ClawHavoc](#openclaw-clawhavoc와-cve-2026-25253) | 2026.01~02 | T2 | 미허가 플러그인 설치·호출 (S1) | 허용 목록 밖은 다 막지만, 허용된 스킬의 악성 업데이트 |

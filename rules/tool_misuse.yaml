@@ -208,6 +208,28 @@ rules:
       fields: [payload.permission_mode]
       pattern: 'bypass|yolo|dangerous|full-auto|trust-all'
 
+  # T15를 실행 직전에 막는다. 위 두 룰은 session.start를 보는데, Claude Code의 SessionStart는 막을 수 없고
+  # 입력에 permission_mode도 없다(2026-11-15 확인. hook이 실행 플래그로 채우지만 설정 defaultMode로 켠 경우는 못 본다).
+  # PreToolUse에는 Claude Code가 permission_mode를 넣고, hook이 실행 방식(CLAUDE_CODE_SESSION_ATTENDED,
+  # CLAUDE_CODE_ENTRYPOINT)을 sga_attended로 붙인다. 사람이 없으니 승인받을 사람도 없다 → 읽기까지 모든 툴 호출 차단.
+  # 오탐 주의: CI·자동화에서 claude -p --dangerously-skip-permissions를 쓰는 정상 사용도 막힌다. 그런 장비·그룹은
+  #   M9 정책 예외로 푼다. auto 모드(분류기가 판단)와 정보가 없는 경우(sga_attended 없음)는 걸지 않는다.
+  # 미탐 주의: 악성 프로그램이 claude를 띄우며 CLAUDE_CODE_SESSION_ATTENDED=1을 미리 넣으면 사람이 있는 것으로 보인다
+  #   (Claude Code가 그 값을 덮어쓰는지 확인 못 함). 그 경우 session.start의 parent_process로 사후 확인한다.
+  - id: agent-unattended-bypass-tool-call
+    severity: critical
+    category: policy_violation
+    title: 사람 없이 권한 확인을 끈 에이전트의 툴 호출
+    message: 터미널에 사람이 없는 상태에서 툴 실행 확인을 끈 에이전트가 툴을 실행하려 해 차단했습니다. 악성코드가 에이전트를 대신 실행하는 패턴입니다.
+    recommended_action: 이 대화를 시작한 프로세스(session.start의 parent_process)를 확인하세요. CI가 아니라면 장비를 점검하세요.
+    response: block
+    tags: ["action-independent", owasp-llm:LLM06, incident:nx-s1ngularity-2025]
+    when: {payload.kind: tool.call, labels.sga_attended: "false"}
+    match:
+      type: regex
+      fields: [labels.sga_permission_mode]
+      pattern: '^bypassPermissions$'
+
   # M5c. 게이트웨이 플러그인(before_tool_call)이 동작 중인데 판정 기록 없이 실행된 툴 호출.
   # 센서의 WebSocket 어댑터가 플러그인이 최근에 연결된 동안에만 라벨을 붙인다(docs/sensor.md).
   # 오탐 주의: 플러그인이 다루지 않는 실행 경로(예: Codex 네이티브 툴 중 hook 릴레이가 없는 것)도 걸린다.

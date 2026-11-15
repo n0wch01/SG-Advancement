@@ -162,5 +162,5 @@ uv run pytest tests/test_rule_cases.py     # 방금 추가한 케이스가 실�
   2026-11-13 수정 전에는 `echo 'DELETE FROM …'`, `grep 'DROP TABLE'`, 커밋 메시지 속 SQL도 걸렸다. 목록에 없는 클라이언트나 스크립트(`python -c "…execute('DELETE …')"`)는 놓친다(미탐).
   여러 문장을 파일로 쓰는 히어독(`cat > x.sql <<EOF … ; DROP TABLE …`)은 걸린다(오탐).
 - `destructive-cloud-command`: `gcloud`/`az`의 delete는 범위가 넓어 아직 넣지 않았다(미탐). 단일 자원 삭제(`kubectl delete pod`)도 뺐다.
-- `agent-safety-bypass`, `agent-unattended-safety-bypass`: 샌드박스나 CI에서 일부러 확인을 끄는 정상 사용이 있다. 그룹별 예외는 M9 정책에서 다룬다. 센서가 `permission_mode`를 채우지 않으면 아예 동작하지 않는다.
+- `agent-safety-bypass`, `agent-unattended-safety-bypass`: 샌드박스나 CI에서 일부러 확인을 끄는 정상 사용이 있다. 그룹별 예외는 M9 정책에서 다룬다. Claude Code는 hook이 실행 인자와 `CLAUDE_CODE_SESSION_ATTENDED`로 채운다(설정 `defaultMode`로만 켠 경우 세션 시작에서는 못 본다). 실제 차단은 툴 호출의 `agent-unattended-bypass-tool-call`이 한다.
 - 허용목록은 아직 룰 파일에 직접 적혀 있다. M9에서 중앙 정책(그룹별 대상, 버전)으로 옮긴다.

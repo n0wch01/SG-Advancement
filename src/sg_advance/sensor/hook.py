@@ -24,9 +24,11 @@ import json
 import os
 import re
 import socket
+import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -62,6 +64,107 @@ def _preview(value: Any) -> str:
     return _text(value)[:PREVIEW_MAX]
 
 
+# ── how the agent was launched (T15: Nx "s1ngularity" drove agent CLIs with checks off) ─────────
+
+_ATTENDED_ENTRYPOINTS = frozenset({"cli", "claude-vscode", "claude-desktop", "claude-jetbrains"})
+
+
+def attended(env: Mapping[str, str] | None = None) -> bool | None:
+    """Is a person at this session? From what Claude Code puts in every hook's environment
+    (live 2026-11-15: ``claude -p`` → SESSION_ATTENDED=0, ENTRYPOINT=sdk-cli; the VS Code
+    extension → 1, claude-vscode). ``None`` when Claude Code says neither."""
+    env = os.environ if env is None else env
+    flag = env.get("CLAUDE_CODE_SESSION_ATTENDED")
+    if flag in ("0", "1"):
+        return flag == "1"
+    entry = env.get("CLAUDE_CODE_ENTRYPOINT") or ""
+    if entry.startswith("sdk-"):  # claude -p, Agent SDK programs: another program drives it
+        return False
+    return True if entry in _ATTENDED_ENTRYPOINTS else None
+
+
+def mode_from_argv(argv: Sequence[str]) -> str | None:
+    """Permission mode set by launch flags. Exact argv elements only: a prompt that merely
+    mentions a flag is one element with spaces and never matches."""
+    for i, arg in enumerate(argv):
+        if arg == "--dangerously-skip-permissions":
+            return "bypassPermissions"
+        if arg == "--permission-mode" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--permission-mode="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _proc_argv(pid: int) -> list[str] | None:
+    if sys.platform.startswith("linux"):
+        try:
+            raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+        except OSError:
+            return None
+        return [a.decode(errors="replace") for a in raw.split(b"\0") if a]
+    if sys.platform == "darwin":
+        return _darwin_argv(pid)
+    return None
+
+
+def _darwin_argv(pid: int) -> list[str] | None:
+    """KERN_PROCARGS2: argc (int32), the exec path, NUL padding, then argc NUL-terminated args."""
+    import ctypes
+    import ctypes.util
+
+    try:
+        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+        mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2
+        size = ctypes.c_size_t(0)
+        if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0 or not size.value:
+            return None
+        buf = ctypes.create_string_buffer(size.value)
+        if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+            return None
+        raw = buf.raw[: size.value]
+        argc = int.from_bytes(raw[:4], sys.byteorder)
+        rest = raw[4:].split(b"\0")
+        args = [a for a in rest[1:] if a][:argc]  # skip the exec path and its padding
+        return [a.decode(errors="replace") for a in args]
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
+def _parent_name(pid: int) -> str | None:
+    try:
+        if sys.platform.startswith("linux"):
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            ppid = int(stat.rsplit(")", 1)[1].split()[1])
+            return Path(f"/proc/{ppid}/comm").read_text().strip() or None
+        if sys.platform == "darwin":
+            ppid = int(_ps("ppid=", pid))
+            return Path(_ps("comm=", ppid)).name or None
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None
+    return None
+
+
+def _ps(field: str, pid: int) -> str:
+    out = subprocess.run(["ps", "-o", field, "-p", str(pid)], capture_output=True, text=True, timeout=2)
+    return out.stdout.strip()
+
+
+def launch_info() -> dict[str, Any]:
+    """The Claude Code process (CLAUDE_PID, else the hook's parent): its launch flags and what
+    started it. Read from the OS, not from anything the model wrote. Best effort; Windows: none."""
+    try:
+        pid = int(os.environ.get("CLAUDE_PID") or os.getppid())
+    except ValueError:
+        pid = os.getppid()
+    info: dict[str, Any] = {}
+    if (argv := _proc_argv(pid)) is not None:
+        info["argv"] = argv
+    if parent := _parent_name(pid):
+        info["parent_process"] = parent
+    return info
+
+
 def hook_event(inp: dict[str, Any], *, user_id: str, hostname: str | None) -> dict[str, Any] | None:
     name = inp.get("hook_event_name")
     tool = str(inp.get("tool_name") or "unknown")
@@ -93,11 +196,19 @@ def hook_event(inp: dict[str, Any], *, user_id: str, hostname: str | None) -> di
     elif name == "UserPromptSubmit":
         payload = {"kind": "prompt.user", "text": str(inp.get("prompt") or "")}
     elif name == "SessionStart":
+        # The SessionStart input carries no permission_mode (live 2026-11-15): take it from the launch
+        # flags. A mode set only in settings (defaultMode) is not seen here; the tool-call rule
+        # (agent-unattended-bypass-tool-call) and the config check (claude-code-bypass-default) are.
+        launch = launch_info()
         payload = {
             "kind": "session.start",
             "reason": inp.get("source"),
-            "permission_mode": inp.get("permission_mode"),
+            "permission_mode": inp.get("permission_mode") or mode_from_argv(launch.get("argv") or []),
         }
+        if (person := attended()) is not None:
+            payload["interactive"] = person
+        if launch.get("parent_process"):
+            payload["parent_process"] = launch["parent_process"]
     elif name == "SessionEnd":
         payload = {"kind": "session.end", "reason": inp.get("reason")}
     else:
@@ -108,6 +219,9 @@ def hook_event(inp: dict[str, Any], *, user_id: str, hostname: str | None) -> di
         labels["sga_result_uninspected"] = "too_large"
     if isinstance(inp.get("permission_mode"), str):
         labels["claude_code.permission_mode"] = inp["permission_mode"]
+        labels["sga_permission_mode"] = inp["permission_mode"]  # rules cannot reach dotted keys
+    if (person := attended()) is not None:
+        labels["sga_attended"] = "true" if person else "false"
     session = str(inp.get("session_id") or "unknown")
     agent: dict[str, Any] = {"type": "claude_code", "session_id": session}
     if isinstance(inp.get("agent_type"), str):
@@ -211,6 +325,19 @@ def fallback(event: dict[str, Any]) -> dict[str, Any]:
     is blocked. Fail closed (CLAUDE.md, 2026-11-13): a failure is never passed on to the person's
     approval. Tool results pass unjudged (they cannot be withheld without a policy): recorded as such."""
     p = event["payload"]
+    labels = event.get("labels") or {}
+    if (
+        p["kind"] == "tool.call"
+        and labels.get("sga_attended") == "false"
+        and labels.get("sga_permission_mode") == "bypassPermissions"
+    ):  # agent-unattended-bypass-tool-call without a policy: nobody to ask, reads included
+        return {
+            "ok": True,
+            "decision": "block",
+            "judged_by": "fallback",
+            "reason": "SG-Advance: no person is at this session and permission checks are off, "
+            "so no tool runs while the security sensor is unavailable.",
+        }
     if p["kind"] != "tool.call" or p["tool"] in READ_ONLY_TOOLS:
         return {"ok": True, "decision": "allow", "judged_by": "fallback"}
     return {

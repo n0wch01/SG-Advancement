@@ -573,12 +573,31 @@ Claude Code ─ PreToolUse 등 hook (JSON stdin) ─▶ sga-hook ─▶ 로컬 �
 | `PreToolUse` | `tool.call` (MCP 툴 `mcp__<서버>__<툴>`은 provider mcp) | block → `deny`(사유 표시), require_approval → `ask`(Claude Code 확인 창), security_approval → 보안팀 결정까지 대기 후 allow/deny, allow → **아무 말 안 함**(Claude Code 자체 권한 규칙이 그대로 결정: hook이 권한을 넓히지 않음) |
 | `PostToolUse` / `PostToolUseFailure` | `tool.result` | 기록. `ask`로 넘긴 호출의 결과가 오면 사람이 승인한 것: `approval.resolved`(`labels.sga_approval_inferred`) |
 | `UserPromptSubmit` | `prompt.user` | 차단 판정이면 프롬프트를 멈춤(exit 2) |
-| `SessionStart` / `SessionEnd` | `session.start`(권한 모드 포함) / `session.end` | 기록. 우회 모드로 시작하면 `agent-safety-bypass` |
+| `SessionStart` / `SessionEnd` | `session.start`(권한 모드, 사람 유무 `interactive`, 실행한 프로그램 `parent_process`) / `session.end` | 기록. 우회 모드로 시작하면 `agent-safety-bypass`, 사람 없이 우회 모드면 `agent-unattended-safety-bypass` |
 
 - **`sga-hook`은 가볍다**: 툴 호출마다 프로세스가 뜨므로 표준 라이브러리만 쓴다(가져오기 10ms, 데몬 판정 2~3ms, Mac 기준 전체 0.13~0.15초).
 - **데몬이 없으면**: 서명된 정책 캐시로 판정하고 이벤트를 전송 대기열에 넣는다(`labels.sga_verdict = degraded`). 캐시도 없으면 읽기 전용 툴만 통과,
   나머지는 `ask`. PreToolUse hook은 `onFailure: block`이라 hook 자체가 없어지거나 깨지면 툴이 막힌다.
 - 거부한 `ask`는 결과가 없어서 "버려진 호출"과 구별되지 않는다(승인만 기록).
+
+### 사람 없이 확인을 끈 실행 (T15, 2026-11-15)
+
+악성코드가 설치된 에이전트 CLI를 확인을 끈 채 대신 실행하는 경우다(Nx s1ngularity, [incidents.md](incidents.md)). hook은 아래 값을 Claude Code와 OS에서 읽는다. 모델이 쓴 값은 쓰지 않는다.
+
+| 값 | 어디서 | 붙는 곳 |
+|---|---|---|
+| 사람 유무 | Claude Code가 모든 hook 환경에 넣는 `CLAUDE_CODE_SESSION_ATTENDED`(`claude -p`이면 0, VS Code 확장이면 1). 없으면 `CLAUDE_CODE_ENTRYPOINT`(`sdk-*`이면 사람 없음, `cli`·`claude-vscode`이면 있음). 둘 다 없으면 모름 | 모든 이벤트의 `labels.sga_attended`, `session.start`의 `interactive` |
+| 권한 모드 | 툴 호출: Claude Code가 hook 입력에 넣는 `permission_mode`. 세션 시작: 입력에 없어서(2026-11-15 확인) Claude Code 프로세스의 실행 인자(`--dangerously-skip-permissions`, `--permission-mode`)에서 읽음 | `labels.sga_permission_mode`, `session.start`의 `permission_mode` |
+| 실행한 프로그램 | Claude Code 프로세스(`CLAUDE_PID`)의 부모 이름. Linux는 `/proc`, macOS는 `sysctl`·`ps`. Windows는 읽지 않음 | `session.start`의 `parent_process` |
+
+- 실행 인자는 인자 단위로 읽는다. 그래서 프롬프트에 플래그 글자가 들어 있어도 플래그로 보지 않는다.
+- 세션 시작은 hook이 막을 수 없다. 그래서 실제 차단은 툴 호출에서 한다. `agent-unattended-bypass-tool-call`(block)은 사람이 없고 `bypassPermissions`이면 읽기까지 모든 툴 호출을 막는다.
+  - 승인해 줄 사람이 없기 때문이다.
+  - 데몬이 없어도 같다. 캐시 정책으로 판정하고, 정책이 아예 없어도 비상 판정에서 막는다.
+- 실환경(2026-11-15, Mac):
+  - `claude -p`의 SessionStart hook 환경에서 `ATTENDED=0`과 `ENTRYPOINT=sdk-cli`를 확인했다.
+  - 실제 `sga-hook`에 데몬 경로, 캐시 정책 경로, 정책 없는 경로 세 가지로 넣어 보았다. 사람이 없고 확인을 끈 Read는 `deny`였고, 사람이 있거나 `default`·`auto` 모드이면 통과했다.
+  - 확인을 끈 실제 `claude -p` 실행은 시험하지 않았다(이 작업 환경에서 허용되지 않음). 노트북 실설치에서 확인한다.
 
 ### 설치 (`sga-sensor claude-code install`)
 

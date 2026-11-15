@@ -65,6 +65,70 @@ def test_hook_input_maps_to_agent_events() -> None:
     assert hook.hook_event({"hook_event_name": "Notification"}, user_id="b", hostname=None) is None
 
 
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({"CLAUDE_CODE_SESSION_ATTENDED": "0", "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}, False),  # claude -p
+        ({"CLAUDE_CODE_SESSION_ATTENDED": "1", "CLAUDE_CODE_ENTRYPOINT": "claude-vscode"}, True),
+        ({"CLAUDE_CODE_ENTRYPOINT": "sdk-py"}, False),  # older Claude Code: entry point only
+        ({"CLAUDE_CODE_ENTRYPOINT": "cli"}, True),
+        ({"CLAUDE_CODE_ENTRYPOINT": "something-new"}, None),
+        ({}, None),
+    ],
+)
+def test_attended_from_claude_code_env(env: dict[str, str], expected: bool | None) -> None:
+    """Live 2026-11-15: `claude -p` gives hooks SESSION_ATTENDED=0 and ENTRYPOINT=sdk-cli."""
+    assert hook.attended(env) is expected
+
+
+def test_unattended_bypass_reaches_rules_on_tool_calls(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ATTENDED", "0")
+    ev = hook.hook_event(
+        pre("Bash", command="ls") | {"permission_mode": "bypassPermissions"}, user_id="b", hostname=None
+    )
+    assert ev is not None
+    assert ev["labels"]["sga_attended"] == "false"
+    assert ev["labels"]["sga_permission_mode"] == "bypassPermissions"
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ATTENDED")
+    monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
+    unknown = hook.hook_event(pre("Bash", command="ls"), user_id="b", hostname=None)
+    assert "sga_attended" not in unknown["labels"]  # type: ignore[index]
+
+
+def test_session_start_records_how_the_agent_was_launched(monkeypatch) -> None:
+    """SessionStart input has no permission_mode (live 2026-11-15): the launch flags of the Claude
+    Code process fill it, and its parent says who started it."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ATTENDED", "0")
+    monkeypatch.setattr(
+        hook,
+        "launch_info",
+        lambda: {"parent_process": "node", "argv": ["claude", "-p", "--dangerously-skip-permissions", "x"]},
+    )
+    ev = hook.hook_event({"hook_event_name": "SessionStart", "source": "startup"}, user_id="b", hostname=None)
+    assert ev is not None and ev["payload"] == {
+        "kind": "session.start",
+        "reason": "startup",
+        "permission_mode": "bypassPermissions",
+        "interactive": False,
+        "parent_process": "node",
+    }
+    monkeypatch.setattr(hook, "launch_info", lambda: {"argv": ["claude", "--permission-mode", "plan"]})
+    ev = hook.hook_event({"hook_event_name": "SessionStart"}, user_id="b", hostname=None)
+    assert ev["payload"]["permission_mode"] == "plan"  # type: ignore[index]
+    monkeypatch.setattr(hook, "launch_info", lambda: {"argv": ["claude", "--permission-mode=acceptEdits"]})
+    ev = hook.hook_event({"hook_event_name": "SessionStart"}, user_id="b", hostname=None)
+    assert ev["payload"]["permission_mode"] == "acceptEdits"  # type: ignore[index]
+
+
+def test_launch_flags_parsing() -> None:
+    assert hook.mode_from_argv(["claude", "--dangerously-skip-permissions"]) == "bypassPermissions"
+    assert hook.mode_from_argv(["claude", "--permission-mode", "bypassPermissions"]) == "bypassPermissions"
+    prompt = "explain --dangerously-skip-permissions"
+    assert hook.mode_from_argv(["claude", "-p", prompt]) is None  # a prompt mentioning the flag
+    assert hook.mode_from_argv(["claude"]) is None
+    assert hook.mode_from_argv([]) is None
+
+
 def test_answers_in_claude_code_format() -> None:
     deny = hook.respond("PreToolUse", {"decision": "block", "reason": "SG-Advance: 파괴적 셸 명령"})
     assert deny[0] == 0 and json.loads(deny[1])["hookSpecificOutput"] == {
@@ -152,6 +216,18 @@ def test_without_daemon_cached_policy_then_risk_tiers(enrolled: Sensor, tmp_path
     assert ask["decision"] == "block" and "unavailable" in ask["reason"]
     read = hook.judge(nobody, hook.hook_event(pre("Read", file_path="a"), user_id="b", hostname=None))  # type: ignore[arg-type]
     assert read["decision"] == "allow"
+
+
+def test_without_any_policy_unattended_bypass_blocks_reads_too(tmp_path: Path, monkeypatch) -> None:
+    """Live 2026-11-15: before the first policy sync the fallback let `Read` through even with no
+    person and checks off. Nobody can be asked, and reading is what Nx-style malware wants."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ATTENDED", "0")
+    inp = pre("Read", file_path="~/.aws/credentials") | {"permission_mode": "bypassPermissions"}
+    v = hook.judge(tmp_path / "not-enrolled", hook.hook_event(inp, user_id="b", hostname=None))  # type: ignore[arg-type]
+    assert v["decision"] == "block" and v["judged_by"] == "fallback"
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ATTENDED", "1")
+    v = hook.judge(tmp_path / "not-enrolled", hook.hook_event(inp, user_id="b", hostname=None))  # type: ignore[arg-type]
+    assert v["decision"] == "allow"
 
 
 def test_settings_managed_drop_in_and_user_merge(tmp_path: Path) -> None:

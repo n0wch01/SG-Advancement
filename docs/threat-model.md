@@ -56,7 +56,7 @@
 | T12 | 무한 루프·과도한 호출로 비용 폭증 | ② | 호출 빈도 제한, 같은 인자 반복 시 세션 중단(상태 조회 툴 제외), 자원 고갈 유도 프롬프트 경보 | ✅ 탐지·중단. LLM 프록시(비용·토큰 한도)는 만들지 않음 |
 | T13 | 여러 직원에게 같은 악성 MCP가 퍼짐 | ①② | 중앙 상관 분석(24시간 안에 3명 이상 같은 룰·지표), 알려진 악성 목록(T29) | ✅ M11. 팀 공용 게이트웨이의 외부 통신은 장비 하나로 잡혀 사람 수가 안 셈 |
 | T14 | 사용자 자신이 에이전트로 공격 수행 | ② | 사용자 프롬프트 보존(높음 등급), 사람 위험도(행동 Finding, 0~100 점수)로 민감 리소스는 보안팀 승인, 원격 사람 차단, 캠페인 상관 분석 | ✅ M4·M11·제로트러스트. 평소 행동 기준선은 없음 |
-| T15 | 다른 프로세스가 안전장치를 끄고 에이전트 실행 | ② | Claude Code SessionStart의 권한 모드로 `agent-safety-bypass` 경보, 설정 점검(`claude-code-bypass-default`, hook 위치) | ✅ 경보(M6). 무인 실행 여부(`interactive`)는 수집하지 않아 `agent-unattended-safety-bypass`(중단)는 실제로 걸리지 않음 |
+| T15 | 다른 프로세스가 안전장치를 끄고 에이전트 실행 | ② | Claude Code SessionStart의 권한 모드로 `agent-safety-bypass` 경보, 설정 점검(`claude-code-bypass-default`, hook 위치) | ✅ 차단(2026-11-15). hook이 사람 유무(`CLAUDE_CODE_SESSION_ATTENDED`)와 실행 인자를 읽어 `session.start`를 채우고, 사람 없이 `bypassPermissions`인 대화의 툴 호출은 `agent-unattended-bypass-tool-call`로 모두 차단(데몬·정책이 없어도). 남은 것: 악성 프로그램이 그 환경변수를 미리 넣는 위장, Windows의 `parent_process` |
 | T16 | 정상 툴(PR 생성, 티켓 작성)을 통한 데이터 유출 | ② | 툴 인자에서 목적지를 읽고 보호 데이터의 출처와 함께 판정(T25), GitHub CLI는 외부 목적지로 봄 | 부분: 테스트 DB 보호 데이터에 한함. 일반 비공개 → 공개 판단은 없음 |
 | T17 | 셸 밖 파괴적 행동 (SQL `DROP`, 클라우드 API 삭제) | ② | `destructive-sql`, `destructive-cloud-command`(사용자 승인, 3-1 전용 경고 문구), MCP 게이트웨이에서는 보안팀 보류 | ✅ (평가 A02) |
 | T18 | 에이전트 간 위임을 통한 인젝션 전파 (하위 에이전트가 읽은 문서 → 총괄 → 다른 에이전트의 행동) | ①② | 위임 사슬 추적(부모·뿌리 세션), 위임 트리 단위 시퀀스(`cross-agent-injection-propagation`, 다른 세션 간에만), 인젝션 문구를 작업 지시로 넘기면 실행 전 차단(`injection-relayed-to-agent`) | M5b ✅ (패턴 기반, 센서가 아는 위임만) |
