@@ -3,6 +3,7 @@ real decision code, compared with what the design says should happen.
 
     uv run python scripts/evaluate.py                         # markdown to stdout
     uv run python scripts/evaluate.py --out docs/evaluation-results.md
+    uv run python scripts/evaluate.py --corpus eval/corpus_windows.yaml --out docs/evaluation-windows.md
 
 Points: the Claude Code hook (judge_event, as the daemon runs it), the OpenClaw plugin (judge), and the
 MCP gateway (a real gateway in front of fake company servers; a block counts only when the server did
@@ -40,6 +41,7 @@ from sg_advance.shorthand import build_event
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "eval" / "corpus.yaml"
+WINDOWS_CORPUS = ROOT / "eval" / "corpus_windows.yaml"
 POINTS = ("claude_code", "openclaw", "mcp_gateway")
 POINT_NAME = {
     "claude_code": "Claude Code hook",
@@ -48,6 +50,7 @@ POINT_NAME = {
 }
 TO_OPENCLAW = {
     "Bash": "exec",
+    "PowerShell": "exec",  # Windows Claude Code's shell tool; OpenClaw runs the same command through exec
     "WebFetch": "web_fetch",
     "Read": "read",
     "Write": "write",
@@ -421,18 +424,22 @@ def mismatches(results: dict[str, Any]) -> list[str]:
             if point == "mcp_gateway" and want == "block" and o.reached:
                 out.append(f"{row['case']['id']} {point}: 차단했다고 했지만 서버가 요청을 받음")
     for row in results["benign"]:
+        if row["case"].get("accepted"):  # a false positive the user accepted: still counted in the table
+            continue
         for point, o in row["outcomes"].items():
             if o.decision != "allow":
                 out.append(f"{row['case']['id']} {point}: 정상 작업인데 {o.decision} {o.rules}")
     return out
 
 
-def markdown(results: dict[str, Any]) -> str:
+def markdown(results: dict[str, Any], corpus_path: Path = CORPUS) -> str:
     mark = {True: "✓", False: "✗"}
+    full = corpus_path.resolve()
+    name = full.relative_to(ROOT) if full.is_relative_to(ROOT) else corpus_path
     lines = [
         "# 평가 결과 (scripts/evaluate.py로 생성)",
         "",
-        f"생성: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}, 묶음 `eval/corpus.yaml`, 룰 `rules/`.",
+        f"생성: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}, 묶음 `{name}`, 룰 `rules/`.",
         "",
         "## 공격",
         "",
@@ -515,6 +522,7 @@ def markdown(results: dict[str, Any]) -> str:
         lines += ["", "오탐 목록:", ""]
         lines += [
             f"- {c['id']} {c['title']} ({POINT_NAME[p]}): {o.decision}, 룰 {', '.join(o.rules) or '-'}"
+            + (f" — 받아들인 오탐: {c['accepted']}" if c.get("accepted") else "")
             for c, p, o in fps
         ]
     lines += [
@@ -546,9 +554,10 @@ def markdown(results: dict[str, Any]) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", type=Path, help="write the markdown report here")
+    ap.add_argument("--corpus", type=Path, default=CORPUS, help="cases (default eval/corpus.yaml)")
     args = ap.parse_args()
-    results = run()
-    report = markdown(results)
+    results = run(args.corpus)
+    report = markdown(results, args.corpus)
     if args.out:
         args.out.write_text(report, encoding="utf-8")
     print(report)
