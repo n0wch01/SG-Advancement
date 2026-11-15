@@ -35,7 +35,7 @@ done
 cd "$(dirname "$0")/.."
 TEAM_SERVICES=(team-gateway team-audit team-egress carol-pc mcp-gateway corp-crm)
 VERIFY_TIMEOUT="${SGA_DEPLOY_VERIFY_TIMEOUT:-150}"  # sensors sync every 60 s
-ACTIVE_HOURS="${SGA_DEPLOY_ACTIVE_HOURS:-24}"       # devices seen within this window must be current
+ACTIVE_MINUTES="${SGA_DEPLOY_ACTIVE_MINUTES:-15}"   # devices seen within this window must be current
 
 step() { printf '\n== %s\n' "$*"; }
 run() {
@@ -120,7 +120,7 @@ PY
   fi
 fi
 
-step "7. every device seen in the last ${ACTIVE_HOURS}h has the new policy"
+step "7. every device seen in the last ${ACTIVE_MINUTES} min has the new policy (revoked ones skipped)"
 if [[ $DRY -eq 1 ]]; then
   printf '  $ GET %s/v1/admin/devices (until policy_current, up to %ss)\n' "$API" "$VERIFY_TIMEOUT"
   exit 0
@@ -132,18 +132,27 @@ while :; do
     | python3 -c '
 import json, sys
 from datetime import UTC, datetime, timedelta
-hours = float(sys.argv[1])
-cutoff = datetime.now(UTC) - timedelta(hours=hours)
+minutes = float(sys.argv[1])
+now = datetime.now(UTC)
 stale = 0
+away = []
 for d in json.load(sys.stdin):
     seen = d.get("last_seen")
-    if d.get("revoked") or not seen or datetime.fromisoformat(seen.replace("Z", "+00:00")) < cutoff:
+    if d.get("revoked") or d.get("revoked_at") or not seen:
+        continue
+    when = datetime.fromisoformat(seen.replace("Z", "+00:00"))
+    if now - when > timedelta(hours=24):
+        continue  # long gone (old test devices)
+    if now - when > timedelta(minutes=minutes):
+        away.append("%s (last seen %s)" % (d["device_id"], seen[:19]))
         continue
     ok = bool(d.get("policy_current"))
     stale += not ok
     print("  %-5s %-16s last seen %s" % ("ok" if ok else "STALE", d["device_id"], seen[:19]))
+for a in away:
+    print("  away  " + a + ": not checked, picks the policy up when its sensor reconnects")
 print("STALE=%d" % stale)
-' "$ACTIVE_HOURS")" || { echo "could not read devices from $API" >&2; exit 1; }
+' "$ACTIVE_MINUTES")" || { echo "could not read devices from $API" >&2; exit 1; }
   if [[ "$report" == *"STALE=0" ]]; then
     printf '%s\n' "${report%STALE=*}"
     echo "deployed $commit (backup sga.db.$LABEL)"
