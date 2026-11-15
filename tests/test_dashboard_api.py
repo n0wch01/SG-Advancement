@@ -87,18 +87,26 @@ def test_finding_detail_has_evidence_and_the_conversation(cp_view: TestClient, e
     assert cp_view.get("/v1/admin/findings/nope", headers=VIEWER).status_code == 404
 
 
-def test_finding_period_matches_summary_and_combines_with_filters(cp_view: TestClient, enrolled: Sensor) -> None:
+def test_finding_period_matches_summary_and_combines_with_filters(
+    cp_view: TestClient, enrolled: Sensor
+) -> None:
     replay(enrolled, "claude_code.jsonl")
     template = cp_view.get("/v1/admin/findings", headers=VIEWER).json()[0]
     boundary = datetime(2026, 12, 1, tzinfo=UTC)
     documents = [
-        dict(template, finding_id=name, ts=(boundary + timedelta(seconds=seconds)).isoformat(), severity=severity)
+        dict(
+            template,
+            finding_id=name,
+            ts=(boundary + timedelta(seconds=seconds)).isoformat(),
+            severity=severity,
+        )
         for name, seconds, severity in (
             ("period-old", -1, "high"), ("period-edge", 0, "high"),
             ("period-new", 1, "critical"), ("period-low", 1, "low"),
         )
     ]
-    documents.append(dict(documents[-1], finding_id="period-other", principal={"user_id": "other"}, severity="high"))
+    other = {"finding_id": "period-other", "principal": {"user_id": "other"}, "severity": "high"}
+    documents.append(dict(documents[-1], **other))
     assert enrolled.client.post("/v1/findings", {"findings": documents})["status"] == 200
     period = {"since": boundary.isoformat()}
     listed = cp_view.get("/v1/admin/findings", params=period, headers=VIEWER).json()
@@ -112,7 +120,9 @@ def test_finding_period_matches_summary_and_combines_with_filters(cp_view: TestC
     assert [f["finding_id"] for f in response.json()] == ["period-new", "period-edge"]
 
 
-def test_finding_cursor_survives_new_arrivals_and_equal_timestamps(cp_view: TestClient, enrolled: Sensor) -> None:
+def test_finding_cursor_survives_new_arrivals_and_equal_timestamps(
+    cp_view: TestClient, enrolled: Sensor
+) -> None:
     replay(enrolled, "claude_code.jsonl")
     template = cp_view.get("/v1/admin/findings", headers=VIEWER).json()[0]
     boundary = datetime(2026, 12, 1, tzinfo=UTC)

@@ -601,7 +601,9 @@ def list_findings(
     if since is not None:
         q = q.where(FindingRow.ts >= since)
     if (before is None) != (before_id is None):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "before and before_id are required together")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "before and before_id are required together"
+        )
     if before is not None:
         # Stable pagination while newer findings arrive: timestamp descending, ID ascending.
         q = q.where(
