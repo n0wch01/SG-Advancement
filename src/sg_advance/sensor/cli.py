@@ -376,7 +376,11 @@ def _cmd_service(home: SensorHome, args: argparse.Namespace) -> int:
             print(f"error: {e}", file=sys.stderr)
             return 1
     elif args.action == "uninstall":
-        print(service.uninstall())
+        try:
+            print(service.uninstall())
+        except RuntimeError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
     else:
         print(service.status())
     return 0

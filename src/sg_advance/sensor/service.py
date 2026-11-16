@@ -205,9 +205,18 @@ def uninstall() -> str:
         _schtasks("/End", "/TN", TASK_NAME)
         res = _schtasks("/Delete", "/TN", TASK_NAME, "/F")
         removed = [f"task '{TASK_NAME}'"] if res.returncode == 0 else []
+        # A task that is still there was not removed (e.g. registered from an administrator shell):
+        # say so instead of "not installed" (Windows test, 2026-11-16).
+        failed = res.returncode != 0 and _schtasks("/Query", "/TN", TASK_NAME).returncode == 0
         if _startup_path().exists():
             _startup_path().unlink()
             removed.append("Startup launcher")
+        if failed:
+            why = (res.stderr or res.stdout).strip()
+            done = f"removed {' and '.join(removed)}; " if removed else ""
+            raise RuntimeError(f"{done}task '{TASK_NAME}' is still registered and was not removed ({why}); "
+                               "remove it from an administrator PowerShell: "
+                               f"Unregister-ScheduledTask -TaskName '{TASK_NAME}' -Confirm:$false")
         return "removed " + " and ".join(removed) if removed else "not installed"
     _launchctl("bootout", f"gui/{os.getuid()}/{LABEL}")
     path = plist_path()
