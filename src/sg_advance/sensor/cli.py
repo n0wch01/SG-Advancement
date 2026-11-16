@@ -157,7 +157,12 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
     sensor.keep_chat_text = args.keep_chat_text
     from .judge import load_judge
 
-    sensor.judge = load_judge()  # docs/classifier.md: only the daemon classifies
+    # docs/classifier.md: only the daemon classifies. No model → candidates recorded as "unavailable".
+    sensor.judge = load_judge(args.classifier or home.root / "models" / "injection")
+    judge = sensor.judge
+    logging.getLogger(__name__).info(
+        "injection classifier: %s", judge.model if judge.classifier else judge.unavailable_reason
+    )
     adapters: list = []
     if args.openclaw:
         try:
@@ -484,6 +489,12 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         metavar="IP",
         help="identity proxy address allowed to connect (repeatable)",
+    )
+    p.add_argument(
+        "--classifier",
+        type=Path,
+        metavar="DIR",
+        help="injection classifier model dir (scripts/fetch_model.py; default: <home>/models/injection)",
     )
     p.add_argument(
         "--keep-chat-text",

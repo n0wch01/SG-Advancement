@@ -14,6 +14,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 # Score bands (the classifier's probability that a chunk carries injected instructions). The verdict, not
@@ -125,7 +126,18 @@ class InjectionJudge:
         return Judgement(verdict, worst, self.model, scanned, len(parts), reason)
 
 
-def load_judge() -> InjectionJudge:
-    """The daemon's judge. No model runtime is wired yet (docs/classifier.md 9: the model is chosen and
-    downloaded with the user's approval), so every candidate is recorded as ``unavailable``."""
-    return InjectionJudge(None)
+def load_judge(model_dir: Path | None) -> InjectionJudge:
+    """The daemon's judge: the ONNX model in ``model_dir`` (sensor/onnx_classifier.py), or none. Every way
+    it can be missing is recorded as the reason on each candidate, and the rules alone decide."""
+    if model_dir is None or not model_dir.is_dir():
+        return InjectionJudge(None)
+    from .onnx_classifier import ModelError, OnnxClassifier  # standard library until a model loads
+
+    try:
+        return InjectionJudge(OnnxClassifier(model_dir))
+    except ModelError as e:
+        return InjectionJudge(None, f"model rejected: {e}")
+    except ImportError:
+        return InjectionJudge(None, "classifier extra not installed (sg-advance[classifier])")
+    except Exception as e:  # noqa: BLE001  # a broken runtime or file: recorded, the daemon keeps running
+        return InjectionJudge(None, f"model failed to load: {type(e).__name__}")

@@ -15,6 +15,12 @@ dependencies = [
 openclaw = [
     "websockets>=13",
 ]
+# Injection classifier for the sensor daemon (docs/classifier.md). Optional: without it the daemon records
+# candidates as "unavailable" and the rules alone decide. The model files are not a package dependency.
+classifier = [
+    "onnxruntime>=1.20",
+    "tokenizers>=0.21",
+]
 # Control plane only. Endpoint sensors install the bare package and stay light.
 server = [
     "alembic>=1.13",  # schema migrations (server/migrations)
