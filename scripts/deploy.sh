@@ -54,15 +54,24 @@ if [[ $DRY -eq 0 ]]; then
   [[ -f .env ]] || { echo ".env is missing (SGA_ADMIN_TOKEN)" >&2; exit 1; }
   set -a; . ./.env; set +a
   : "${SGA_ADMIN_TOKEN:?SGA_ADMIN_TOKEN is not set in .env}"
+  # Without Docker the backup step cannot even look (2026-11-16: it once reported "first deploy").
+  docker info >/dev/null 2>&1 || { echo "Docker is not running: start it first (the DB backup needs it)" >&2; exit 1; }
 fi
 API="http://127.0.0.1:${SGA_PORT:-8000}"
 
 step "1. back up the control-plane DB → /data/sga.db.$LABEL"
 backup_py="import sqlite3; s=sqlite3.connect('/data/sga.db'); d=sqlite3.connect('/data/sga.db.$LABEL'); s.backup(d); d.close(); print('  backup ok')"
+if [[ $DRY -eq 0 ]] && [[ -z "$(docker compose ps -q --status running control-plane 2>/dev/null)" ]]; then
+  # Stopped is not empty: start the existing container (no rebuild) so its DB can be backed up first.
+  if docker compose up -d --no-build control-plane >/dev/null 2>&1; then
+    for _ in $(seq 1 60); do curl -sf "$API/healthz" >/dev/null && break; sleep 1; done
+    echo "  started the existing control plane to back it up"
+  else
+    echo "  no control plane image yet: nothing to back up (first deploy)"
+  fi
+fi
 if [[ $DRY -eq 1 ]] || [[ -n "$(docker compose ps -q --status running control-plane 2>/dev/null)" ]]; then
   run docker compose exec -T control-plane python3 -c "$backup_py"
-else
-  echo "  control plane is not running: nothing to back up (first deploy)"
 fi
 
 if [[ $DASHBOARD -eq 1 ]]; then
