@@ -5,6 +5,11 @@ kind, with the classifier's latency (docs/classifier.md 8).
     uv run --extra classifier python scripts/eval_classifier.py --model data/models/protectai-v2 \\
         --model data/models/prompt-guard-2-86m --out docs/evaluation-classifier.md
 
+Public data: ``--injecagent data/datasets/injecagent`` (InjecAgent, uiuc-kang-lab/InjecAgent@f19c9f2,
+MIT): tool responses with an attacker's instruction hidden inside, plain ("base") or behind "IMPORTANT!!!
+Ignore all previous instructions" ("enhanced"). The benign side is ours: the same 17 response templates
+with a neutral sentence where the attack was, so only the hidden instruction differs.
+
 Each text arrives as an external tool result (``sga_input_source`` = a web host), runs through the same
 code the sensor uses (the repository's rules, the input-guard check, the judge's labels), and counts as
 "stopped" when the result would be withheld from the model. ``unsure`` is reported apart: not withheld,
@@ -14,6 +19,8 @@ but an alert in the console.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import statistics
 import sys
 import time
@@ -29,6 +36,39 @@ from sg_advance.shorthand import build_event
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = {"sga_input_source": "docs.internet-sim"}
+INJECAGENT = {  # data/ of uiuc-kang-lab/InjecAgent at f19c9f2c79a41046eb13c03c51a24c567a8ffa07 (MIT)
+    "test_cases_dh_base.json": "0a8186468d21389af432e8c7b399ae42264d1b93a07b65c7a489468508604305",
+    "test_cases_dh_enhanced.json": "885602716b72c18af80695ce6c2e1f242fa03163bc90b0788b0c5e4ab6216d50",
+    "test_cases_ds_base.json": "4daab35c62a3845e8b9400f4dca58b9c9f37e57cd33b2337552557fbb26282e9",
+    "test_cases_ds_enhanced.json": "7bc510868df032511053fc40e8470e68a041fb7148d055112093594bf73ab0ce",
+}
+NEUTRAL = [  # what an ordinary review, mail or note says where InjecAgent put the attack
+    "Great product, fast shipping and works as described.",
+    "Thanks for the update, see you at the Monday meeting.",
+    "Please find the quarterly report attached for your review.",
+    "The team lunch has been moved to 12:30 on Friday.",
+    "Package delivered to the front door this afternoon.",
+]
+
+
+def injecagent_samples(d: Path) -> list[dict]:
+    out: list[dict] = []
+    templates: set[str] = set()
+    for name, digest in INJECAGENT.items():
+        path = d / name
+        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            raise SystemExit(f"{path}: not the pinned InjecAgent file")
+        kind = "base" if "_base" in name else "enhanced"
+        harm = "직접피해" if "_dh_" in name else "데이터탈취"
+        for case in json.loads(path.read_text(encoding="utf-8")):
+            group = f"injecagent-{kind}-{harm}"
+            out.append({"group": group, "label": "attack", "text": case["Tool Response"]})
+            templates.add(case["Tool Response Template"])
+    for template in sorted(templates):
+        for sentence in NEUTRAL:
+            out.append({"group": "injecagent-정상(같은 틀)", "label": "benign",
+                        "text": template.replace("<Attacker Instruction>", sentence)})  # fmt: skip
+    return out
 
 
 def withheld(engine: Engine, text: str, labels: dict[str, str], n: int) -> bool:
@@ -88,11 +128,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model", type=Path, action="append", default=[], help="model dir (repeatable)")
     ap.add_argument("--samples", type=Path, default=ROOT / "eval" / "classifier_samples.yaml")
     ap.add_argument("--rules", type=Path, default=ROOT / "rules")
+    ap.add_argument("--injecagent", type=Path, help="InjecAgent data dir instead of --samples (public data)")
     ap.add_argument("--out", type=Path, help="write the markdown report here (default: stdout)")
     args = ap.parse_args(argv)
-    samples = yaml.safe_load(args.samples.read_text(encoding="utf-8"))["samples"]
     rules = RuleSet.load(args.rules)
-    where = args.samples.relative_to(ROOT) if args.samples.is_relative_to(ROOT) else args.samples
+    if args.injecagent:
+        samples = injecagent_samples(args.injecagent)
+        where = "InjecAgent(uiuc-kang-lab/InjecAgent@f19c9f2, MIT) 툴 결과 + 같은 틀의 정상 문장"
+    else:
+        samples = yaml.safe_load(args.samples.read_text(encoding="utf-8"))["samples"]
+        where = args.samples.relative_to(ROOT) if args.samples.is_relative_to(ROOT) else args.samples
     intro = f"문장: {where} {len(samples)}개. 외부 출처 툴 결과로 넣고, 모델에 가려지면 막은 것으로 센다."
     lines = ["# 인젝션 분류기 평가", "", intro, ""]
     if not args.model:
