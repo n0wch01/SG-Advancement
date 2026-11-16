@@ -101,6 +101,7 @@ rules:
   # S2 핵심: 인젝션이 담긴 툴 결과를 읽은 "뒤에" 같은 세션에서 민감 파일/외부 전송 툴 호출.
   # 단일 시그니처보다 오탐이 적고, 인젝션이 실제로 행동을 바꿨다는 근거가 된다.
   - id: injection-then-sensitive-action
+    version: "2"
     severity: critical
     category: prompt_injection
     title: 인젝션 이후 민감 행동 (S2 시퀀스)
@@ -114,9 +115,11 @@ rules:
       steps:
         - name: injected-content
           when: {payload.kind: tool.result}
-          fields: [payload.output_preview]
+          # 2026-11-16 (사용자 결정 B): 분류기가 확인한 인젝션(labels.sga_judge_injection = malicious)도 1단계다.
+          #   결과를 가린 뒤에도 다시 읽기·일부만 본 경우가 있어 이후 행동을 막는다(docs/classifier.md).
+          fields: [payload.output_preview, labels.sga_judge_injection]
           ignore_case: true
-          pattern: 'ignore (all )?(previous|prior|above) instructions|<important>|<\|im_start\|>system|<<SYS>>|\.env.*읽|읽.*\.env|단계별.*지시|send .{0,40}(\.env|credentials|secret)'
+          pattern: '^malicious$|ignore (all )?(previous|prior|above) instructions|<important>|<\|im_start\|>system|<<SYS>>|\.env.*읽|읽.*\.env|단계별.*지시|send .{0,40}(\.env|credentials|secret)'
         - name: sensitive-action
           when: {payload.kind: tool.call}
           fields: [payload.arguments]
@@ -129,6 +132,7 @@ rules:
   # 미탐 주의: 위임 관계를 센서가 모르면(게이트웨이 밖의 위임, 센서 재시작 전의 오래된 트리) 묶이지 않는다.
   #   두 단계 사이에 사람이 끼어든 정상 작업도 10분 안이면 걸릴 수 있다 → 오탐 후보.
   - id: cross-agent-injection-propagation
+    version: "2"
     severity: critical
     category: prompt_injection
     title: 위임을 통한 인젝션 전파 (T18)
@@ -144,9 +148,11 @@ rules:
       steps:
         - name: injected-content
           when: {payload.kind: tool.result}
-          fields: [payload.output_preview]
+          # 2026-11-16 (사용자 결정 B): 분류기가 확인한 인젝션(labels.sga_judge_injection = malicious)도 1단계다.
+          #   결과를 가린 뒤에도 다시 읽기·일부만 본 경우가 있어 이후 행동을 막는다(docs/classifier.md).
+          fields: [payload.output_preview, labels.sga_judge_injection]
           ignore_case: true
-          pattern: 'ignore (all )?(previous|prior|above) instructions|<important>|<\|im_start\|>system|<<SYS>>|\.env.*읽|읽.*\.env|단계별.*지시|send .{0,40}(\.env|credentials|secret)'
+          pattern: '^malicious$|ignore (all )?(previous|prior|above) instructions|<important>|<\|im_start\|>system|<<SYS>>|\.env.*읽|읽.*\.env|단계별.*지시|send .{0,40}(\.env|credentials|secret)'
         - name: sensitive-action
           when: {payload.kind: tool.call}
           fields: [payload.arguments]
@@ -192,3 +198,59 @@ rules:
       type: regex
       fields: [labels.sga_result_uninspected]
       pattern: '^(too_large|unreadable)$'
+
+  # ── 룰 → 분류기 2단 판정 (docs/classifier.md, 2026-11-16 사용자 결정) ──
+  # 1단 후보: 내용 패턴이 아니라 출처의 화이트리스트로 고른다(패턴으로 고르면 패턴이 놓친 인젝션은 분류기까지 가지도 못한다).
+  #   외부 출처 결과는 전부 후보, 출처를 모르는 결과(unknown: 하위 에이전트 결과 등)도 검사한다. 분류기가 있는 데몬은
+  #   출처 label이 없는 결과를 unknown으로 적는다. 회사가 내용을 통제하는 출처(사내 MCP, *.corp.internal)와 로컬(local, file:)은 뺀다.
+  # 후보 룰은 집행하지 않고 Finding도 만들지 않는다(stage:candidate, allow, info: 태그를 모르는 이전 센서에서도 해가 없게).
+  # 오탐 주의: 일부러 넓다(걸러 내는 것은 분류기). 후보가 많으면 지연이 는다 → 실제 기록 재생으로 비율을 본다(2026-11-15 기록: 툴 결과 152건 중 23건).
+  # 미탐 주의: 로컬 파일은 보지 않는다(사용자 결정: 전부 제외). clone한 저장소의 README·코드 주석에 숨긴 지시도 여기에 든다.
+  #   이미지·첨부 속 지시, 출처가 사내로 적힌 오염된 사내 문서도 보지 않는다.
+  - id: external-result-candidate
+    severity: info
+    category: prompt_injection
+    title: 분류기 검사 대상 (외부 출처 툴 결과)
+    message: 외부 출처의 툴 결과라 인젝션 분류기로 검사합니다.
+    response: allow
+    tags: ["stage:candidate"]
+    when: {payload.kind: tool.result}
+    match:
+      type: regex
+      fields: [labels.sga_input_source]
+      # destructive-after-external-input(tool_misuse.yaml)의 외부 판정과 같게 유지
+      pattern: '(?:^|,)(?!(?:local|mcp:(?:testdb|reports|crm)|file:[^,]*|[^,]*\.corp\.internal)(?:,|$))[^,]+'
+
+  # 2단 판정의 대응(사용자 결정): malicious → 결과를 모델에 넘기지 않음(prompt_injection·high라 입력 PEP가 가림),
+  #   이후 민감·파괴 행동 차단(injection-then-* 시퀀스의 1단계), 출처 호스트를 캠페인 지표로(같은 페이지가 여러 사람을 노림).
+  #   분류기는 집행을 풀지 못한다: 시그니처 룰이 가린 결과는 분류기가 benign이라 해도 가려진다.
+  # 오탐 주의: 분류기 오판이면 필요한 문서가 가려지고 그 대화의 민감 작업이 5~10분 막힌다. 점수 구간은 sensor/judge.py(0.9 이상).
+  # 미탐 주의: 후보가 아닌 결과(로컬·사내), 분류기가 놓친 지시, 분류기가 없거나 실패한 경우(unavailable: 룰만으로 판정).
+  - id: injection-classifier-confirmed
+    severity: high
+    category: prompt_injection
+    title: 분류기가 확인한 인젝션 (외부 입력)
+    message: 외부에서 읽어 온 툴 결과를 분류기가 AI 에이전트에게 내리는 지시로 판정했습니다. 결과를 모델에 넘기지 않았습니다.
+    recommended_action: 출처(labels.sga_input_source)와 원문을 확인하세요. 같은 출처가 여러 사람에게 보이면 캠페인으로 묶입니다. 오판이면 분류기 평가 데이터에 넣으세요.
+    tags: [campaign, "campaign-field:labels.sga_input_source", owasp-llm:LLM01, "kisa-zt:P6-7"]
+    when: {payload.kind: tool.result, labels.sga_judge_injection: malicious}
+    match:
+      type: regex
+      fields: [labels.sga_judge_injection]
+      pattern: '^malicious$'
+
+  # unsure(0.5 이상 0.9 미만, 또는 다 읽지 못하고 아무것도 못 찾음): 가리지 않고 관제 기본 화면에 경보(사용자 결정).
+  #   그 대화의 파괴적 행동은 destructive-after-external-input이 이미 사용자 승인을 받는다.
+  # 오탐 주의: 경계 점수의 정상 문서. 미탐 주의: 경보만이라 모델은 내용을 본다.
+  - id: injection-classifier-unsure
+    severity: medium
+    category: prompt_injection
+    title: 분류기가 판단하지 못한 외부 입력
+    message: 외부에서 읽어 온 툴 결과가 인젝션인지 분류기가 확신하지 못했습니다(또는 결과가 커서 다 읽지 못했습니다). 모델에는 넘겼습니다.
+    recommended_action: 원문을 확인하고, 인젝션이면 그 대화를 검토하세요. 판정 결과는 분류기 평가 데이터에 넣으세요.
+    tags: [owasp-llm:LLM01]
+    when: {payload.kind: tool.result, labels.sga_judge_injection: unsure}
+    match:
+      type: regex
+      fields: [labels.sga_judge_injection]
+      pattern: '^unsure$'

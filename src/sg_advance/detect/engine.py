@@ -49,6 +49,11 @@ CAMPAIGN_TAG = "campaign"
 # use that item's ``<key>`` (the skill's ``ref``) as the indicator instead of the matched text. A tag,
 # not a rule field, so sensors on an older version still load the policy.
 CAMPAIGN_KEY_TAG = "campaign-key:"
+# ``campaign-field:<path>``: the indicator is the value of another field, not the matched text (the rule
+# matches a verdict word, the campaign is about where it came from). Comma-separated values are split;
+# ``local`` and ``unknown`` name no place, so they are no indicator (docs/classifier.md, 2026-11-16).
+CAMPAIGN_FIELD_TAG = "campaign-field:"
+NOT_A_PLACE = frozenset({"local", "unknown"})
 INDICATOR = "indicator"
 INDICATOR_MAX = 200
 # Data lineage (phase 2, sensor/lineage.py): a regex rule tagged ``lineage:source`` collects every match
@@ -462,10 +467,21 @@ class Engine:
 def _campaign_labels(rule: Rule, raw: _RawHit, doc: dict[str, Any]) -> dict[str, str]:
     if CAMPAIGN_TAG not in rule.tags:
         return {}
-    key = next((t.removeprefix(CAMPAIGN_KEY_TAG) for t in rule.tags if t.startswith(CAMPAIGN_KEY_TAG)), None)
-    values = _item_keys(doc, rule.match, key) if key and isinstance(rule.match, RegexMatch) else raw.values
+    key = _tag_value(rule, CAMPAIGN_KEY_TAG)
+    path = _tag_value(rule, CAMPAIGN_FIELD_TAG)
+    if path:
+        leaves = string_leaves(resolve(doc, path))
+        values = [v for leaf in leaves for v in leaf.split(",") if v not in NOT_A_PLACE]
+    elif key and isinstance(rule.match, RegexMatch):
+        values = _item_keys(doc, rule.match, key)
+    else:
+        values = raw.values
     indicator = indicator_of(values)
     return {INDICATOR: indicator} if indicator else {}
+
+
+def _tag_value(rule: Rule, prefix: str) -> str | None:
+    return next((t.removeprefix(prefix) for t in rule.tags if t.startswith(prefix)), None)
 
 
 def _item_keys(doc: dict[str, Any], spec: RegexMatch, key: str) -> list[str]:

@@ -88,6 +88,7 @@ rules:
   # 미탐 주의: 문구를 바꾼 인젝션은 첫 룰이 놓치고 두 번째 룰(승인)로만 잡힌다. 다른 대화·하위 에이전트로 넘어간 경우는
   #   묶지 않는다(위임 통제는 따로). 센서 데몬이 없으면(hook 단독) 시퀀스를 기억하지 못한다.
   - id: injection-then-destructive-action
+    version: "2"
     severity: critical
     category: prompt_injection
     title: 인젝션 이후 파괴적 행동
@@ -101,10 +102,12 @@ rules:
       steps:
         - name: injected-content
           when: {payload.kind: tool.result}
-          fields: [payload.output_preview]
+          # 2026-11-16 (사용자 결정 B): 분류기가 확인한 인젝션(labels.sga_judge_injection = malicious)도 1단계다.
+          #   결과를 가린 뒤에도 다시 읽기·일부만 본 경우가 있어 이후 행동을 막는다(docs/classifier.md).
+          fields: [payload.output_preview, labels.sga_judge_injection]
           ignore_case: true
           # injection-then-sensitive-action(prompt_injection.yaml)의 1단계와 같게 유지
-          pattern: 'ignore (all )?(previous|prior|above) instructions|<important>|<\|im_start\|>system|<<SYS>>|\.env.*읽|읽.*\.env|단계별.*지시|send .{0,40}(\.env|credentials|secret)'
+          pattern: '^malicious$|ignore (all )?(previous|prior|above) instructions|<important>|<\|im_start\|>system|<<SYS>>|\.env.*읽|읽.*\.env|단계별.*지시|send .{0,40}(\.env|credentials|secret)'
         - name: destructive-action
           when: {payload.kind: tool.call}
           fields: &destructive_fields [payload.arguments.command, payload.arguments.cmd, payload.arguments.query, payload.arguments.sql, payload.arguments.statement]

@@ -413,11 +413,16 @@ class Sensor:
         result goes to the classifier; its verdict comes back as labels for the enforcement rules."""
         if self.judge is None or self.candidates is None:
             return {}
+        # A result whose call this sensor never saw (restart, a path that reports results only) has no
+        # source: written as ``unknown`` so the rules can treat it as untrusted (decision 2026-11-16).
+        unknown = {} if "sga_input_source" in result.labels else {"sga_input_source": "unknown"}
+        if unknown:
+            result = result.model_copy(update={"labels": result.labels | unknown})
         marks = sorted({h.rule.id for h in self.candidates.process(result).hits})
         if not marks:
-            return {}
+            return unknown
         text = getattr(result.payload, "output_preview", None) or ""
-        return {"sga_candidate": ",".join(marks)[:500]} | self.judge.judge(text).labels()
+        return unknown | {"sga_candidate": ",".join(marks)[:500]} | self.judge.judge(text).labels()
 
     SOURCE_KEEP = timedelta(hours=1)
     SOURCE_MAX = 5000
