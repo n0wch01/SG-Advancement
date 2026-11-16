@@ -150,6 +150,31 @@ uv run pytest tests/test_rule_cases.py     # 방금 추가한 케이스가 실�
 `test_every_enabled_rule_has_positive_and_negative_case` 테스트는 활성화된 모든 룰에 양성 케이스와 음성 케이스가 하나 이상 있는지 확인한다.
 새 룰을 추가하면 두 케이스를 같이 추가해야 한다.
 
+### 4. 실제 기록에 다시 돌려 보기 (오탐·미탐 측정, 2026-11-16)
+
+케이스는 우리가 상상한 것만 담는다. [scripts/replay_history.py](../scripts/replay_history.py)는 관제 서버 DB에 쌓인 실제 기록을 지금의 `rules/`와 커밋된 룰(`HEAD`)로 각각 돌린다. 같은 이벤트, 같은 엔진이고 룰만 다르므로 **차이가 곧 룰 수정의 효과**다.
+
+```bash
+docker compose cp control-plane:/data/archive-2026-11-15/sga.db data/archive-2026-11-15.db   # data/는 git 제외
+uv run python scripts/replay_history.py data/archive-2026-11-15.db                       # 룰별 hit, HEAD 대비 증감
+uv run python scripts/replay_history.py data/archive-2026-11-15.db --device my-mac --since 2026-11-14
+uv run python scripts/replay_history.py data/archive-2026-11-15.db --review data/review.csv  # 판정용 표
+```
+
+명령 하나만 볼 때는 `uv run python scripts/try_rule.py "rm -rf ~/projects"`(`--tool PowerShell`, `--read-from HOST TEXT`).
+
+- **검토 표(`--review`)**: 사람이 알아차리는 것만 한 줄씩 담는다. 같은 룰, 같은 내용(명령, 호스트, 스냅샷 값)은 한 줄로 묶고 반복 횟수를 `count`에 적는다.
+  - 경보는 보고된 Finding만 넣는다.
+  - 차단, 승인, 보류는 호출마다 사람을 멈추므로 반복도 센다.
+- **판정**: `label` 칸에 `tp`(잡아야 하는 위험) 또는 `fp`(정상 작업)를 적고 `note`에 이유를 쓴다. 다음 실행에서도 같은 룰·같은 내용의 판정은 그대로 남고, 룰별 정밀도(판정한 사례 기준)가 출력된다. 룰을 고쳐 새로 걸린 사례는 판정 없이 나타난다.
+- **DB는 읽기 전용으로 연다**(증거를 바꾸지 않음).
+- **한계**
+  - 센서가 그때 붙인 labels(외부 입력 출처, 데이터 출처, 사람 유무, PC 상태)는 기록된 그대로 재생된다.
+  - 센서가 들고 있던 집합(신뢰한 스킬, 차단한 사람, 고위험 사용자)은 비어 있다.
+  - 가려진 비밀값은 가려진 채로 남는다.
+  - 룰에 걸리지 않아 길이만 보낸 프롬프트(데이터 최소화)는 새 프롬프트 룰로 판정할 수 없다.
+  - 기록에는 데모 공격과 시험 대화가 섞여 있다. `--device`, `--exclude-device`, `--exclude-session`, `--since`로 걸러 낸 뒤에 오탐이라고 말한다.
+
 ## 알려진 한계와 튜닝 후보
 
 - `vigil-ipv4`(info): 버전 문자열(`1.2.3.4`)에도 걸린다.
