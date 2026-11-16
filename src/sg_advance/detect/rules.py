@@ -182,6 +182,18 @@ class RuleLoadError(ValueError):
     pass
 
 
+# First stage of the rule → classifier cascade (docs/classifier.md): a rule tagged ``stage:candidate`` only
+# marks events for the sensor's classifier. It never enforces and never makes a finding: the enforcement
+# engine leaves it out (Engine(stage="enforce"), the default). A tag, not a field, so older sensors still
+# load the policy; they would run it as an ordinary rule, which is why a candidate rule must be harmless
+# there: response ``allow`` and severity ``info`` (checked here).
+CANDIDATE_TAG = "stage:candidate"
+
+
+def is_candidate(rule: Rule) -> bool:
+    return CANDIDATE_TAG in rule.tags
+
+
 class RuleSet:
     def __init__(self, rules: list[Rule], sources: dict[str, str] | None = None) -> None:
         seen: dict[str, str] = {}
@@ -190,6 +202,12 @@ class RuleSet:
             if r.id in seen:
                 raise RuleLoadError(f"duplicate rule id {r.id!r} ({seen[r.id]} and {src})")
             seen[r.id] = src
+            harmless = r.response is ResponseAction.ALLOW and r.severity is Severity.INFO
+            if is_candidate(r) and not harmless:
+                raise RuleLoadError(
+                    f"candidate rule {r.id!r} ({src}) must have response allow and severity info: "
+                    "older sensors run it as an ordinary rule"
+                )
         self.rules = rules
         self.sources = sources or {}
 

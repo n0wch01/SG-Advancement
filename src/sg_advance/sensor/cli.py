@@ -155,6 +155,9 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
     )
     sensor = Sensor(home)
     sensor.keep_chat_text = args.keep_chat_text
+    from .judge import load_judge
+
+    sensor.judge = load_judge()  # docs/classifier.md: only the daemon classifies
     adapters: list = []
     if args.openclaw:
         try:

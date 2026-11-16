@@ -30,6 +30,7 @@ from ..redact import redact_event
 from ..schema import AgentEvent, Enforcement, EventKind
 from . import delegation as delegation_mod
 from . import downloads as downloads_mod
+from . import judge as judge_mod
 from . import lineage as lineage_mod
 from .client import ControlPlaneClient, ControlPlaneError, Offline, Transport, urllib_transport
 from .priority import event_priority
@@ -179,6 +180,11 @@ class Sensor:
         self.spool = Spool(home.spool_path)
         self.policy: PolicyBundle | None = None
         self.engine: Engine | None = None
+        # Rule → classifier cascade (docs/classifier.md): the candidate rules of the same signed policy, and
+        # the judge for what they mark. Only the daemon sets a judge (``sga-sensor run``); without one
+        # (the hook's degraded path, one-shot commands) nothing is classified or labelled.
+        self.candidates: Engine | None = None
+        self.judge: judge_mod.InjectionJudge | None = None
         # Values adapters have verified (e.g. openclaw_plugins: plugin ids whose code matches a
         # signed, approved package). Rules opt in with ``allow_trusted``. Persisted so a restart
         # doesn't flag known-good plugins before the first integrity scan finishes.
@@ -307,7 +313,9 @@ class Sensor:
     # ── policy ───────────────────────────────────────────────────────────────
 
     def _install(self, bundle: PolicyBundle) -> None:
-        self.engine = Engine(bundle.to_ruleset(self._key), self.trusted)  # verifies hash + signature
+        ruleset = bundle.to_ruleset(self._key)  # verifies hash + signature
+        self.engine = Engine(ruleset, self.trusted)
+        self.candidates = Engine(ruleset, self.trusted, stage="candidate")
         self.policy = bundle
 
     def load_cached_policy(self) -> bool:
@@ -381,6 +389,8 @@ class Sensor:
                 update["labels"] = update.get("labels", event.labels) | tracked  # type: ignore[operator]
             if source := self._source_of(event):
                 update["labels"] = update.get("labels", event.labels) | {"sga_input_source": source}  # type: ignore[operator]
+            if judged := self._judge(event.model_copy(update={"labels": update.get("labels", event.labels)})):
+                update["labels"] = update.get("labels", event.labels) | judged  # type: ignore[operator]
             refused = self._refused.pop(getattr(event.payload, "call_id", ""), None)
             if refused is not None:
                 update["labels"] = (
@@ -395,7 +405,20 @@ class Sensor:
     # Follow-up scenario 1 (docs/external-input.md): where a tool result came from = where its call talked
     # to, read from the call's own arguments (URL host, MCP server, search, local). The rules decide
     # what is external. Calls are remembered until their result arrives (bounded).
-    _OWN_LABELS = (*lineage_mod.LABELS, "sga_input_source", downloads_mod.LABEL, *delegation_mod.LABELS)
+    _OWN_LABELS = (*lineage_mod.LABELS, "sga_input_source", downloads_mod.LABEL, *delegation_mod.LABELS,
+                   *judge_mod.LABELS)  # fmt: skip
+
+    def _judge(self, result: AgentEvent) -> dict[str, str]:
+        """First stage: the candidate rules (with the source label already on ``result``). A marked
+        result goes to the classifier; its verdict comes back as labels for the enforcement rules."""
+        if self.judge is None or self.candidates is None:
+            return {}
+        marks = sorted({h.rule.id for h in self.candidates.process(result).hits})
+        if not marks:
+            return {}
+        text = getattr(result.payload, "output_preview", None) or ""
+        return {"sga_candidate": ",".join(marks)[:500]} | self.judge.judge(text).labels()
+
     SOURCE_KEEP = timedelta(hours=1)
     SOURCE_MAX = 5000
 

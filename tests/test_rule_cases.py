@@ -43,7 +43,9 @@ def run_case(case: dict[str, Any]) -> list[Verdict]:
     events = [build_event(s, defaults=defaults, index=i) for i, s in enumerate(case["events"])]
     events.sort(key=lambda e: e.ts)
     sets = {name: set(values) for name, values in (case.get("sets") or {}).items()}
-    return Engine(RULES, sets).replay(events)
+    # Candidate rules (stage:candidate, docs/classifier.md) only run in the sensor's candidate engine;
+    # a case names them like any rule.
+    return Engine(RULES, sets).replay(events) + Engine(RULES, sets, stage="candidate").replay(events)
 
 
 @pytest.mark.parametrize("case", [c for _, c in CASES], ids=[n for n, _ in CASES])

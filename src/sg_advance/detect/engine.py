@@ -20,7 +20,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from fnmatch import fnmatchcase
-from typing import Any
+from typing import Any, Literal
 
 from ..redact import redact_text
 from ..schema import AgentEvent, Enforcement, EventKind, Finding, ResponseAction
@@ -35,6 +35,7 @@ from .rules import (
     RuleSet,
     SequenceMatch,
     SequenceStep,
+    is_candidate,
 )
 
 # Live sets the sensor maintains for allowlist ``allow_trusted`` (name -> values).
@@ -369,10 +370,18 @@ _MATCHERS = {
 
 
 class Engine:
-    def __init__(self, ruleset: RuleSet, trusted: TrustedSets | None = None) -> None:
+    def __init__(
+        self,
+        ruleset: RuleSet,
+        trusted: TrustedSets | None = None,
+        stage: Literal["enforce", "candidate"] = "enforce",
+    ) -> None:
         """``trusted``: live sets the sensor maintains (allowlist ``allow_trusted``). Shared by
-        reference, so updates apply without rebuilding the engine."""
+        reference, so updates apply without rebuilding the engine. ``stage``: the enforcement engine
+        (default) runs every rule except ``stage:candidate`` ones; the candidate engine runs only those
+        (docs/classifier.md). So a candidate rule can never enforce or make a finding by accident."""
         self.ruleset = ruleset
+        self.stage = stage
         self.trusted = trusted if trusted is not None else {}
         self._compiled = [
             (
@@ -386,6 +395,7 @@ class Engine:
                 else _MATCHERS[r.match.type](r.match),
             )
             for r in ruleset.enabled
+            if is_candidate(r) == (stage == "candidate")
         ]
         self._reported: set[tuple[str, str, str, str]] = set()
 
