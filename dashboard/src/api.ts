@@ -3,6 +3,7 @@
 // closes) and is sent as a bearer header, never in a URL.
 
 import type {
+  AgentEvent,
   Approval,
   ApprovalMetrics,
   ApprovalReview,
@@ -106,8 +107,13 @@ export class Api {
     return this.get<Summary>("/summary", { since });
   }
 
-  findings(q: { severity?: string; min_severity?: string; rule_id?: string; user_id?: string; since?: string; before?: string; before_id?: string; limit?: number; offset?: number }) {
+  findings(q: { severity?: string; min_severity?: string; rule_id?: string; user_id?: string; since?: string; before?: string; before_id?: string; queue?: string; limit?: number; offset?: number }) {
     return this.get<Finding[]>("/findings", q);
+  }
+
+  /** Recorded events, newest first. ``judge``: the injection classifier's verdict (sampling its misses). */
+  events(q: { judge?: string; kind?: string; since?: string | null; limit?: number }) {
+    return this.get<AgentEvent[]>("/events", q);
   }
 
   approvals(q: { approved?: string; decision?: string; user_id?: string; review?: string; since?: string | null; limit?: number; offset?: number }) {

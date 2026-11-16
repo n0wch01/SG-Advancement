@@ -119,6 +119,10 @@ button.link { background: none; border: 0; color: var(--accent); padding: 0; }
 .segmented button { background: transparent; border: 0; padding: 6px 12px; color: var(--muted); border-radius: 4px; font-size: 12px; }
 .segmented button:hover { color: var(--ink); }
 .segmented button.on { background: var(--surface-raised); color: var(--ink); }
+.segmented a { padding: 6px 12px; color: var(--muted); border-radius: 4px; font-size: 12px; text-decoration: none; }
+.segmented a:hover { color: var(--ink); }
+.segmented a.on { background: var(--surface-raised); color: var(--ink); }
+.queue-tabs { margin-bottom: 6px; }
 
 .card { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--line); padding: 22px; margin-bottom: 20px; min-width: 0; overflow-wrap: anywhere; }
 .card.flush { padding: 0; overflow-x: auto; }

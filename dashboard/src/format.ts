@@ -199,7 +199,38 @@ export function findingsHref(query: Record<string, string | undefined> = {}): st
 
 export const TIME_RANGES = [["24h", "24시간"], ["7d", "7일"], ["30d", "30일"], ["all", "전체"]] as const;
 export type TimeRange = typeof TIME_RANGES[number][0];
-export const FINDING_FILTERS = ["range", "since", "severity", "min_severity", "rule_id", "user_id"] as const;
+export const FINDING_FILTERS = ["range", "since", "severity", "min_severity", "rule_id", "user_id", "queue"] as const;
+
+// The console's queues over the injection classifier's work (docs/classifier.md 5, 2026-11-16). "review" is
+// the default: everything except findings the classifier judged benign that were not enforced.
+export const QUEUES = [
+  ["review", "확인 필요"],
+  ["enforced", "집행됨"],
+  ["benign", "분류기가 정상으로 본 것"],
+  ["failed", "분류 실패"],
+  ["all", "전체"],
+] as const;
+export type Queue = typeof QUEUES[number][0];
+
+export function findingQueue(query: Record<string, string | undefined>): Queue {
+  return QUEUES.some(([key]) => key === query.queue) ? query.queue as Queue : "review";
+}
+
+const JUDGE_LABEL: Record<string, [string, "bad" | "warn" | "neutral"]> = {
+  malicious: ["인젝션", "bad"],
+  unsure: ["불확실", "warn"],
+  benign: ["정상", "neutral"],
+  unavailable: ["판정 실패", "warn"],
+};
+
+/** The classifier's verdict as a word and a tone (labels.sga_judge_*), or null when it did not judge. */
+export function judgeText(labels: Record<string, string> | undefined): { text: string; tone: string } | null {
+  const verdict = labels?.sga_judge_injection;
+  if (!verdict) return null;
+  const [word, tone] = JUDGE_LABEL[verdict] ?? [verdict, "neutral"];
+  const score = labels?.sga_judge_score ? ` ${Number(labels.sga_judge_score).toFixed(2)}` : "";
+  return { text: `분류기: ${word}${score}`, tone };
+}
 
 export function timeRange(value: string | undefined, fallback: TimeRange = "all"): TimeRange {
   return TIME_RANGES.some(([key]) => key === value) ? value as TimeRange : fallback;

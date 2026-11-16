@@ -511,11 +511,21 @@ class Sensor:
         else:
             findings = self._standing_once(result, findings)
         findings = self._lineage(result, findings)
+        findings = self._with_judgement(result.event, findings)
         result.verdict.findings = findings
         event = redact_event(_short_result(self._mask_protected(result.event)))
         if not self.keep_chat_text and not result.verdict.hits:
             event = withhold_chat_text(event)
         self.spool.add([event, *findings], event_priority(result.event, result.verdict))
+
+    @staticmethod
+    def _with_judgement(event: AgentEvent, findings: list[Any]) -> list[Any]:
+        """The classifier's verdict on the event travels with its findings, so the console can sort them
+        into its queues (docs/classifier.md 5) without looking up the evidence event."""
+        judged = {k: event.labels[k] for k in judge_mod.FINDING_LABELS if k in event.labels}
+        if not judged:
+            return findings
+        return [f.model_copy(update={"labels": f.labels | judged}) for f in findings]
 
     # ── standing state (rule tuning 2026-11-15) ──────────────────────────────
 

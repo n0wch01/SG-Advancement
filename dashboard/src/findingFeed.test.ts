@@ -193,4 +193,15 @@ describe("finding reader", () => {
     expect(feed.getSnapshot().error?.message).toContain("페이지 조회 기준");
     feed.stop();
   });
+
+  it("asks for the review queue unless another queue (or all) is chosen", async () => {
+    for (const [filters, queue] of [[{}, "review"], [{ queue: "benign" }, "benign"], [{ queue: "all" }, undefined]] as const) {
+      const repo = repository([finding(1)]);
+      const feed = new FindingFeed(repo.load, filters as Record<string, string>);
+      feed.start(3000);
+      await settle();
+      expect(repo.load.mock.calls[0][0].queue).toBe(queue);
+      feed.stop();
+    }
+  });
 });

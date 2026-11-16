@@ -22,6 +22,7 @@ import {
 } from "../format";
 import type { AgentEvent, FindingDetail as Detail, Finding, Role } from "../types";
 import { useAsync } from "../useAsync";
+import { JudgeChip } from "./Findings";
 
 export function FindingDetail({ api, id, role, query }: { api: Api; id: string; role: Role | null; query: Record<string, string> }) {
   const { data, error, loading } = useAsync(() => api.finding(id), [api, id]);
@@ -124,6 +125,15 @@ function DetailBody({ d, query }: { d: Detail; query: Record<string, string> }) 
                 </div>
               )}
             </dd>
+            {f.labels.sga_judge_injection && (
+              <>
+                <dt>분류기</dt>
+                <dd>
+                  <JudgeChip labels={f.labels} />
+                  {f.labels.sga_judge_model && <div className="muted small mono">{f.labels.sga_judge_model}</div>}
+                </dd>
+              </>
+            )}
             <dt>대응</dt>
             <dd>
               <ResponseBadge response={f.response} />
@@ -240,6 +250,12 @@ function EventCard({ e, open = false }: { e: AgentEvent; open?: boolean }) {
         <span className="muted small">{formatTime(e.ts)}</span>
       </button>
       {show && <pre className="json">{JSON.stringify(e.payload, null, 2)}</pre>}
+      {show && Object.keys(e.labels ?? {}).length > 0 && (
+        <>
+          <p className="muted small">센서가 붙인 사실(labels): 판정의 근거입니다. 에이전트가 보낸 같은 이름의 값은 센서가 지웁니다.</p>
+          <pre className="json">{JSON.stringify(e.labels, null, 2)}</pre>
+        </>
+      )}
     </div>
   );
 }

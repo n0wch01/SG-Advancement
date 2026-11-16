@@ -18,6 +18,8 @@ import {
   findingsHref,
   findingBackHref,
   findingFilters,
+  findingQueue,
+  judgeText,
   findingHref,
   overviewHref,
   rangeQuery,
@@ -306,5 +308,15 @@ describe("investigation navigation", () => {
       .toEqual({ range: "7d", since: "start", user_id: "alice" });
     expect(rangeQuery("all", "2026-11-08T00:00:00Z")).toEqual({ range: "all" });
     expect(findingBackHref({ from: "https://example.com" })).toBe("#/findings");
+  });
+
+  it("defaults to the review queue and shows the classifier's verdict as a word (docs/classifier.md 5)", () => {
+    expect(findingQueue({})).toBe("review");
+    expect(findingQueue({ queue: "benign" })).toBe("benign");
+    expect(findingQueue({ queue: "made-up" })).toBe("review");
+    expect(findingFilters({ queue: "enforced", user_id: "bob" })).toEqual({ queue: "enforced", user_id: "bob" });
+    expect(judgeText({ sga_judge_injection: "malicious", sga_judge_score: "0.970" })).toEqual({ text: "분류기: 인젝션 0.97", tone: "bad" });
+    expect(judgeText({ sga_judge_injection: "unavailable" })).toEqual({ text: "분류기: 판정 실패", tone: "warn" });
+    expect(judgeText({})).toBeNull();
   });
 });

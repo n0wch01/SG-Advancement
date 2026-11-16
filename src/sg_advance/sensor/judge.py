@@ -27,6 +27,8 @@ CHUNK_OVERLAP = 200  # an instruction split across two chunks is still seen whol
 MAX_CHUNKS = 64  # ~128 KB of text per result
 BUDGET_SECONDS = 2.0  # per result; a tool result must not stall the agent for long
 
+# Copied onto the event's findings too (the console's queues sort findings by verdict).
+FINDING_LABELS = ("sga_judge_injection", "sga_judge_score", "sga_judge_model")
 LABELS = ("sga_candidate", "sga_judge_injection", "sga_judge_score", "sga_judge_model", "sga_judge_chunks",
           "sga_judge_reason")  # fmt: skip
 

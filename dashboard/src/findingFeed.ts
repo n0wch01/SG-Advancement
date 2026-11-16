@@ -1,5 +1,5 @@
 import type { Api } from "./api";
-import { sinceFor, timeRange } from "./format";
+import { findingQueue, sinceFor, timeRange } from "./format";
 import { createPoller, type PollReason } from "./polling";
 import type { Finding } from "./types";
 
@@ -48,8 +48,9 @@ export class FindingFeed {
   scrollY = 0;
 
   constructor(private load: Load, filters: Record<string, string>, private visible = () => true) {
-    const { range, since, ...query } = filters;
-    this.query = { ...query, since: since ?? sinceFor(timeRange(range)) ?? undefined };
+    const { range, since, queue, ...query } = filters;
+    const chosen = findingQueue({ queue });
+    this.query = { ...query, queue: chosen === "all" ? undefined : chosen, since: since ?? sinceFor(timeRange(range)) ?? undefined };
   }
 
   getSnapshot = () => this.state;

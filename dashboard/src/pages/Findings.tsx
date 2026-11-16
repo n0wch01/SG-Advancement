@@ -5,13 +5,23 @@ import { RefreshStatus } from "../components/RefreshStatus";
 import { ResponseBadge } from "../components/ResponseBadge";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
-import { SEVERITIES, SEVERITY_LABEL, TIME_RANGES, findingFilters, findingHref, findingsHref, formatTime, rangeQuery, relativeTime, timeRange } from "../format";
+import { QUEUES, SEVERITIES, SEVERITY_LABEL, TIME_RANGES, clip, eventSummary, findingFilters, findingHref, findingQueue, findingsHref, formatTime, judgeText, rangeQuery, relativeTime, sinceFor, timeRange } from "../format";
 import type { FindingFeedCache } from "../findingFeed";
+import { REFRESH_MS, useAsync } from "../useAsync";
 import { useFindingFeed } from "../useFindingFeed";
+
+const QUEUE_NOTE: Record<string, string> = {
+  review: "분류기가 정상으로 보고 집행되지 않은 것만 빼고 모두 보여 줍니다. 분류기가 보지 않는 탐지(유출, 파괴적 명령 등)는 그대로 나옵니다.",
+  enforced: "실제로 막거나 가린 기록입니다. 분류기 판정과 상관없이 항상 여기에 남습니다.",
+  benign: "분류기가 정상으로 봤고 집행되지 않은 것입니다. 표본으로 검사해 분류기가 놓친 공격을 찾습니다.",
+  failed: "분류기가 판정하지 못해(모델 없음, 오류, 검증 실패) 룰만으로 판정한 것입니다.",
+  all: "모든 탐지입니다.",
+};
 
 const FILTERS = ["severity", "min_severity", "rule_id", "user_id"] as const;
 
 export function Findings({ api, query, cache }: { api: Api; query: Record<string, string>; cache: FindingFeedCache }) {
+  const queue = findingQueue(query);
   const { feed, rows, pending, error, loading, loadingMore, refreshing, updatedAt, more, paused } = useFindingFeed(api, query, cache);
   const filters = findingFilters(query);
 
@@ -22,6 +32,13 @@ export function Findings({ api, query, cache }: { api: Api; query: Record<string
       <div className="page-head">
         <div className="page-intro"><p className="eyebrow">Findings</p><h1>탐지</h1><p className="muted">에이전트의 위험 행동과 실제 처리 결과를 조사합니다.</p></div>
       </div>
+      <div className="segmented queue-tabs" role="group" aria-label="대기열">
+        {QUEUES.map(([key, label]) => (
+          <a key={key} className={key === queue ? "on" : ""} aria-current={key === queue ? "page" : undefined}
+            href={findingsHref({ ...filters, queue: key === "review" ? undefined : key })}>{label}</a>
+        ))}
+      </div>
+      <p className="muted small">{QUEUE_NOTE[queue]}</p>
       <FilterBar query={query} />
       {query.since && <p className="filter-period muted small">조회 시작 시각: <time dateTime={query.since}>{formatTime(query.since)}</time></p>}
       <RefreshStatus updatedAt={updatedAt} refreshing={refreshing || loadingMore} error={error} paused={paused} onTogglePause={feed.togglePause} onRefresh={feed.refresh} />
@@ -64,7 +81,7 @@ export function Findings({ api, query, cache }: { api: Api; query: Record<string
                     {f.endpoint.device_id}
                     <div className="muted">{f.agent.type}</div>
                   </td>
-                  <td className="small"><ResponseBadge response={f.response} /></td>
+                  <td className="small"><ResponseBadge response={f.response} /><JudgeChip labels={f.labels} /></td>
                 </tr>
               ))}
             </tbody>
@@ -77,6 +94,41 @@ export function Findings({ api, query, cache }: { api: Api; query: Record<string
           더 보기
         </button>
       )}
+      {queue === "benign" && <BenignSample api={api} query={query} />}
+    </section>
+  );
+}
+
+export function JudgeChip({ labels }: { labels?: Record<string, string> }) {
+  const judged = judgeText(labels);
+  if (!judged) return null;
+  return <div><span className={`chip chip-${judged.tone}`} title={labels?.sga_judge_model}>{judged.text}</span></div>;
+}
+
+// Sampling the classifier's misses (docs/classifier.md 5): every external result it judged benign, with or
+// without a finding. Most have none, so the findings list alone would not show them.
+function BenignSample({ api, query }: { api: Api; query: Record<string, string> }) {
+  const since = query.since ?? sinceFor(timeRange(query.range));
+  const { data, error } = useAsync(() => api.events({ judge: "benign", since, limit: 50 }), [api, since], REFRESH_MS);
+  return (
+    <section className="card">
+      <div className="card-heading"><div><p className="eyebrow">Sampling</p><h2>분류기가 정상으로 본 외부 입력</h2></div><span className="muted small">최근 50건</span></div>
+      <p className="muted small">대부분 탐지가 없어 위 목록에는 나오지 않습니다. 몇 건을 골라 읽어 보고, 인젝션이 섞여 있으면 분류기 평가 데이터에 넣으세요.</p>
+      {error && <ErrorBox error={error} />}
+      {!data && !error && <Loading />}
+      {data && data.length === 0 && <Empty>이 기간에 분류기가 정상으로 본 외부 입력이 없습니다.</Empty>}
+      {data && data.length > 0 && <div className="table-wrap"><table>
+        <thead><tr><th>시각</th><th>사람 · 장비</th><th>출처</th><th>점수</th><th>내용</th></tr></thead>
+        <tbody>{data.map((e) => (
+          <tr key={e.event_id}>
+            <td className="nowrap" title={formatTime(e.ts)}>{relativeTime(e.ts)}</td>
+            <td className="small">{e.principal.user_id}<div className="muted">{e.endpoint.device_id}</div></td>
+            <td className="mono small">{e.labels.sga_input_source ?? "-"}</td>
+            <td className="num small">{e.labels.sga_judge_score ?? "-"}</td>
+            <td className="small" title={String(e.payload.output_preview ?? "")}>{clip(eventSummary(e), 140)}</td>
+          </tr>
+        ))}</tbody>
+      </table></div>}
     </section>
   );
 }
@@ -136,7 +188,7 @@ function FilterBar({ query }: { query: Record<string, string> }) {
       </label>
       <button type="submit">적용</button>
       {FILTERS.some((k) => query[k]) && (
-        <a className="reset" href={findingsHref({ range: query.range, since: query.since })}>
+        <a className="reset" href={findingsHref({ range: query.range, since: query.since, queue: query.queue })}>
           필터 지우기
         </a>
       )}

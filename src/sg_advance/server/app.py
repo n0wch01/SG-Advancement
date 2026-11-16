@@ -13,11 +13,11 @@ import threading
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.orm import Session
 
 from .. import __version__
@@ -551,11 +551,18 @@ def list_events(
     user_id: str | None = None,
     session_id: str | None = None,
     kind: str | None = None,
+    judge: str | None = None,
+    since: AwareDatetime | None = None,
     limit: Limit = 100,
     offset: Offset = 0,
 ) -> list[dict[str, Any]]:
-    """Newest first."""
+    """Newest first. ``judge``: the injection classifier's verdict on the event (docs/classifier.md 5:
+    the console samples the external results it judged benign, to catch what it missed)."""
     q = select(EventRow.doc)
+    if judge is not None:
+        q = q.where(_judged(EventRow.doc) == judge)
+    if since is not None:
+        q = q.where(EventRow.ts >= since)
     for col, val in (
         (EventRow.device_id, device_id),
         (EventRow.user_id, user_id),
@@ -566,6 +573,31 @@ def list_events(
             q = q.where(col == val)
     q = q.order_by(EventRow.ts.desc(), EventRow.event_id).limit(limit).offset(offset)
     return list(db.scalars(q))
+
+
+# The console's queues (docs/classifier.md 5, decision 2026-11-16).
+#   review   : what security looks at by default: everything except findings the classifier judged
+#              benign that were not enforced (unclassified findings, malicious, unsure, failed, enforced)
+#   enforced : actually blocked or withheld, whatever the classifier said (always visible)
+#   benign   : judged benign and not enforced: checked by sampling, to catch the classifier's misses
+#   failed   : the classifier could not judge (no model, error, rejected model): the rules alone decided
+Queue = Literal["review", "enforced", "benign", "failed"]
+
+
+def _judged(doc_col: Any) -> Any:
+    return doc_col["labels"]["sga_judge_injection"].as_string()
+
+
+def _queue_filter(queue: Queue) -> Any:
+    verdict = _judged(FindingRow.doc)
+    enforced = FindingRow.doc["response"]["enforced"].as_boolean()
+    benign_unenforced = and_(verdict == "benign", or_(enforced.is_(None), enforced.is_(False)))
+    return {
+        "review": not_(func.coalesce(benign_unenforced, False)),
+        "enforced": enforced.is_(True),
+        "benign": benign_unenforced,
+        "failed": verdict == "unavailable",
+    }[queue]
 
 
 @admin.get("/findings", response_model=list[Finding])
@@ -581,11 +613,15 @@ def list_findings(
     since: AwareDatetime | None = None,
     before: AwareDatetime | None = None,
     before_id: str | None = None,
+    queue: Queue | None = None,
     limit: Limit = 100,
     offset: Offset = 0,
 ) -> list[dict[str, Any]]:
-    """Newest first. ``severity=high`` returns exactly high; ``min_severity=high`` high and critical."""
+    """Newest first. ``severity=high`` returns exactly high; ``min_severity=high`` high and critical.
+    ``queue``: the console's views of the classifier's work (docs/classifier.md 5)."""
     q = select(FindingRow.doc)
+    if queue is not None:
+        q = q.where(_queue_filter(queue))
     for col, val in (
         (FindingRow.device_id, device_id),
         (FindingRow.user_id, user_id),
