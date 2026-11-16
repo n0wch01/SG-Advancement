@@ -35,6 +35,7 @@
 - **임시 관제 서버로 실제 모델 시험 (2026-11-16)**
   - 놓침: 말을 바꾼 긴 영어 인젝션 하나가 0.065로 `benign`이었다. 표본 검사 탭에 그대로 보였다(이 탭이 있어야 하는 이유).
   - 오탐이 번짐: 정상 한국어 문서가 0.941로 `malicious`가 돼 결과가 가려졌다. 그 뒤 같은 대화의 `rm -rf ./build`가 사용자 승인 대신 **차단**됐다(대응 B: `injection-then-destructive-action`). 분류기 오탐이 B를 거쳐 작업 차단으로 커진다.
+  - **결정 (나) (2026-11-16, 사용자):** 분류기만 근거일 때 B는 **사용자 승인**이다(`classifier-injection-then-sensitive-action`, `classifier-injection-then-destructive-action`, `classifier-injection-propagation`, 모두 critical, 3-1). 시그니처가 근거면 기존 `injection-then-*` 룰이 지금처럼 **차단**한다. 둘 다 걸리면 차단이 이긴다. 확신이 약한 근거는 사람에게 묻고, 확실한 공격 신호만 바로 막는다는 승인 원칙과 같다.
 - **한계**: 31문장은 직접 쓴 것이라 작다. 공개 데이터셋(BIPIA, InjecAgent)과 실제 기록으로 다시 재야 한다.
 
 문자열 패턴 룰만으로는 말을 바꾼 인젝션을 놓친다(평가 E03, E06). 그렇다고 모든 판단을 모델에 맡기면 판정이 흔들리고, 판정기 자체가 인젝션에 속는다.

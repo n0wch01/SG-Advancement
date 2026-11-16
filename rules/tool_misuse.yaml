@@ -88,7 +88,7 @@ rules:
   # 미탐 주의: 문구를 바꾼 인젝션은 첫 룰이 놓치고 두 번째 룰(승인)로만 잡힌다. 다른 대화·하위 에이전트로 넘어간 경우는
   #   묶지 않는다(위임 통제는 따로). 센서 데몬이 없으면(hook 단독) 시퀀스를 기억하지 못한다.
   - id: injection-then-destructive-action
-    version: "2"
+    version: "3"
     severity: critical
     category: prompt_injection
     title: 인젝션 이후 파괴적 행동
@@ -102,12 +102,11 @@ rules:
       steps:
         - name: injected-content
           when: {payload.kind: tool.result}
-          # 2026-11-16 (사용자 결정 B): 분류기가 확인한 인젝션(labels.sga_judge_injection = malicious)도 1단계다.
-          #   결과를 가린 뒤에도 다시 읽기·일부만 본 경우가 있어 이후 행동을 막는다(docs/classifier.md).
-          fields: [payload.output_preview, labels.sga_judge_injection]
+          # 시그니처 근거만(2026-11-16 결정 (나)): 분류기만 근거인 경우는 classifier-injection-* 룰이 사용자 승인을 받는다.
+          fields: [payload.output_preview]
           ignore_case: true
           # injection-then-sensitive-action(prompt_injection.yaml)의 1단계와 같게 유지
-          pattern: '^malicious$|ignore (all )?(previous|prior|above) instructions|<important>|<\|im_start\|>system|<<SYS>>|\.env.*읽|읽.*\.env|단계별.*지시|send .{0,40}(\.env|credentials|secret)'
+          pattern: 'ignore (all )?(previous|prior|above) instructions|<important>|<\|im_start\|>system|<<SYS>>|\.env.*읽|읽.*\.env|단계별.*지시|send .{0,40}(\.env|credentials|secret)'
         - name: destructive-action
           when: {payload.kind: tool.call}
           fields: &destructive_fields [payload.arguments.command, payload.arguments.cmd, payload.arguments.query, payload.arguments.sql, payload.arguments.statement]
@@ -119,6 +118,32 @@ rules:
             |(?:^|;)(?:\s|--[^\n]*\n)*(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))
             |\b(?:psql|mysql|mariadb|sqlite3|sqlcmd|clickhouse-client|duckdb|snowsql|mongosh|cqlsh|cockroach\s+sql|bq\s+query)\b[\s\S]*?\b(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))
             |\b(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))[^|\n]*\|\s*(?:\S+\s+)*?(?:psql|mysql|mariadb|sqlite3|sqlcmd|clickhouse-client|duckdb|snowsql|mongosh|cqlsh|cockroach\s+sql|bq\s+query)\b
+
+  # 대응 B, 분류기만 근거 (2026-11-16 사용자 결정 (나)): injection-then-destructive-action(시그니처, 차단)과 짝.
+  #   분류기만 인젝션으로 본 결과 뒤의 파괴적 명령은 사용자 승인(오탐이 작업 차단으로 커지지 않게: 한국어 문서 0.94 사례).
+  # 오탐 주의: 분류기 오판 뒤 10분 안의 정상 정리 작업. 원래도 destructive-shell-command가 승인을 받으므로 사용자 화면은 같고,
+  #   이 룰은 "분류기가 본 인젝션 뒤"라는 근거를 따로 기록한다(critical, 사후 검토).
+  - id: classifier-injection-then-destructive-action
+    severity: critical
+    category: prompt_injection
+    title: 분류기가 본 인젝션 이후 파괴적 행동
+    message: 분류기가 인젝션으로 판정한 외부 입력을 읽은 뒤 같은 대화에서 되돌릴 수 없는 삭제·파괴 명령이 실행되려 해 사용자 승인을 받습니다.
+    recommended_action: 승인됐다면 근거 이벤트의 첫 결과(분류기 판정과 원문)와 명령의 대상을 확인하세요. 분류기 오판이면 평가 데이터에 넣으세요.
+    response: require_approval
+    tags: ["grade:3-1", owasp-llm:LLM01, owasp-llm:LLM06, scenario:F1]
+    match:
+      type: sequence
+      within_seconds: 600
+      steps:
+        - name: classifier-confirmed
+          when: {payload.kind: tool.result}
+          fields: [labels.sga_judge_injection]
+          pattern: '^malicious$'
+        - name: destructive-action
+          when: {payload.kind: tool.call}
+          fields: *destructive_fields
+          ignore_case: true
+          pattern: *destructive
 
   - id: destructive-after-external-input
     severity: critical
