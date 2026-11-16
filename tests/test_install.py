@@ -102,6 +102,43 @@ def test_windows_logon_task_runs_the_sensor_windowless() -> None:
     assert vbs.startswith('CreateObject("WScript.Shell").Run "') and vbs.rstrip().endswith(", 0, False")
 
 
+def _fake_schtasks(monkeypatch, tmp_path, delete_rc: int, still_there: bool) -> list[tuple[str, ...]]:
+    import subprocess
+
+    calls: list[tuple[str, ...]] = []
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        rc = {"/Delete": delete_rc, "/Query": 0 if still_there else 1}.get(args[0], 0)
+        err = "ERROR: Access is denied." if rc else ""
+        return subprocess.CompletedProcess(["schtasks", *args], rc, "", err)
+
+    monkeypatch.setattr(service.sys, "platform", "win32")
+    monkeypatch.setattr(service, "_schtasks", run)
+    monkeypatch.setattr(service, "_startup_path", lambda: tmp_path / "sg-advance-sensor.vbs")
+    return calls
+
+
+def test_windows_uninstall_removes_the_task(monkeypatch, tmp_path) -> None:
+    _fake_schtasks(monkeypatch, tmp_path, delete_rc=0, still_there=False)
+    assert service.uninstall() == "removed task 'SG-Advance Sensor'"
+
+
+def test_windows_uninstall_says_when_nothing_was_installed(monkeypatch, tmp_path) -> None:
+    _fake_schtasks(monkeypatch, tmp_path, delete_rc=1, still_there=False)
+    assert service.uninstall() == "not installed"
+
+
+def test_windows_uninstall_does_not_report_a_task_it_could_not_remove_as_gone(monkeypatch, tmp_path) -> None:
+    """Live 2026-11-16: a task registered from an administrator shell survives a normal user's delete.
+    Before, that answered "not installed" and the task kept running the sensor."""
+    _fake_schtasks(monkeypatch, tmp_path, delete_rc=1, still_there=True)
+    (tmp_path / "sg-advance-sensor.vbs").write_text("x")
+    with pytest.raises(RuntimeError, match="still registered.*Access is denied.*Unregister-ScheduledTask"):
+        service.uninstall()
+    assert not (tmp_path / "sg-advance-sensor.vbs").exists()  # what could be removed still was
+
+
 def test_plugin_is_zipped_reproducibly_and_pinned(served: TestClient) -> None:
     root = Path(__file__).resolve().parents[1] / "integrations" / "openclaw-plugin"
     served.app.state.settings = dataclasses.replace(served.app.state.settings, plugin_dir=root)
@@ -158,3 +195,23 @@ def test_no_restrictive_mkdir_left_in_the_sensor() -> None:
         if re.search(r"mkdir\(mode=0o7", line) and p.name != "state.py"
     ]
     assert not hits, hits
+
+
+# ── small JSON state files (refactor 2026-11-15) ─────────────────────────────
+
+
+def test_a_state_file_that_is_not_an_object_is_ignored(tmp_path) -> None:
+    """A truncated or hand-edited state file must not stop the daemon: the state is rebuilt."""
+    from sg_advance.sensor.registry import PluginRegistry
+    from sg_advance.sensor.state import read_json_dict
+
+    for bad in ("[]", '"x"', "{", ""):
+        path = tmp_path / "plugin-state.json"
+        path.write_text(bad)
+        assert read_json_dict(path) == {}
+        r = PluginRegistry(state_path=path)  # before: '[]' raised AttributeError at start
+        assert not r.active
+    assert read_json_dict(tmp_path / "missing.json") == {}
+    assert read_json_dict(None) == {}
+    (tmp_path / "ok.json").write_text('{"expected": true}')
+    assert read_json_dict(tmp_path / "ok.json") == {"expected": True}

@@ -33,6 +33,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .envelope import envelope
 from .tools import CLAUDE_READ_ONLY
 
 DAEMON_TIMEOUT = 3.0
@@ -234,15 +235,8 @@ def hook_event(inp: dict[str, Any], *, user_id: str, hostname: str | None) -> di
                   "root_session_id": session}  # fmt: skip
     if isinstance(inp.get("cwd"), str):
         agent["cwd"] = inp["cwd"]
-    return {
-        "ts": datetime.now(UTC).isoformat(),
-        "endpoint": {"device_id": "pending", "hostname": hostname},
-        "principal": {"user_id": user_id},
-        "agent": agent,
-        "source": {"sensor": "claude_code_hook"},
-        "payload": payload,
-        "labels": labels,
-    }
+    return envelope(sensor="claude_code_hook", agent=agent, payload=payload, hostname=hostname,
+                    user_id=user_id, labels=labels, ts=datetime.now(UTC).isoformat())  # fmt: skip
 
 
 # ── talking to the daemon ───────────────────────────────────────────────────

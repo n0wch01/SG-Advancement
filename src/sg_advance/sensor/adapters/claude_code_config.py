@@ -13,11 +13,10 @@ import asyncio
 import logging
 import shutil
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ...schema import AgentEvent, SensorType
+from ...schema import SensorType
 from .. import claude_code_setup as cc
 from .base import AdapterContext
 
@@ -72,15 +71,11 @@ class ClaudeCodeConfigAdapter:
             return False
         changed = [] if self._last is None else sorted(k for k in row if self._last.get(k) != row.get(k))
         self._last = row
-        event = AgentEvent.model_validate(
-            {
-                "ts": datetime.now(UTC),
-                "endpoint": {"device_id": "pending", "hostname": ctx.hostname},
-                "principal": {"user_id": ctx.user_id},
-                "agent": {"type": "claude_code", "session_id": "config:claude-code"},
-                "source": {"sensor": SensorType.CLAUDE_CODE_CONFIG},
-                "payload": {"kind": "config.snapshot", **row, "changed": changed},
-            }
+        event = ctx.local_event(
+            agent="claude_code",
+            session_id="config:claude-code",
+            sensor=SensorType.CLAUDE_CODE_CONFIG,
+            payload={"kind": "config.snapshot", **row, "changed": changed},
         )
         log.info("claude code guard hook: %s", row["guard_detail"])
         ctx.record(ctx.evaluate(event))

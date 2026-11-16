@@ -30,11 +30,10 @@ import shutil
 import socket
 import sys
 from collections.abc import Callable, Iterable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ...schema import AgentEvent, SensorType
+from ...schema import SensorType
 from .base import AdapterContext
 from .openclaw_config import GUARD_PLUGIN_ID, guard_state
 
@@ -335,15 +334,11 @@ class AgentDiscoveryAdapter:
         return sent
 
     def _emit(self, ctx: AdapterContext, payload: dict[str, Any]) -> None:
-        event = AgentEvent.model_validate(
-            {
-                "ts": datetime.now(UTC),
-                "endpoint": {"device_id": "pending", "hostname": ctx.hostname},
-                "principal": {"user_id": ctx.user_id},
-                "agent": {"type": "openclaw", "session_id": f"install:{payload['instance']}"},
-                "source": {"sensor": SensorType.AGENT_DISCOVERY},
-                "payload": {"kind": "install.snapshot", **payload},
-            }
+        event = ctx.local_event(
+            agent="openclaw",
+            session_id=f"install:{payload['instance']}",
+            sensor=SensorType.AGENT_DISCOVERY,
+            payload={"kind": "install.snapshot", **payload},
         )
         state = "managed" if payload.get("managed") else "unmanaged"
         if not payload.get("present", True):

@@ -10,11 +10,13 @@ device-key.pem     its private key, made here and never sent anywhere (0600)
 
 from __future__ import annotations
 
+import json
 import os
 import ssl
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -48,6 +50,19 @@ def private_dir(path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
     else:
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+
+def read_json_dict(path: Path | None) -> dict[str, Any]:
+    """A small JSON state file the sensor keeps (posture, trusted sets, plugin state...): its object,
+    or ``{}`` when it is missing, unreadable or not an object. The state is then rebuilt; a damaged
+    file never stops the daemon (refactor 2026-11-15: some loaders crashed on ``[]``)."""
+    if path is None:
+        return {}
+    try:
+        doc = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
 
 
 def write_private(path: Path, data: str) -> None:

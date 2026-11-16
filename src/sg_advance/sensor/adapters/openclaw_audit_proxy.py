@@ -32,7 +32,6 @@ import http
 import json
 import logging
 from collections import OrderedDict
-from datetime import UTC, datetime
 from typing import Any
 
 from websockets.asyncio.client import connect
@@ -41,6 +40,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
 from ...schema import AgentEvent, SensorType
+from ..envelope import envelope
 from .base import AdapterContext
 
 log = logging.getLogger(__name__)
@@ -361,18 +361,13 @@ class OpenClawAuditProxyAdapter:
 
     def _event(self, ctx: AdapterContext, watch: Watch, action: dict[str, Any]) -> AgentEvent:
         labels = {"openclaw.client_ip": watch.client_ip} if watch.client_ip else {}
+        agent = {
+            "type": "openclaw",
+            "session_id": action.get("target_session_id") or f"operator:{watch.user}",
+            "run_id": action.get("target_run_id"),
+        }
+        payload = {"kind": "operator.action", **{k: v for k, v in action.items() if v is not None}}
         return AgentEvent.model_validate(
-            {
-                "ts": datetime.now(UTC),
-                "endpoint": {"device_id": "pending", "hostname": ctx.hostname},
-                "principal": {"user_id": watch.user},
-                "agent": {
-                    "type": "openclaw",
-                    "session_id": action.get("target_session_id") or f"operator:{watch.user}",
-                    "run_id": action.get("target_run_id"),
-                },
-                "source": {"sensor": SensorType.OPENCLAW_AUDIT_PROXY},
-                "payload": {"kind": "operator.action", **{k: v for k, v in action.items() if v is not None}},
-                "labels": labels,
-            }
+            envelope(sensor=SensorType.OPENCLAW_AUDIT_PROXY, agent=agent, payload=payload,
+                     hostname=ctx.hostname, user_id=watch.user, labels=labels)  # fmt: skip
         )

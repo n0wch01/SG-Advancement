@@ -23,12 +23,11 @@ import logging
 import shutil
 import subprocess
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from ...integrity import OPENCLAW_EXTENSIONS, Manifest, dir_digest, lookup
-from ...schema import AgentEvent, Enforcement, ResponseAction
+from ...schema import Enforcement, ResponseAction
 from .base import AdapterContext
 from .openclaw_config import GUARD_PLUGIN_ID
 
@@ -212,15 +211,8 @@ class OpenClawIntegrityAdapter:
         if payload == self._last:
             return False
         self._last = payload
-        event = AgentEvent.model_validate(
-            {
-                "ts": datetime.now(UTC),
-                "endpoint": {"device_id": "pending", "hostname": ctx.hostname},
-                "principal": {"user_id": ctx.user_id},
-                "agent": {"type": "openclaw", "session_id": "integrity:openclaw"},
-                "source": {"sensor": "openclaw_integrity"},
-                "payload": payload,
-            }
+        event = ctx.local_event(
+            agent="openclaw", session_id="integrity:openclaw", sensor="openclaw_integrity", payload=payload
         )
         result = ctx.evaluate(event)
         ctx.record(result, self._enforce(result.verdict.action, payload))

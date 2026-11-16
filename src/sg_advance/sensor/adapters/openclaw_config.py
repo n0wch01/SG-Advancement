@@ -24,11 +24,9 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ...schema import AgentEvent
 from .base import AdapterContext
 
 log = logging.getLogger(__name__)
@@ -292,21 +290,12 @@ class OpenClawConfigAdapter:
         return True
 
     def _emit(self, ctx: AdapterContext, now: dict[str, Any], changed: list[str]) -> None:
-        event = AgentEvent.model_validate(
-            {
-                "ts": datetime.now(UTC),
-                "endpoint": {"device_id": "pending", "hostname": ctx.hostname},
-                "principal": {"user_id": ctx.user_id},
-                "agent": {"type": "openclaw", "session_id": "config:openclaw"},
-                "source": {"sensor": "openclaw_config"},
-                "payload": {
-                    "kind": "config.snapshot",
-                    "product": "openclaw",
-                    "path": str(self.path),
-                    "changed": changed,
-                    **now,
-                },
-            }
+        event = ctx.local_event(
+            agent="openclaw",
+            session_id="config:openclaw",
+            sensor="openclaw_config",
+            payload={"kind": "config.snapshot", "product": "openclaw", "path": str(self.path),
+                     "changed": changed, **now},  # fmt: skip
         )
         if changed:
             log.info("openclaw config changed: %s", ", ".join(changed))

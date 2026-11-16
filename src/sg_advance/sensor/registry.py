@@ -8,6 +8,8 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
+from .state import read_json_dict
+
 
 class PluginRegistry:
     """What the in-gateway plugin has already judged, and whether it is still alive.
@@ -51,11 +53,8 @@ class PluginRegistry:
     # ── persistence ──────────────────────────────────────────────────────────
 
     def _load(self) -> None:
-        if self.state_path is None or not self.state_path.exists():
-            return
-        try:
-            doc = json.loads(self.state_path.read_text("utf-8"))
-        except (OSError, ValueError):
+        doc = read_json_dict(self.state_path)
+        if not doc:
             return
         self.expected = bool(doc.get("expected"))
         last = doc.get("last_contact")

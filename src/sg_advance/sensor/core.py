@@ -34,7 +34,7 @@ from . import lineage as lineage_mod
 from .client import ControlPlaneClient, ControlPlaneError, Offline, Transport, urllib_transport
 from .priority import event_priority
 from .spool import FlushResult, Spool
-from .state import Credentials, SensorHome, now_utc, private_dir, write_private
+from .state import Credentials, SensorHome, now_utc, private_dir, read_json_dict, write_private
 
 log = logging.getLogger(__name__)
 
@@ -219,13 +219,13 @@ class Sensor:
         return self.home.root / "posture.json"
 
     def _load_posture(self) -> None:
+        doc = read_json_dict(self._posture_path)
         try:
-            doc = json.loads(self._posture_path.read_text("utf-8"))
-            for check, row in doc.get("checks", {}).items():
+            for check, row in (doc.get("checks") or {}).items():
                 self.posture[check] = list(row["reasons"])
                 self._posture_at[check] = datetime.fromisoformat(row["at"])
-            self.posture_expected = True
-        except (OSError, ValueError, KeyError, TypeError):
+            self.posture_expected = bool(doc)
+        except (ValueError, KeyError, TypeError, AttributeError):
             pass
 
     def set_posture(self, check: str, reasons: list[str]) -> None:
@@ -267,8 +267,8 @@ class Sensor:
 
     def _load_checked_at(self) -> datetime | None:
         try:
-            return datetime.fromisoformat(json.loads(self._checked_path.read_text("utf-8"))["at"])
-        except (OSError, ValueError, KeyError, TypeError):
+            return datetime.fromisoformat(read_json_dict(self._checked_path)["at"])
+        except (ValueError, KeyError, TypeError):
             pass
         try:  # sensors from before this file: the cache's own write time
             return datetime.fromtimestamp(self.home.policy_path.stat().st_mtime, tz=now_utc().tzinfo)
@@ -294,10 +294,7 @@ class Sensor:
         return self.home.root / "trusted.json"
 
     def _load_trusted(self) -> dict[str, set[str]]:
-        try:
-            doc = json.loads(self._trusted_path.read_text("utf-8"))
-        except (OSError, ValueError):
-            return {}
+        doc = read_json_dict(self._trusted_path)
         return {k: set(v) for k, v in doc.items() if isinstance(v, list)}
 
     def set_trusted(self, name: str, values: set[str]) -> None:
@@ -512,12 +509,7 @@ class Sensor:
         if result.event.kind not in self.STANDING_KINDS:
             return findings
         if self._standing is None:
-            try:
-                loaded = json.loads(self._standing_path.read_text("utf-8"))
-                ok = isinstance(loaded, dict)
-                self._standing = {str(k): str(v) for k, v in loaded.items()} if ok else {}
-            except (OSError, ValueError):
-                self._standing = {}
+            self._standing = {str(k): str(v) for k, v in read_json_dict(self._standing_path).items()}
         store = self._standing
         subject = result.event.agent.session_id or ""
         holding = {h.rule.id: json.dumps([h.rule.id, subject, h.key]) for h in result.verdict.hits}

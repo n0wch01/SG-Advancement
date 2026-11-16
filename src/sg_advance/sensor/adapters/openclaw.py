@@ -45,6 +45,7 @@ from typing import Any
 from ...integrity import Manifest, dir_digest
 from ...redact import redact_value
 from ...schema import AgentEvent, Enforcement, ResponseAction, SensorType
+from ..envelope import envelope
 from .base import AdapterContext
 from .openclaw_gateway import DEFAULT_URL, DeviceIdentity, GatewayConnection, GatewayError, PairingRequired
 from .openclaw_integrity import cli_disabler
@@ -220,21 +221,16 @@ class OpenClawMapper:
     ) -> AgentEvent:
         self._seq += 1
         who = self.people.attribute(session_key, run_id, self.user_id)
+        agent = {
+            "type": "openclaw",
+            "session_id": session_key,
+            "run_id": run_id,
+            **self.people.lineage(session_key),  # sub-agent: who delegated to it
+        }
         return AgentEvent.model_validate(
-            {
-                "labels": who.labels | (labels or {}),
-                "ts": _ts(ts),
-                "endpoint": {"device_id": "pending", "hostname": self.hostname},  # sensor core stamps the id
-                "principal": who.principal,
-                "agent": {
-                    "type": "openclaw",
-                    "session_id": session_key,
-                    "run_id": run_id,
-                    **self.people.lineage(session_key),  # sub-agent: who delegated to it
-                },
-                "source": {"sensor": "openclaw_gateway", "seq": self._seq},
-                "payload": payload,
-            }
+            envelope(sensor="openclaw_gateway", agent=agent, payload=payload, hostname=self.hostname,
+                     principal=who.principal, labels=who.labels | (labels or {}), ts=_ts(ts),
+                     source={"seq": self._seq})  # fmt: skip
         )
 
     def _provider(self, tool: str) -> dict[str, Any]:

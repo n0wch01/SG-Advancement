@@ -20,10 +20,9 @@ import asyncio
 import contextlib
 import ipaddress
 import logging
-from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
-from ...schema import AgentEvent, Enforcement, ResponseAction, SensorType
+from ...schema import Enforcement, ResponseAction, SensorType
 from .base import AdapterContext
 
 log = logging.getLogger(__name__)
@@ -140,25 +139,18 @@ class EgressProxyAdapter:
     def _judge(
         self, ctx: AdapterContext, client_ip: str | None, method: str, host: str, port: int, url: str
     ) -> bool:
-        event = AgentEvent.model_validate(
-            {
-                "ts": datetime.now(UTC),
-                "endpoint": {"device_id": "pending", "hostname": ctx.hostname},
-                "principal": {"user_id": ctx.user_id},
-                "agent": {"type": "unknown", "session_id": f"egress:{client_ip or 'unknown'}"},
-                "source": {"sensor": SensorType.EGRESS_PROXY},
-                "payload": {
-                    "kind": "net.egress",
-                    "method": method,
-                    "url": url,
-                    "host": host.lower(),
-                    "destination": classify(host, self.internal_suffixes),
-                },
-                "labels": {
-                    "egress.port": str(port),
-                    **({"egress.client_ip": client_ip} if client_ip else {}),
-                },
-            }
+        event = ctx.local_event(
+            agent="unknown",
+            session_id=f"egress:{client_ip or 'unknown'}",
+            sensor=SensorType.EGRESS_PROXY,
+            payload={
+                "kind": "net.egress",
+                "method": method,
+                "url": url,
+                "host": host.lower(),
+                "destination": classify(host, self.internal_suffixes),
+            },
+            labels={"egress.port": str(port), **({"egress.client_ip": client_ip} if client_ip else {})},
         )
         result = ctx.evaluate(event)
         action = result.verdict.action

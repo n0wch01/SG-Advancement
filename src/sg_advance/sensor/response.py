@@ -17,7 +17,7 @@ from typing import Any
 
 from .adapters.base import AdapterContext
 from .client import ControlPlaneError, Offline
-from .state import write_private
+from .state import read_json_dict, write_private
 
 log = logging.getLogger(__name__)
 
@@ -69,11 +69,7 @@ def _done_path(ctx: AdapterContext) -> Path:
 
 
 def _load_done(ctx: AdapterContext) -> dict[str, dict[str, Any]]:
-    try:
-        doc = json.loads(_done_path(ctx).read_text("utf-8"))
-        return doc if isinstance(doc, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return read_json_dict(_done_path(ctx))
 
 
 def _save_done(ctx: AdapterContext, done: dict[str, dict[str, Any]]) -> None:

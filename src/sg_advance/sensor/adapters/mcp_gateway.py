@@ -43,6 +43,7 @@ from urllib.parse import urlsplit
 
 from ...detect import rule_titles
 from ...schema import AgentEvent, Enforcement, ResponseAction, SensorType
+from ..envelope import envelope
 from ..security_hold import peer_gone
 from .base import AdapterContext
 
@@ -310,16 +311,18 @@ class McpGatewayAdapter:
     def _event(
         self, ctx: AdapterContext, name: str, who: dict[str, str], payload: dict[str, Any]
     ) -> dict[str, Any]:
-        return {
-            "ts": datetime.now(UTC).isoformat(),
-            "endpoint": {"device_id": "pending", "hostname": ctx.hostname},
-            "principal": {"user_id": who["user"]},
-            "agent": {"type": who["agent"], "session_id": f"mcp:{name}:{who['session']}"},
-            "source": {"sensor": "mcp_proxy"},
-            "payload": payload,
-            "labels": {"sga_source": "mcp_gateway", "mcp.server": name}
-            | ({"sga_client_device": who["device"]} if who.get("device") else {}),
-        }
+        labels = {"sga_source": "mcp_gateway", "mcp.server": name}
+        if who.get("device"):
+            labels["sga_client_device"] = who["device"]
+        return envelope(
+            sensor="mcp_proxy",
+            agent={"type": who["agent"], "session_id": f"mcp:{name}:{who['session']}"},
+            payload=payload,
+            hostname=ctx.hostname,
+            user_id=who["user"],
+            labels=labels,
+            ts=datetime.now(UTC).isoformat(),
+        )
 
     def _provider(self, name: str) -> dict[str, Any]:
         return {"kind": "mcp", "mcp_server": name, "mcp_server_url": self.servers[name]}

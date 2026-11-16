@@ -48,6 +48,7 @@ from ..schema import AgentEvent, Enforcement, EventKind, ResponseAction, SensorT
 from ..schema.events import ApprovalResolution
 from .adapters.base import AdapterContext
 from .adapters.openclaw_people import OpenClawPeople
+from .envelope import envelope
 from .security_hold import peer_gone, summary_for
 
 log = logging.getLogger(__name__)
@@ -113,21 +114,15 @@ def _plugin_envelope(
     # The plugin's tool context has no gateway profile; the WebSocket side learned who it is.
     people = people or OpenClawPeople()
     who = people.attribute(session_key, run_id, user_id)
+    agent = {
+        "type": "openclaw",
+        "session_id": session_key or str(req.get("sessionId") or "unknown"),
+        "run_id": run_id,
+        **people.lineage(session_key),
+    }
     return AgentEvent.model_validate(
-        {
-            "ts": datetime.now(UTC),
-            "endpoint": {"device_id": "pending", "hostname": hostname},
-            "principal": who.principal,
-            "agent": {
-                "type": "openclaw",
-                "session_id": session_key or str(req.get("sessionId") or "unknown"),
-                "run_id": run_id,
-                **people.lineage(session_key),
-            },
-            "source": {"sensor": "openclaw_plugin"},
-            "payload": payload,
-            "labels": who.labels | _plugin_labels(req),
-        }
+        envelope(sensor="openclaw_plugin", agent=agent, payload=payload, hostname=hostname,
+                 principal=who.principal, labels=who.labels | _plugin_labels(req))  # fmt: skip
     )
 
 
@@ -521,15 +516,8 @@ def record_health(ctx: AdapterContext, status: str, detail: str, last_seen: floa
     }
     if last_seen is not None:
         payload["last_seen"] = datetime.fromtimestamp(last_seen, UTC)
-    event = AgentEvent.model_validate(
-        {
-            "ts": datetime.now(UTC),
-            "endpoint": {"device_id": "pending", "hostname": ctx.hostname},
-            "principal": {"user_id": ctx.user_id},
-            "agent": {"type": "openclaw", "session_id": "sensor:openclaw_plugin"},
-            "source": {"sensor": "openclaw_plugin"},
-            "payload": payload,
-        }
+    event = ctx.local_event(
+        agent="openclaw", session_id="sensor:openclaw_plugin", sensor="openclaw_plugin", payload=payload
     )
     ctx.record(ctx.evaluate(event))
 
