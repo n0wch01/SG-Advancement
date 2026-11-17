@@ -5,8 +5,10 @@ Decision 2026-11-13 ("둘 다 + 탐지"):
 - **managed** (with administrator rights): a drop-in file in Claude Code's managed settings
   directory (``managed-settings.d/sg-advance.json``). Users cannot remove managed hooks, and
   bypass-permissions mode is switched off. This is how a company deploys it (MDM / installer).
-- **user** (no rights): merged into ``~/.claude/settings.json``. Works the same, but the person can
-  delete it; the sensor's check reports that (``claude-code-guard-hook-*`` rules).
+- **user** (no rights): merged into ``~/.claude/settings.json`` (or ``$CLAUDE_CONFIG_DIR/settings.json``).
+  Works the same, but the person can delete it, or start Claude Code with another ``CLAUDE_CONFIG_DIR``
+  where it is not; the sensor's check reports a missing hook (``claude-code-guard-hook-*`` rules) only for
+  the directory it looks at. Only managed settings apply whatever the config directory.
 
 The hook runs as an exec-form command (no shell: on Windows it must be a real .exe, which
 ``sga-hook.exe`` in the sensor's venv is). PreToolUse uses ``onFailure: block`` so a missing or
@@ -17,8 +19,10 @@ security-approval wait.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +41,12 @@ def managed_dir(platform: str = sys.platform) -> Path:
     return Path("/etc/claude-code/managed-settings.d")
 
 
-def user_settings(home: Path | None = None) -> Path:
+def user_settings(home: Path | None = None, env: Mapping[str, str] | None = None) -> Path:
+    """The user settings file Claude Code reads. ``CLAUDE_CONFIG_DIR`` moves it (Claude Code's documented way
+    to keep several accounts apart, 2026-11-17): a hook written to ``~/.claude`` would then not apply."""
+    env = os.environ if env is None else env
+    if home is None and env.get("CLAUDE_CONFIG_DIR"):
+        return Path(env["CLAUDE_CONFIG_DIR"]).expanduser() / "settings.json"
     return (home or Path.home()) / ".claude" / "settings.json"
 
 

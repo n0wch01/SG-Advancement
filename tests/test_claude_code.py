@@ -515,3 +515,13 @@ def test_invalid_utf8_input_is_still_blocked(tmp_path: Path, monkeypatch) -> Non
     s = _with_stdio(monkeypatch, b'{"hook_event_name": "PreToolUse", "x": "\xff\xfe"}')
     assert hook.main(["--home", str(tmp_path)]) == 2
     assert b"blocked" in s.err()
+
+
+def test_user_settings_follow_claude_config_dir(tmp_path: Path) -> None:
+    """Claude Code reads $CLAUDE_CONFIG_DIR/settings.json when it is set (documented for several accounts):
+    the user-level hook must go there, or it silently does not apply (found 2026-11-17)."""
+    moved = tmp_path / "cc-config"
+    assert cc.user_settings(env={"CLAUDE_CONFIG_DIR": str(moved)}) == moved / "settings.json"
+    assert cc.user_settings(env={}) == Path.home() / ".claude" / "settings.json"
+    explicit = cc.user_settings(tmp_path, env={"CLAUDE_CONFIG_DIR": str(moved)})
+    assert explicit == tmp_path / ".claude" / "settings.json"  # an explicit home wins
