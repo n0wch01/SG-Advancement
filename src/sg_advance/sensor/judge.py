@@ -12,6 +12,9 @@ the judge answers ``unavailable`` with the reason, and the rules alone decide (d
 
 from __future__ import annotations
 
+import ast
+import json
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -79,6 +82,75 @@ def chunks(text: str, size: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP) -> 
     return [text[i : i + size] for i in range(0, max(len(text) - overlap, 1), step)]
 
 
+RECORD_MERGE = 300  # short lines are scored together up to this size (a log of one-liners stays few calls)
+STRUCTURED_MAX = 200_000  # characters a result may have to be read as JSON / a Python literal
+
+
+def _structured(text: str) -> object | None:
+    head = text.lstrip()[:1]
+    if head not in ("{", "[") or len(text) > STRUCTURED_MAX:
+        return None
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError):
+        pass
+    try:
+        return ast.literal_eval(text)  # tool output printed as a Python dict (literals only, never code)
+    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+        return None
+
+
+def _largest_list(value: object, depth: int = 0) -> list | None:
+    if depth > 6:
+        return None
+    best: list | None = value if isinstance(value, list) and len(value) >= 2 else None
+    children = value.values() if isinstance(value, dict) else value if isinstance(value, list) else ()
+    for child in children:
+        found = _largest_list(child, depth + 1)
+        if found is not None and (best is None or len(found) > len(best)):
+            best = found
+    return best
+
+
+def records(text: str) -> list[str]:
+    """A tool result split into the records it is made of, each scored on its own (2026-11-17,
+    docs/classifier.md 13): benign records glued into one window score as an attack (0.90-0.97 measured),
+    and an attacker usually controls one record (one mail, one review, one page section). Structured output:
+    the items of its largest list, plus the rest; plain text: paragraphs, short ones merged up to
+    RECORD_MERGE. Records longer than a chunk are chunked as before."""
+    data = _structured(text)
+    parts: list[str]
+    if data is not None and (items := _largest_list(data)) is not None:
+        parts = [json.dumps(item, ensure_ascii=False, default=str) for item in items]
+        rest = json.dumps(_without(data, items), ensure_ascii=False, default=str)
+        if rest not in ("null", "[]", "{}"):
+            parts.append(rest)
+    else:
+        parts = []
+        for para in re.split(r"\n\s*\n", text):
+            para = para.strip()
+            if not para:
+                continue
+            if parts and len(parts[-1]) + len(para) + 2 <= RECORD_MERGE:
+                parts[-1] += "\n\n" + para
+            else:
+                parts.append(para)
+    out: list[str] = []
+    for part in parts:
+        out.extend(chunks(part) if len(part) > CHUNK_CHARS else [part])
+    return out
+
+
+def _without(value: object, target: list) -> object:
+    if value is target:
+        return None
+    if isinstance(value, dict):
+        return {k: _without(v, target) for k, v in value.items() if v is not target}
+    if isinstance(value, list):
+        return [_without(v, target) for v in value]
+    return value
+
+
 def verdict_for(score: float) -> str:
     return "malicious" if score >= MALICIOUS_AT else "unsure" if score >= UNSURE_AT else "benign"
 
@@ -95,8 +167,12 @@ class InjectionJudge:
         max_chunks: int = MAX_CHUNKS,
         budget: float = BUDGET_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        by_record: bool = True,
     ) -> None:
         self.classifier = classifier
+        # records() instead of fixed windows (on since 2026-11-17, user decision: glued benign records scored
+        # as attacks in 72% of long results; per record, attacks score as they do alone; classifier.md 13)
+        self.by_record = by_record
         self.unavailable_reason = unavailable_reason
         self.max_chunks = max_chunks
         self.budget = budget
@@ -107,7 +183,7 @@ class InjectionJudge:
         return self.classifier.name if self.classifier is not None else "none"
 
     def judge(self, text: str) -> Judgement:
-        parts = chunks(text)
+        parts = records(text) if self.by_record else chunks(text)
         if self.classifier is None:
             return Judgement("unavailable", None, self.model, 0, len(parts), self.unavailable_reason)
         start = self.clock()
