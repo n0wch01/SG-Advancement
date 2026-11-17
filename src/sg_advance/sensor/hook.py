@@ -19,6 +19,7 @@ The hook settings use ``onFailure: block`` for PreToolUse, so a crashed or missi
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -165,6 +166,14 @@ def launch_info() -> dict[str, Any]:
     return info
 
 
+def input_digest(tool_input: Any) -> str:
+    """Fingerprint of what a tool is asked to do, the same before (PreToolUse) and after (PostToolUse) it
+    runs unless something changed the input in between. The daemon compares the one the person approved
+    with the one that ran (verification layer 2b, 2026-11-17)."""
+    text = json.dumps(tool_input, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(text.encode()).hexdigest()[:32]
+
+
 def hook_event(inp: dict[str, Any], *, user_id: str, hostname: str | None) -> dict[str, Any] | None:
     name = inp.get("hook_event_name")
     tool = str(inp.get("tool_name") or "unknown")
@@ -214,6 +223,8 @@ def hook_event(inp: dict[str, Any], *, user_id: str, hostname: str | None) -> di
     else:
         return None
     labels = {"sga_source": "claude_code_hook", "claude_code.hook": str(name)}
+    if payload["kind"] in ("tool.call", "tool.result") and "tool_input" in inp:
+        labels["sga_input_digest"] = input_digest(inp["tool_input"])
     full_result = payload.get("output_preview") if payload["kind"] == "tool.result" else None
     if full_result is not None and len(_text(inp.get("tool_response"))) > INSPECT_MAX:
         labels["sga_result_uninspected"] = "too_large"

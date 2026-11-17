@@ -47,11 +47,14 @@ from ..schema.events import ApprovalResolution
 from .adapters.base import AdapterContext
 from .adapters.openclaw_people import OpenClawPeople
 from .envelope import envelope
+from .response import BLOCKED_SESSIONS
 
 log = logging.getLogger(__name__)
 
 SOCKET_NAME = "sga.sock"
 _BLOCKING = {ResponseAction.BLOCK, ResponseAction.ABORT_SESSION, ResponseAction.QUARANTINE}
+DIGEST_LABEL = "sga_input_digest"  # the hook's fingerprint of a tool's input (hook.input_digest)
+MISMATCH_LABEL = "sga_approval_mismatch"  # set only by judge_event: the approved input is not what ran
 
 
 # ── request → AgentEvent ────────────────────────────────────────────────────
@@ -360,15 +363,29 @@ def judge_event(
     ``tool.call``: the same verdicts as the OpenClaw plugin (block / approve → the agent's own
     prompt / allow). ``prompt.user``: blocked only by a blocking verdict.
     Anything else is recorded. A ``tool.result`` for a call that was sent to the person's own
-    prompt means they approved it: recorded as ``approval.resolved`` (a refusal leaves no result,
-    so it cannot be told apart from an abandoned call)."""
+    prompt means they approved it: recorded as ``approval.resolved``. A refusal leaves no result: when
+    the person's next prompt (or the session's end) arrives first, it is recorded as a denial
+    (``sga_approval_inferred=no_result``; a "No" and an interrupted call look the same).
+
+    Approval binding (verification layer 2b, 2026-11-17): the person approves one input; the result
+    carries the input that ran (``sga_input_digest`` from the hook). When they differ the resolution is
+    marked ``sga_approval_mismatch`` and the rules decide (``approval-execution-mismatch``: the rest of
+    the conversation is blocked). This is detection right after the call, not prevention: the agent
+    runs its own prompt, so nothing can check in between."""
     event = AgentEvent.model_validate(doc)
+    if MISMATCH_LABEL in event.labels:  # only this daemon compares; never taken from the hook's input
+        event = event.model_copy(
+            update={"labels": {k: v for k, v in event.labels.items() if k != MISMATCH_LABEL}}
+        )
     result = ctx.evaluate(event)
     kind = result.event.kind
     if kind is EventKind.TOOL_CALL:
         action = approval_channel(result.verdict, point)
         response, enforcement = plugin_response(result.verdict, point, action)
-        pending = pending_for(result, action, response) | {"call": result.event}
+        pending = pending_for(result, action, response) | {
+            "call": result.event,
+            "input_digest": result.event.labels.get(DIGEST_LABEL),
+        }
         ctx.record(result, enforcement)
         if response.get("decision") == "approve" and point.sensor is SensorType.CLAUDE_CODE_HOOK:
             # Claude Code asked the person: a later result means they approved. The MCP gateway asks no one.
@@ -383,10 +400,20 @@ def judge_event(
     if kind is EventKind.TOOL_RESULT:
         asked = ctx.plugins.take_approval(result.event.payload.call_id)  # type: ignore[union-attr]
         if asked and isinstance(asked.get("call"), AgentEvent):
-            inferred = resolution_from_call(
-                asked["call"], "allow-once", asked, labels={"sga_approval_inferred": "tool_result"}
-            )
-            ctx.record(ctx.evaluate(inferred))
+            labels = {"sga_approval_inferred": "tool_result"}
+            approved, ran = asked.get("input_digest"), result.event.labels.get(DIGEST_LABEL)
+            if approved and ran and approved != ran:
+                labels[MISMATCH_LABEL] = "true"
+            inferred = ctx.evaluate(resolution_from_call(asked["call"], "allow-once", asked, labels=labels))
+            ctx.record(inferred, _abort_if_blocking(ctx, inferred, point))
+    elif kind in (EventKind.PROMPT_USER, EventKind.SESSION_END):
+        # The turn is over: an asked call with no result was refused (or interrupted) by the person.
+        for asked in ctx.plugins.take_session(_conversation(result.event)):
+            if isinstance(asked.get("call"), AgentEvent):
+                denied = resolution_from_call(
+                    asked["call"], "deny", asked, labels={"sga_approval_inferred": "no_result"}
+                )
+                ctx.record(ctx.evaluate(denied))
     if withheld is not None:
         return withheld
     if kind is EventKind.PROMPT_USER and result.verdict.action in _BLOCKING:
@@ -398,6 +425,28 @@ def judge_event(
             "rules": result.verdict.rule_ids,
         }
     return {"ok": True, "decision": "allow"}
+
+
+def _conversation(event: AgentEvent) -> str:
+    """The main conversation a (sub)agent's event belongs to."""
+    return event.agent.root_session_id or event.agent.session_id
+
+
+def _abort_if_blocking(ctx: AdapterContext, result: Any, point: EnforcementPoint) -> Enforcement | None:
+    """A blocking verdict on something that already ran (an approval that does not match what ran):
+    block the rest of the conversation through the same set security's remote block uses, so every
+    later tool call is refused before it runs (``remote-blocked-session``)."""
+    if result.verdict.action not in _BLOCKING:
+        return None
+    current = set(ctx.sensor.trusted.get(BLOCKED_SESSIONS, set()))
+    ctx.sensor.set_trusted(BLOCKED_SESSIONS, current | {_conversation(result.event)})
+    return Enforcement(
+        action=ResponseAction.ABORT_SESSION,
+        enforced=True,
+        enforcer=point.sensor,
+        stage="session_aborted",
+        detail="conversation blocked from now on: what ran is not what the person approved",
+    )
 
 
 DECISIONS = ("allow-once", "allow-always", "deny", "timeout", "cancelled")

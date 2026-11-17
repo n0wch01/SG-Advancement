@@ -35,3 +35,25 @@ rules:
       window_seconds: 600
       threshold: 5
       group_by: [principal.user_id]
+
+  # 승인-실행 대조 (2026-11-17, 검증 구조 2b). 보안팀 보류를 없애면서 "실행 직전 재검사·요청 동일성 확인"이 사라졌다.
+  # 사용자 승인 창은 에이전트(Claude Code)가 실행하므로 실행 전에 다시 확인할 수 없다. 그래서 실행 직후에 대조한다:
+  # hook이 실행 전·후의 툴 입력 지문(labels.sga_input_digest)을 붙이고, 센서가 승인한 호출의 지문과 실제로 실행된 지문을
+  # 비교해 다르면 labels.sga_approval_mismatch를 붙인다(sensor/plugin_api.py). 이 룰이 걸리면 센서가 그 대화를 차단 목록에
+  # 넣어(remote_blocked_sessions) 이후 툴 호출을 거부한다. 해제는 콘솔·`sga-server action unblock-session`.
+  # 한계: 막는 것이 아니라 실행 직후에 잡는다(이미 실행된 한 번은 되돌리지 못함).
+  # 오탐 주의: 다른 hook이나 사용자가 승인 창에서 입력을 고친 정당한 경우도 걸린다.
+  - id: approval-execution-mismatch
+    severity: critical
+    category: policy_violation
+    title: 승인한 것과 다른 요청이 실행됨
+    message: 사용자가 승인한 툴 호출과 실제로 실행된 호출의 입력이 다릅니다. 이 대화의 이후 툴 호출을 막았습니다.
+    recommended_action: 요청 이벤트(승인한 입력)와 결과 이벤트(실행된 입력)를 비교하고, 다른 hook이나 에이전트가 입력을 바꿨는지 확인하세요. 확인 후 대화 차단을 해제하세요.
+    response: abort_session
+    dedup: none
+    tags: ["action-independent", owasp-llm:LLM06]
+    when: {payload.kind: approval.resolved, labels.sga_approval_mismatch: "true"}
+    match:
+      type: regex
+      fields: [labels.sga_approval_mismatch]
+      pattern: '^true$'

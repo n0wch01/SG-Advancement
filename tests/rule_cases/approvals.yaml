@@ -62,3 +62,21 @@ cases:
       - {at: 180, kind: approval.resolved, call_id: c4, tool: exec, decision: allow-once, approved: true, via: security}
       - {at: 240, kind: approval.resolved, call_id: c5, tool: exec, decision: allow-once, approved: true, via: security}
     expect_not: [user-approved-high-risk, approval-fatigue]
+
+  # 승인-실행 대조 (2026-11-17, 검증 구조 2b): 사용자가 승인한 요청과 실제로 실행된 요청이 다르면(입력 지문이 다름)
+  # 대화를 중단한다. 실행 전에는 막을 수 없는 자리(사용자 승인 창은 에이전트가 실행)를 실행 직후 탐지로 메운다.
+  - name: 승인한 것과 다른 요청이 실행되면 대화 중단
+    agent: claude_code
+    sensor: claude_code_hook
+    events:
+      - {kind: approval.resolved, call_id: c1, tool: Bash, decision: allow-once, approved: true,
+         labels: {sga_approval_inferred: tool_result, sga_approval_mismatch: "true"}}
+    expect: [approval-execution-mismatch]
+
+  - name: 같은 요청이 실행됐거나 비교할 수 없으면 대상 아님
+    agent: claude_code
+    sensor: claude_code_hook
+    events:
+      - {kind: approval.resolved, call_id: c1, tool: Bash, decision: allow-once, approved: true, labels: {sga_approval_inferred: tool_result}}
+      - {kind: approval.resolved, call_id: c2, tool: Bash, decision: deny, approved: false, labels: {sga_approval_inferred: no_result}}
+    expect_not: [approval-execution-mismatch]

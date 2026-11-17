@@ -148,3 +148,13 @@ class PluginRegistry:
 
     def take_approval(self, call_id: str) -> dict[str, Any] | None:
         return self._pending.pop(call_id, None)
+
+    def take_session(self, conversation: str) -> list[dict[str, Any]]:
+        """Remove and return the approvals still waiting in one conversation (its main session id; a
+        subagent's call counts towards its root). Entries without the call (OpenClaw) never match."""
+        def of(ctx: dict[str, Any]) -> str | None:
+            agent = getattr(ctx.get("call"), "agent", None)
+            return (agent.root_session_id or agent.session_id) if agent is not None else None
+
+        ids = [cid for cid, ctx in self._pending.items() if of(ctx) == conversation]
+        return [self._pending.pop(cid) for cid in ids]
