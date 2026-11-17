@@ -83,7 +83,7 @@ uv run --extra classifier python scripts/verify_policy.py --model data/models/pr
 |---|---|---|
 | 1 룰 로드 | 스키마, 정규식, 후보 태그 | 하나라도 안 읽히면 실패 |
 | 2 룰 케이스 | `tests/rule_cases`: 모든 룰의 정탐·정상 케이스 | 하나라도 틀리면 실패 |
-| 3 변경 검토 | 기준(`HEAD`) 대비 추가·삭제·비활성·응답 약화·심각도 하향·버전 그대로인 내용 변경 | 실패는 아니고 **REVIEW**: 사람이 읽는다 |
+| 3 변경 검토 | 기준(`HEAD`) 대비 추가·삭제·비활성·응답 약화·심각도 하향·버전 그대로인 내용 변경 | 버전 그대로인 내용 변경은 **실패**(2026-11-17 사용자 결정: 예전·새 동작이 같은 `rule_version`으로 기록되면 감사·재생 비교가 안 된다). 나머지는 **REVIEW**: 사람이 읽는다 |
 | 4 평가 묶음 | `scripts/evaluate.py`: 공격·우회·정상을 집행 지점별로 | 설계와 다르면 실패 |
 | 5 실제 기록 재생 | `scripts/replay_history.py`: 관제 DB 사본으로 룰별 새로 걸림·안 걸리게 됨 | 바뀐 것이 있으면 REVIEW(`--review`로 tp/fp 판정표) |
 | 6 분류기 측정 | `scripts/eval_classifier.py`: 정탐률·오탐률·지연 | 표를 읽고 판단 |

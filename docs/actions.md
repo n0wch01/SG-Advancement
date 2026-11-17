@@ -53,8 +53,12 @@
 | `sga_act_destroy` | 파괴적 행동의 종류(아래), 쉼표로 구분 |
 | `sga_act_targets` | 대상(쓴 그대로, `$DIR`은 풀지 않음, 500자) |
 
-파괴적 행동 종류(`actions.KINDS`, 변경 전 정규식의 갈래와 대응): `rm-recursive-force`, `find-delete`, `find-exec-rm`, `shred-file`, `git-clean-force`, `git-reset-hard`, `git-checkout-all`, `git-restore-all`, `git-push-force`, `mkfs-format`, `dd-raw-write`, `chmod-777-root`.
-`rm-recursive`(강제 없는 `rm -r`)는 기록만 한다. 룰은 재귀와 강제가 함께 있을 때만 묻는다(2026-11-15 사용자 결정). 튜닝 후보다.
+파괴적 행동 종류(`actions.KINDS`, 변경 전 정규식의 갈래와 대응): `rm-recursive-force`, `rm-recursive`, `find-delete`, `find-exec-rm`, `shred-file`, `git-clean-force`, `git-reset-hard`, `git-checkout-all`, `git-restore-all`, `git-push-force`, `mkfs-format`, `dd-raw-write`, `chmod-777-root`.
+`rm-recursive`(강제 없는 `rm -r`)도 사용자 승인이다(2026-11-17 사용자 결정, 2026-11-15의 "재귀와 강제가 함께" 기준을 바꿈).
+- 이유: 에이전트는 터미널 없이 실행하므로 `rm -r`도 묻지 않고 지운다.
+- 오탐: `rm -r build` 같은 정리 작업에도 승인 창이 뜬다.
+- 해소된 미탐: Windows 평가 WE01(PowerShell 별칭 `rm -r C:\...`)이 함께 잡히게 됐다(Windows 우회 시도 탐지 82% → 88%).
+- 원문 정규식에서는 `git rm`을 뺐다(`git rm -r --cached`는 추적 해제).
 
 - **`ok`인 경우**: 모든 명령이 모델에 있거나, 인자를 데이터로만 쓰는 명령(`echo`, `grep`, `cat`, `git commit` …)이다.
 - **찾은 것은 해석 상태와 관계없이 사실이다**: `npm test && r''m -rf dist`는 `partial`이지만 삭제는 기록된다.
@@ -67,6 +71,19 @@
 - 엔진(`detect/engine.py`)은 `sga_act_parse=ok`이면 이 룰들의 `labels.sga_act_*` 칸만 본다.
 - 그 밖이면 원문과 라벨을 모두 본다. 응답(사용자 승인·차단)은 바뀌지 않았다.
 - 태그는 예전 센서가 무시하므로, 예전 센서는 원문으로 판정한다(호환).
+
+## 외부 입력 직후 해석할 수 없는 명령 (2026-11-17 사용자 결정)
+
+구조로 읽지 못한 명령은 원문 정규식이 판정하므로, 원문에도 위험 패턴이 없으면 허용된다(`R=rm; $R -rf`, `python3 -c "shutil.rmtree(…)"`, `./cleanup.sh`). 인젝션은 이런 형태로 실행 내용을 숨길 수 있다.
+
+새 시퀀스 룰 `unparsed-command-after-external-input`(high, 사용자 승인):
+- **조건**: 외부 입력을 읽은 뒤 10분 안에, 같은 대화에서 `sga_act_unknown`이 실행 내용을 숨길 수 있는 이유인 명령이 오면 사용자 승인을 받는다.
+- **대상 이유**: 동적 명령, `eval`, 명령·프로세스 치환, 확장되는 히어독, 동적 `bash -c`, 스크립트, 인라인 코드, 셸 표준입력 실행, git 실행 설정.
+- **뺀 것**: 모델에 없는 명령(`npm`·`docker`, 원문 룰이 내용을 봄), PowerShell 전체(항상 해석 불가), Code Mode 바깥 호출.
+- **오탐**: 외부 문서를 읽은 직후의 `cd $(git rev-parse --show-toplevel)`, `./gradlew build`, `python -c`도 묻는다.
+- **미탐**: 외부 입력이 없을 때, 10분 뒤, 다른 대화·하위 에이전트로 넘어간 경우, 라벨이 없는 예전 센서.
+- **실제 기록 재생**: 새로 걸린 사례는 0건이다. 기록의 셸 명령이 21건뿐이라 소음 측정 근거로는 약하다.
+- **다음 단계(같은 결정)**: 같은 대화에서 직접 쓴 스크립트의 내용을 기억해 두었다가, 실행할 때 분석한다.
 
 ## Git 실행 설정의 우회 수정 (2026-11-17)
 

@@ -45,6 +45,7 @@ TARGETS_MAX = 500
 # What rules/tool_misuse.yaml calls destructive, as kinds (the raw regex's branches, one by one).
 KINDS = (
     "rm-recursive-force",  # rm with -r and -f
+    "rm-recursive",  # rm -r without -f: asks too (user decision 2026-11-17; non-interactive, it deletes)
     "find-delete",
     "find-exec-rm",
     "shred-file",
@@ -57,9 +58,6 @@ KINDS = (
     "dd-raw-write",
     "chmod-777-root",
 )
-# Recorded but not one of the rule's destructive kinds: rm -r without -f (the rule asks only for -r with -f,
-# user decision 2026-11-15; a candidate for tuning, docs/actions.md).
-RECORDED = ("rm-recursive",)
 
 SHELL_TOOLS = tools.SHELL - {"PowerShell"}
 COMMAND_KEYS = ("command", "cmd", "script")
@@ -542,7 +540,7 @@ def _rm(rest: list[Word], facts: Facts, depth: int, stdin_args: bool) -> None:
     if recursive and force:
         facts.found("rm-recursive-force", shown)
     elif recursive:
-        facts.found("rm-recursive", shown)  # recorded only (RECORDED)
+        facts.found("rm-recursive", shown)  # asks like -rf (2026-11-17)
     else:
         facts.add_targets(shown)
 

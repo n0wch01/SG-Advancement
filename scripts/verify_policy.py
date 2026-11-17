@@ -8,8 +8,8 @@ Runs, in order, against ``rules/`` (the change) and a baseline (``HEAD`` by defa
 
 1. the rules load (schema, regexes, candidate tags);
 2. ``tests/rule_cases``: every rule's positive and negative cases;
-3. what changed against the baseline: added, removed, disabled, a weaker response or severity, and a
-   changed rule whose ``version`` was not raised. These are not failures: a person reads them;
+3. what changed against the baseline: added, removed, disabled, a weaker response or severity (a person
+   reads them), and a changed rule whose ``version`` was not raised (a failure: raise it);
 4. ``scripts/evaluate.py``: the evaluation set judged at each enforcement point (must all pass);
 5. with ``--db``: ``scripts/replay_history.py``, real recorded activity, new and lost hits per rule;
 6. with ``--model``: ``scripts/eval_classifier.py``, the classifier's catch and false-positive rates.
@@ -46,6 +46,7 @@ class Change:
     what: str  # added | removed | disabled | enabled | weaker response | stronger response | ...
     detail: str = ""
     review: bool = False  # a person must look before it ships
+    fails: bool = False  # it cannot ship as it is (user decision 2026-11-17: same version, new behaviour)
 
 
 def compare(base: list[Rule], cur: list[Rule]) -> list[Change]:
@@ -74,7 +75,7 @@ def compare(base: list[Rule], cur: list[Rule]) -> list[Change]:
                               f"{a.severity.value} → {b.severity.value}", review=lower))  # fmt: skip
         if a.version == b.version:
             same = f"version {a.version}: old and new behaviour would be recorded with one rule_version"
-            out.append(Change(rid, "changed without a new version", same, review=True))
+            out.append(Change(rid, "changed without a new version", same, review=True, fails=True))
         elif not any(c.rule_id == rid for c in out):
             out.append(Change(rid, "changed", f"version {a.version} → {b.version}"))
     return out
@@ -126,8 +127,12 @@ def main(argv: list[str] | None = None) -> int:
     # 3. diff against the baseline
     changes = compare(baseline.rules, current.rules)
     flagged = [c for c in changes if c.review]
+    failing = [c for c in changes if c.fails]
     note = f"{len(changes)} changed vs {args.baseline}" + (f", {len(flagged)} to review" if flagged else "")
-    steps.append(Step("3 change review", "REVIEW" if flagged else "PASS", note))
+    if failing:  # records of the old and new behaviour would carry one rule_version: raise the version
+        note += f"; raise the version of: {', '.join(sorted({c.rule_id for c in failing}))}"
+    status = "FAIL" if failing else "REVIEW" if flagged else "PASS"
+    steps.append(Step("3 change review", status, note))
 
     # 4. evaluation set
     code, out = run([py, "scripts/evaluate.py"])

@@ -63,7 +63,11 @@ def test_removed_disabled_and_lower_severity_are_for_review() -> None:
     assert changes([rule()], [rule(severity="medium", version="2")])["r:lower severity"][1]
 
 
-def test_a_change_under_the_same_version_is_for_review() -> None:
+def test_a_change_under_the_same_version_fails() -> None:
+    """User decision 2026-11-17: old and new behaviour must not share one rule_version (audit, replay)."""
+    found = vp.compare([rule()], [rule(pattern="y")])
+    assert [(c.what, c.review, c.fails) for c in found] == [("changed without a new version", True, True)]
+    assert not any(c.fails for c in vp.compare([rule()], [rule(response="alert", version="2")]))
     c = changes([rule()], [rule(pattern="y")])
     assert c["r:changed without a new version"][1]
     assert changes([rule()], [rule(pattern="y", version="2")]) == {"r:changed": ("version 1 → 2", False)}

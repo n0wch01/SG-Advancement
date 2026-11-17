@@ -389,3 +389,29 @@ def test_the_same_decisions_without_the_daemon(enrolled: Sensor, tmp_path: Path)
     assert len(calls) == len(SIDE_EFFECT_CASES)
     assert all(d["labels"].get("sga_verdict") == "degraded" for d in calls)  # judged by the cached policy
     assert all(d["labels"].get("sga_act_parse") == "ok" for d in calls)  # and the same normaliser
+
+
+def test_an_unreadable_command_after_external_input_asks_the_person(enrolled: Sensor) -> None:
+    """User decision 2026-11-17 (5-C): after an external page, a command the sensor cannot read (a variable as
+    the command, eval, $(...), a script, inline code) goes to the person; the same command without external
+    input, or a readable one after it, does not by this rule."""
+    import json
+    import sqlite3
+
+    ctx = AdapterContext(enrolled, "bob", "pc")
+    hidden = "R=rm; $R -rf ~/projects"
+    assert judge_event(ctx, _pre(hidden, "h0", session="quiet"))["decision"] == "allow"  # no external input
+    fetch = hook.hook_event({"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "WebFetch",
+                             "tool_use_id": "w1", "tool_input": {"url": "https://docs.internet-sim/x"}},
+                            user_id="bob", hostname="pc")  # fmt: skip
+    judge_event(ctx, fetch)  # type: ignore[arg-type]
+    result = hook.hook_event({"session_id": "s1", "hook_event_name": "PostToolUse", "tool_name": "WebFetch",
+                              "tool_use_id": "w1", "tool_response": "setup guide"},
+                             user_id="bob", hostname="pc")  # fmt: skip
+    judge_event(ctx, result)  # type: ignore[arg-type]
+    assert judge_event(ctx, _pre("ls -la", "h1"))["decision"] == "allow"
+    assert judge_event(ctx, _pre(hidden, "h2"))["decision"] == "approve"
+    with sqlite3.connect(enrolled.spool.path) as db:
+        rows = [json.loads(d) for (d,) in db.execute("SELECT doc FROM outbox WHERE kind='finding'")]
+    hits = [r for r in rows if r["rule_id"] == "unparsed-command-after-external-input"]
+    assert len(hits) == 1 and hits[0]["agent"]["session_id"] == "s1"
