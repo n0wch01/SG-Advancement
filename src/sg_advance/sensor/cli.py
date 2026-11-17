@@ -155,11 +155,16 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
     )
     sensor = Sensor(home)
     sensor.keep_chat_text = args.keep_chat_text
-    from .judge import load_judge
+    from .judge import load_worker_judge
 
-    # docs/classifier.md: only the daemon classifies. No model → candidates recorded as "unavailable".
-    sensor.judge = load_judge(args.classifier or home.root / "models" / "injection")
+    # docs/classifier.md: only the daemon classifies, through a worker process (11). No model → candidates
+    # recorded as "unavailable".
+    sensor.judge = load_worker_judge(args.classifier or home.root / "models" / "injection")
     judge = sensor.judge
+    if hasattr(judge.classifier, "close"):  # the worker also exits by itself when this process's pipe closes
+        import atexit
+
+        atexit.register(judge.classifier.close)  # type: ignore[union-attr]
     logging.getLogger(__name__).info(
         "injection classifier: %s", judge.model if judge.classifier else judge.unavailable_reason
     )

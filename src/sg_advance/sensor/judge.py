@@ -3,7 +3,8 @@ instructions aimed at the AI agent?
 
 Only tool results a ``stage:candidate`` rule marked reach the classifier. Its answer is a set of labels
 (``sga_judge_*``); the signed rules decide what to do with them, and nothing here can relax enforcement.
-It runs in the sensor daemon only (the model loads once); the per-call hook process never classifies.
+Only the sensor daemon classifies (the per-call hook process never does), and since 2026-11-17 the model runs
+in a worker process the daemon waits on for at most the time budget (sensor/classifier_worker.py).
 
 Standard library only: the model runtime is an optional extra loaded behind ``Classifier``. Without it
 the judge answers ``unavailable`` with the reason, and the rules alone decide (docs/classifier.md 6).
@@ -33,6 +34,10 @@ BUDGET_SECONDS = 2.0  # per result; a tool result must not stall the agent for l
 FINDING_LABELS = ("sga_judge_injection", "sga_judge_score", "sga_judge_model")
 LABELS = ("sga_candidate", "sga_judge_injection", "sga_judge_score", "sga_judge_model", "sga_judge_chunks",
           "sga_judge_reason")  # fmt: skip
+
+
+class ClassifierUnavailable(Exception):
+    """No working model right now (worker down, restarting, or it reported an error); the reason is kept."""
 
 
 class Classifier(Protocol):
@@ -113,13 +118,20 @@ class InjectionJudge:
             if scanned >= self.max_chunks:
                 reason = "chunk limit"
                 break
-            if scanned and self.clock() - start > self.budget:
+            left = self.budget - (self.clock() - start)
+            if scanned and left <= 0:
                 reason = "time budget"
                 break
             try:
-                worst = max(worst, float(self.classifier.score(part)))
+                # A worker is told how long it may take; an in-process model is checked between chunks.
+                within = getattr(self.classifier, "score_within", None)
+                score = within(part, max(left, 0.05)) if within else self.classifier.score(part)
+                worst = max(worst, float(score))
+            except TimeoutError:
+                reason = "time budget"
+                break
             except Exception as e:  # the model's failure is recorded, never raised into the hook path
-                why = f"error: {type(e).__name__}"
+                why = str(e)[:200] if isinstance(e, ClassifierUnavailable) else f"error: {type(e).__name__}"
                 return Judgement("unavailable", None, self.model, scanned, len(parts), why)
             scanned += 1
             if worst >= MALICIOUS_AT:
@@ -131,17 +143,30 @@ class InjectionJudge:
 
 
 def load_judge(model_dir: Path | None) -> InjectionJudge:
-    """The daemon's judge: the ONNX model in ``model_dir`` (sensor/onnx_classifier.py), or none. Every way
-    it can be missing is recorded as the reason on each candidate, and the rules alone decide."""
+    """A judge with the ONNX model in this process (sensor/onnx_classifier.py), or none: for scripts and
+    measurements. Every way the model can be missing is recorded as the reason, and the rules alone decide."""
     if model_dir is None or not model_dir.is_dir():
         return InjectionJudge(None)
-    from .onnx_classifier import ModelError, OnnxClassifier  # standard library until a model loads
+    from .classifier_worker import load_error
 
     try:
+        from .onnx_classifier import OnnxClassifier  # standard library until a model loads
+
         return InjectionJudge(OnnxClassifier(model_dir))
-    except ModelError as e:
-        return InjectionJudge(None, f"model rejected: {e}")
-    except ImportError:
-        return InjectionJudge(None, "classifier extra not installed (sg-advance[classifier])")
-    except Exception as e:  # noqa: BLE001  # a broken runtime or file: recorded, the daemon keeps running
-        return InjectionJudge(None, f"model failed to load: {type(e).__name__}")
+    except Exception as e:  # noqa: BLE001  # a broken runtime or file: recorded, the caller keeps running
+        return InjectionJudge(None, load_error(e))
+
+
+def load_worker_judge(model_dir: Path | None, budget: float = BUDGET_SECONDS) -> InjectionJudge:
+    """The daemon's judge: the same model in a worker process (sensor/classifier_worker.py), so a slow or
+    broken model costs one verdict, never the daemon or the hooks waiting on it."""
+    if model_dir is None or not model_dir.is_dir():
+        return InjectionJudge(None)
+    from .classifier_worker import WorkerClassifier
+
+    worker = WorkerClassifier(model_dir)
+    try:
+        worker.start()
+    except ClassifierUnavailable as e:
+        return InjectionJudge(None, str(e))
+    return InjectionJudge(worker, budget=budget)
