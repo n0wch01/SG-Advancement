@@ -52,6 +52,10 @@ scripts/deploy.sh --recreate-lan            # 템플릿이 그대로여도 LAN �
 관리자 토큰은 `.env`에서 읽는다. 화면에 출력하지 않고, 프로세스 목록에도 남지 않는다(curl 헤더를 파일 디스크립터로 넘김).
 커밋하지 않은 변경이 있으면 경고만 하고 그대로 배포한다.
 
+2026-11-17부터 정책의 기준은 DB 확정본이다. 코드 재배포·서버 재시작만으로 `rules/` 변경을
+적용하지 않는다. 새 룰은 별도로 `stage → 확인 → promote` 또는 명시적 reload API로 반영한다.
+최초 도입·재시작 복구 절차는 [정책 관리](policy.md#db-정책-기준-도입-시-주의)에 있다.
+
 ## 인증
 
 토큰은 네 종류이고, 모두 `Authorization: Bearer <token>` 헤더로 보낸다.
@@ -103,7 +107,8 @@ scripts/deploy.sh --recreate-lan            # 템플릿이 그대로여도 LAN �
 
 [src/sg_advance/policy.py](../src/sg_advance/policy.py)의 `PolicyBundle`이다.
 
-- `rules/*.yaml`의 룰 전체를 JSON으로 바꾸고, 그 정규화된 JSON의 sha256을 `version`으로 쓴다.
+- 최초 도입·명시적 reload·시험 배포 때 `rules/*.yaml`의 룰을 JSON으로 읽고, 확정·시험 상태를 DB에 저장한다.
+  센서에 줄 때는 해당 DB 룰과 공통·팀 덮어쓰기·매니페스트를 합친 정규화 JSON의 sha256을 `version`으로 쓴다.
   룰 내용이 바뀔 때만 버전이 바뀐다. 파일 순서나 주석, 들여쓰기는 버전에 영향이 없다.
 - 센서는 `If-None-Match: "<version>"`으로 물어보고, 바뀌지 않았으면 304를 받아 본문을 다시 받지 않는다.
 - `PolicyBundle.to_ruleset()`은 해시를 다시 계산해 보고, 맞지 않으면 거부한다. 전송 중 깨진 정책으로 엔진을 만들지 않기 위해서다.
@@ -124,6 +129,8 @@ scripts/deploy.sh --recreate-lan            # 템플릿이 그대로여도 LAN �
 - 스키마는 **Alembic 마이그레이션**(`server/migrations/versions/`, M9)으로 관리한다. 서버가 시작할 때 최신으로 올린다.
   마이그레이션 이전(M3~M7)에 만들어진 DB는 기준 리비전 `0001`로 표시한 뒤 이후 리비전만 적용해 데이터를 그대로 둔다.
   새 리비전은 `versions/`의 마지막 파일을 복사해 `revision`/`down_revision`을 올리고, `tests/test_migrations.py`가 모델과 일치하는지 검사한다.
+- `0011`의 `policy_state`는 확정 룰, 시험 룰·대상, 적용 시작 시각과 캐시 무효화 세대를 저장한다.
+  같은 DB를 쓰는 인스턴스는 정책 요청 시 세대를 확인해 다시 합성·서명하며, 재시작도 DB 상태를 복구한다.
 
 ## 수집 규칙
 

@@ -37,6 +37,7 @@ from . import (
     install,
     manifests,
     policy_admin,
+    policy_runtime,
     risk,
 )
 from .auth import (
@@ -196,11 +197,7 @@ def _existing_ids(db: Session, column: Any, ids: list[str]) -> set[str]:
 
 
 def _policy(request: Request) -> PolicyBundle:
-    app = request.app
-    due = app.state.policy_refresh_at
-    if due is not None and utcnow() >= due:  # a release cooldown ended: cooling → trusted
-        app.state.refresh_policy()
-    return app.state.policy
+    return policy_runtime.current_view(request.app).policy
 
 
 def _public_key(request: Request) -> str:
@@ -217,17 +214,6 @@ def _policy_info(request: Request) -> PolicyInfo:
         key_id=key_id(pub),
         public_key=pub,
     )
-
-
-def _load_signed_policy(app: FastAPI) -> PolicyBundle:
-    """Rules from disk + package manifests from the DB, signed. Records when it next goes stale."""
-    cooldown = timedelta(days=app.state.settings.release_cooldown_days)
-    for db in app.state.db.session():
-        docs, next_change = manifests.manifest_docs(db, cooldown)
-    app.state.policy_refresh_at = next_change
-    for db in app.state.db.session():
-        return policy_admin.build_common(app, db, docs)  # rules/ + common overrides (M9)
-    raise RuntimeError("no database session")
 
 
 def _default_package_verifier(settings: Settings) -> Any:
@@ -661,18 +647,9 @@ def policy_info(request: Request) -> PolicyInfo:
 
 
 @admin.post("/policy/reload", response_model=PolicyInfo)
-def reload_policy(request: Request) -> PolicyInfo:
+def reload_policy(request: Request, db: DbSession) -> PolicyInfo:
     """Re-read ``rules/`` from disk. An invalid rule file is rejected and the old policy stays."""
-    if getattr(request.app.state, "staged", None) is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "a rollout is staged: promote or discard it first")
-    previous = getattr(request.app.state, "base_docs", None)
-    try:
-        request.app.state.base_docs = policy_admin.read_base_docs(request.app)  # rules/ as on disk now
-        bundle = _load_signed_policy(request.app)
-    except ValueError as e:  # RuleLoadError is a ValueError
-        request.app.state.base_docs = previous
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from e
-    request.app.state.policy = bundle
+    policy_admin.reload_base(request.app, db, request.state.role)
     return _policy_info(request)
 
 
@@ -701,16 +678,18 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.state.verify_queue = queue.Queue()
     app.state.verify_worker = None
     app.state.db.create_all()  # manifests live in the DB and are part of the policy
-    app.state.refresh_policy = lambda: setattr(app.state, "policy", _load_signed_policy(app))
-    # Fail fast on a broken rules/ directory instead of serving an empty policy.
-    app.state.policy = _load_signed_policy(app)
+    app.state.policy_lock = threading.RLock()
+    app.state.refresh_policy = lambda: policy_runtime.refresh(app)
+    # The first start bootstraps rules/; every later start restores the published DB policy.
+    policy_runtime.current_view(app)
 
     @app.get("/healthz", tags=["ops"])
     def healthz() -> dict[str, str]:
+        bundle = policy_runtime.current_view(app).policy
         return {
             "status": "ok",
-            "policy_version": app.state.policy.version,
-            "policy_key_id": app.state.policy.key_id,
+            "policy_version": bundle.version,
+            "policy_key_id": bundle.key_id,
         }
 
     app.include_router(sensor)

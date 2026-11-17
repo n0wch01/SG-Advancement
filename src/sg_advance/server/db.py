@@ -190,6 +190,18 @@ class PolicyOverride(Base):
     reason: Mapped[str] = mapped_column(String(1000), default="")
 
 
+class PolicyState(Base):
+    """Published base rules and rollout state; process-local bundles are only a cache of this row."""
+
+    __tablename__ = "policy_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    generation: Mapped[int] = mapped_column(Integer, default=1)
+    base_rules: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
+    effective_from: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    staged: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
 class PolicyChange(Base):
     """Append-only audit log of policy edits. ``id`` doubles as the policy revision number."""
 
