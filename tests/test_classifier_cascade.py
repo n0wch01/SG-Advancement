@@ -253,3 +253,11 @@ def test_judgement_labels_round_trip() -> None:
     labels = Judgement("unsure", 0.61234, "m@1", 2, 3, "time budget").labels()
     assert labels == {"sga_judge_injection": "unsure", "sga_judge_model": "m@1", "sga_judge_chunks": "2/3",
                       "sga_judge_score": "0.612", "sga_judge_reason": "time budget"}  # fmt: skip
+
+
+def test_the_malicious_band_starts_at_085() -> None:
+    """Decision 2026-11-16 (docs/evaluation-threshold.md): 0.85, not 0.9. Same false positives on InjecAgent,
+    32 more hidden instructions caught. A change here is a policy change: update the decision record too."""
+    from sg_advance.sensor.judge import verdict_for
+
+    assert [verdict_for(x) for x in (0.85, 0.849, 0.5, 0.499)] == ["malicious", "unsure", "unsure", "benign"]

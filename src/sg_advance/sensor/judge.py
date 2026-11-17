@@ -19,7 +19,9 @@ from typing import Protocol
 
 # Score bands (the classifier's probability that a chunk carries injected instructions). The verdict, not
 # the score, is what rules match on. Changing a band is a code change, reviewed like a rule change.
-MALICIOUS_AT = 0.9
+# 0.85 (2026-11-16, user decision; was 0.9): on InjecAgent it has the same false positives as 0.9 (15/85)
+# and catches 3 points more hidden instructions (582 vs 550 of 1,054); docs/evaluation-threshold.md.
+MALICIOUS_AT = 0.85
 UNSURE_AT = 0.5
 
 CHUNK_CHARS = 2000  # roughly a classifier's 512-token window

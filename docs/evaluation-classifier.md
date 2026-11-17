@@ -1,5 +1,7 @@
 # 인젝션 분류기 평가
 
+> 이 표는 판정 기준점 0.9일 때 측정했다. 2026-11-16에 0.85로 바꿨고, 기준점별 결과는 [evaluation-threshold.md](evaluation-threshold.md)에 있다.
+
 문장: eval/classifier_samples.yaml 31개. 외부 출처 툴 결과로 넣고, 모델에 가려지면 막은 것으로 센다.
 
 ### protectai/deberta-v3-base-prompt-injection-v2@90c9989

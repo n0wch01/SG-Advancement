@@ -222,7 +222,7 @@ rules:
   # 2단 판정의 대응(사용자 결정): malicious → 결과를 모델에 넘기지 않음(prompt_injection·high라 입력 PEP가 가림),
   #   이후 민감·파괴 행동 차단(injection-then-* 시퀀스의 1단계), 출처 호스트를 캠페인 지표로(같은 페이지가 여러 사람을 노림).
   #   분류기는 집행을 풀지 못한다: 시그니처 룰이 가린 결과는 분류기가 benign이라 해도 가려진다.
-  # 오탐 주의: 분류기 오판이면 필요한 문서가 가려지고 그 대화의 민감 작업이 5~10분 막힌다. 점수 구간은 sensor/judge.py(0.9 이상).
+  # 오탐 주의: 분류기 오판이면 필요한 문서가 가려지고 그 대화의 민감 작업이 5~10분 막힌다. 점수 구간은 sensor/judge.py(0.85 이상, 2026-11-16 사용자 결정).
   # 미탐 주의: 후보가 아닌 결과(로컬·사내), 분류기가 놓친 지시, 분류기가 없거나 실패한 경우(unavailable: 룰만으로 판정).
   - id: injection-classifier-confirmed
     severity: high
@@ -237,7 +237,7 @@ rules:
       fields: [labels.sga_judge_injection]
       pattern: '^malicious$'
 
-  # unsure(0.5 이상 0.9 미만, 또는 다 읽지 못하고 아무것도 못 찾음): 가리지 않고 관제 기본 화면에 경보(사용자 결정).
+  # unsure(0.5 이상 0.85 미만, 또는 다 읽지 못하고 아무것도 못 찾음): 가리지 않고 관제 기본 화면에 경보(사용자 결정).
   #   그 대화의 파괴적 행동은 destructive-after-external-input이 이미 사용자 승인을 받는다.
   # 오탐 주의: 경계 점수의 정상 문서. 미탐 주의: 경보만이라 모델은 내용을 본다.
   - id: injection-classifier-unsure

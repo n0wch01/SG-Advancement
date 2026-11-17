@@ -30,7 +30,7 @@ from pathlib import Path
 import yaml
 
 from sg_advance.detect import Engine, RuleSet
-from sg_advance.sensor.judge import InjectionJudge, load_judge
+from sg_advance.sensor.judge import InjectionJudge, chunks, load_judge
 from sg_advance.sensor.plugin_api import input_guard_hits
 from sg_advance.shorthand import build_event
 
@@ -97,6 +97,36 @@ def evaluate(samples: list[dict], rules: RuleSet, judge: InjectionJudge | None) 
     return {"rows": dict(rows), "times": times}
 
 
+# 0.30 to 0.95 every 0.05, and 0.98 (2026-11-16: the user asked for 0.05 steps from 0.98 down to 0.3)
+THRESHOLDS = (*(round(0.30 + 0.05 * i, 2) for i in range(14)), 0.98)
+
+
+def sweep(samples: list[dict], rules: RuleSet, judge: InjectionJudge, title: str) -> list[str]:
+    """Stopped / passed at each "malicious" threshold, from one score per text. The score is the worst
+    chunk over every chunk (no early stop, no time budget), so thresholds above the band are exact too.
+    Stopped = a signature rule withholds it, or its score reaches the threshold (the cascade's rule)."""
+    engine = Engine(rules)
+    rows = []
+    for n, s in enumerate(samples):
+        score = max((judge.classifier.score(c) for c in chunks(s["text"])), default=0.0)  # type: ignore[union-attr]
+        rows.append((s["group"], s["label"], withheld(engine, s["text"], SOURCE, n), score))
+    groups = sorted({(g, lab) for g, lab, _, _ in rows}, key=lambda x: (x[1], x[0]))
+    head = "| 기준점 | " + " | ".join(f"{g} ({'정탐' if lab == 'attack' else '오탐'})" for g, lab in groups)
+    head += " | **공격 전체 정탐** | **정상 전체 오탐** |"
+    out = [f"### {title}", "", head, "|" + "---|" * (len(groups) + 3)]
+    atk = [r for r in rows if r[1] == "attack"]
+    ben = [r for r in rows if r[1] == "benign"]
+    for t in (None, *THRESHOLDS):  # None = the rules alone
+        def count(part: list, t: float | None = t) -> str:
+            return pct(sum(1 for r in part if r[2] or (t is not None and r[3] >= t)), len(part))
+
+        cells = [count([r for r in rows if r[0] == g]) for g, _ in groups]
+        note = {0.85: " ← 지금", 0.9: " ← 이전", 0.5: " ← 모델 기본값"}.get(t, "") if t is not None else ""
+        mark = "룰만" if t is None else f"{t}{note}"
+        out.append(f"| {mark} | " + " | ".join(cells) + f" | {count(atk)} | {count(ben)} |")
+    return out + [""]
+
+
 def pct(k: int, n: int) -> str:
     return f"{k}/{n} ({k / n:.0%})" if n else "-"
 
@@ -129,6 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--samples", type=Path, default=ROOT / "eval" / "classifier_samples.yaml")
     ap.add_argument("--rules", type=Path, default=ROOT / "rules")
     ap.add_argument("--injecagent", type=Path, help="InjecAgent data dir instead of --samples (public data)")
+    ap.add_argument("--sweep", action="store_true", help="stopped/passed per threshold instead of one table")
     ap.add_argument("--out", type=Path, help="write the markdown report here (default: stdout)")
     args = ap.parse_args(argv)
     rules = RuleSet.load(args.rules)
@@ -148,7 +179,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{d}: {judge.unavailable_reason}", file=sys.stderr)
             return 2
         judge.judge("warm up")
-        lines += table(judge.model, evaluate(samples, rules, judge))
+        if args.sweep:
+            lines += sweep(samples, rules, judge, f"{judge.model}: 기준점별")
+        else:
+            lines += table(judge.model, evaluate(samples, rules, judge))
     text = "\n".join(lines)
     if args.out:
         args.out.write_text(text + "\n", encoding="utf-8")
