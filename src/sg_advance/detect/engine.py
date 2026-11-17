@@ -64,6 +64,12 @@ INDICATOR_MAX = 200
 # policy (rule models forbid unknown fields).
 LINEAGE_SOURCE_TAG = "lineage:source"
 SPLIT_TAG = "split:"
+# Structure before spelling (2026-11-17, docs/actions.md): a regex or sequence rule tagged
+# ``normalized-by:<prefix>`` (e.g. ``normalized-by:sga_act``) reads only its ``labels.<prefix>_*`` fields when
+# the sensor understood the whole call (``labels.<prefix>_parse == "ok"``), and every field otherwise. So a
+# command in quotes or in an echo no longer matches the raw text, and anything the sensor could not read is
+# still judged by the raw regex. Older sensors don't write the labels: the rule reads the raw text, as before.
+NORMALIZED_TAG = "normalized-by:"
 COLLECT_MAX = 5000  # values one ``collect`` hit keeps (a bigger result: the rest is not tracked)
 _ACTION_RANK = {a: i for i, a in enumerate(ResponseAction)}
 
@@ -149,12 +155,21 @@ def _excerpt(text: str, start: int, end: int) -> str:
     return redact_text("".join(parts).replace("\n", "\\n"))
 
 
-def _search(doc: dict[str, Any], spec: RegexMatch | SequenceStep) -> tuple[str, str] | None:
+def _fields(doc: dict[str, Any], spec: RegexMatch | SequenceStep, normalized: str | None) -> tuple[str, ...]:
+    if normalized is None or first(doc, f"labels.{normalized}_parse") != "ok":
+        return spec.fields
+    own = f"labels.{normalized}_"
+    return tuple(f for f in spec.fields if f.startswith(own))
+
+
+def _search(
+    doc: dict[str, Any], spec: RegexMatch | SequenceStep, normalized: str | None = None
+) -> tuple[str, str] | None:
     """Return (explanation, matched text) of the first regex hit, or None."""
     cre = spec.compiled()
     if cre is None:
         return "", ""
-    for path in spec.fields:
+    for path in _fields(doc, spec, normalized):
         for value in resolve(doc, path):
             for text in string_leaves(value):
                 m = cre.search(text)
@@ -173,14 +188,15 @@ def _split_of(rule: Rule) -> str | None:
 
 
 class _RegexMatcher:
-    def __init__(self, spec: RegexMatch, collect: bool = False) -> None:
+    def __init__(self, spec: RegexMatch, collect: bool = False, normalized: str | None = None) -> None:
         self.spec = spec
         self.collect = collect
+        self.normalized = normalized
 
     def check(self, event: AgentEvent, doc: dict[str, Any]) -> _RawHit | None:
         if self.collect:
             return self._collect(event, doc)
-        hit = _search(doc, self.spec)
+        hit = _search(doc, self.spec, self.normalized)
         return _RawHit("", hit[0], (event.event_id,), (hit[1],)) if hit is not None else None
 
     def _collect(self, event: AgentEvent, doc: dict[str, Any]) -> _RawHit | None:
@@ -323,15 +339,16 @@ class _SeqProgress:
 
 
 class _SequenceMatcher:
-    def __init__(self, spec: SequenceMatch) -> None:
+    def __init__(self, spec: SequenceMatch, normalized: str | None = None) -> None:
         self.spec = spec
+        self.normalized = normalized
         self.progress: dict[tuple[str, str], _SeqProgress] = {}
 
     def _step_hit(self, i: int, doc: dict[str, Any]) -> str | None:
         step = self.spec.steps[i]
         if not condition_holds(doc, step.when):
             return None
-        hit = _search(doc, step)
+        hit = _search(doc, step, self.normalized)
         if hit is None:
             return None
         why = hit[0]
@@ -418,6 +435,8 @@ class Engine:
                 if r.match.type == "in_set"
                 else _RegexMatcher(r.match, collect=True)
                 if r.match.type == "regex" and LINEAGE_SOURCE_TAG in r.tags
+                else _MATCHERS[r.match.type](r.match, normalized=_tag_value(r, NORMALIZED_TAG))
+                if r.match.type in ("regex", "sequence")
                 else _MATCHERS[r.match.type](r.match),
             )
             for r in ruleset.enabled

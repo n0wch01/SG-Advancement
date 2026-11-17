@@ -34,8 +34,8 @@ def edit_rules(cp: TestClient) -> None:
     """A reviewed change on disk: rm -rf goes from user approval to deny."""
     path = Path(cp.app.state.settings.rules_dir) / "tool_misuse.yaml"  # type: ignore[attr-defined]
     text = path.read_text(encoding="utf-8")
-    old = ("    response: require_approval\n"
-           "    tags: [\"grade:3-1\", owasp-llm:LLM06]\n    when: {payload.kind: tool.call}\n")  # fmt: skip
+    # destructive-shell-command
+    old = "    response: require_approval\n    # 구조 판정(2026-11-17, docs/actions.md)"
     assert text.count(old) == 1
     path.write_text(text.replace(old, old.replace("require_approval", "block")), encoding="utf-8")
 

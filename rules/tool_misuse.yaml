@@ -2,6 +2,7 @@
 version: 1
 rules:
   - id: destructive-shell-command
+    version: "2"
     severity: high
     category: tool_misuse
     title: 파괴적 셸 명령
@@ -10,14 +11,23 @@ rules:
     # 결정(2026-11-14): 사용자 승인 먼저, 매우 위험한 것(공격 진행 신호·외부 유출)만 바로 차단, 보안팀은 사후 검토.
     #   되돌릴 수 없는 삭제는 "매우 위험"에 넣지 않아 차단 → 사용자 승인으로 바꿨다.
     response: require_approval
-    tags: ["grade:3-1", owasp-llm:LLM06]
+    # 구조 판정(2026-11-17, docs/actions.md): 센서가 셸 명령을 제한된 문법으로 해석해 labels.sga_act_destroy에 파괴적 행동의
+    #   종류를 적는다(rm-recursive-force, find-delete, git-reset-hard …). 해석이 완전하면(sga_act_parse=ok) 이 룰은 그 라벨만 보고
+    #   원문 글자는 보지 않는다(normalized-by 태그). 그래서 r''m -rf, 'rm' '-rf', 줄을 이어 쓴 rm -r \ -f도 같은 삭제이고,
+    #   echo·grep·커밋 메시지·파일에 쓰는 글 속의 rm -rf는 실행이 아니다. 해석하지 못했거나 모르는 명령이 섞이면(partial,
+    #   unsupported) 아래 원문 정규식이 그대로 판정한다(보조). 라벨이 없는 예전 센서도 원문으로 판정한다.
+    # 오탐 변화: 명령을 인용·검색·기록하는 호출(위 예)은 해석이 완전할 때 더 이상 묻지 않는다.
+    # 미탐 변화: 따옴표·이스케이프로 나눈 명령 이름, 줄 이어 쓰기가 이제 잡힌다. git push origin +main(강제 푸시),
+    #   dd of=…가 앞에 오는 경우, git checkout HEAD -- .도 잡는다(전에는 놓침).
+    # 그대로인 미탐: 변수에 담은 명령($R -rf), $(…)로 만든 인자 안의 명령, eval, 스크립트·인라인 코드(python -c) 안의 삭제.
+    tags: ["grade:3-1", owasp-llm:LLM06, "normalized-by:sga_act"]
     when: {payload.kind: tool.call}
     # 오탐 수정(2026-11-14, 사용자 결정): Code Mode 바깥 호출은 JavaScript에 명령을 담고 있을 뿐, 실제로 실행하는 안쪽 호출이
     #   따로 판정된다. 사용자 승인이 된 뒤로 두 번 묻게 돼 다른 승인 룰처럼 건너뛴다(명령당 한 번).
     unless: {labels.openclaw.tool_kind: code_mode_exec}
     match:
       type: regex
-      fields: [payload.arguments]
+      fields: [payload.arguments, labels.sga_act_destroy]
       # Windows(2026-11-15, 사용자 결정: rm -rf와 같은 사용자 승인). PowerShell은 대소문자를 가리지 않아 (?i:) 안에 둔다.
       #   Remove-Item ... -Recurse(-r…), 별칭 rm/ri/del/erase/rmdir/rd ... -Recurse(-rec…), cmd rd·rmdir /s, del·erase /s,
       #   Format-Volume, Clear-Disk, format D:. 문장 구분(; | & 줄바꿈)을 넘지 않는다.
@@ -29,7 +39,7 @@ rules:
       #   git reset --hard, git checkout -- ., git restore . (미리 보기 -n, 파일 하나, --staged는 제외).
       # 오탐 주의: 개발자가 자주 쓰는 git clean -fdx, git reset --hard에도 승인 창이 뜬다.
       # 미탐 주의: git stash drop/clear, 별칭(alias)으로 만든 명령, 스크립트 안의 같은 명령은 못 본다.
-      pattern: '\brm\b(?=[^;&|\n]*\s(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\b)(?=[^;&|\n]*\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)\b)|\bfind\b[^;&|\n]*\s-delete\b|\bfind\b[^;&|\n]*\s-exec\s+rm\b|\bshred\s+\S|\bgit\s+clean\b(?![^;&|\n]*\s(?:-[a-zA-Z]*n[a-zA-Z]*|--dry-run)\b)(?=[^;&|\n]*\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)\b)|\bgit\s+reset\b[^;&|\n]*\s--hard\b|\bgit\s+checkout\s+(?:--\s+)?\.(?=$|\s|[;&|])|\bgit\s+restore\b(?![^;&|\n]*--staged)[^;&|\n]*\s\.(?=$|\s|[;&|])|\bmkfs(\.\w+)?\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:|\bchmod\s+-R\s+777\s+/|\bgit\s+push\s+.*(--force\b|-f\b)|(?i:\bremove-item\b[^;|&\n]*?\s-r\w*\b|(?<!git\s)\b(?:ri|rm|del|erase|rmdir|rd)\s(?:[^;|&\n]*?\s)?-rec\w*\b|\b(?:rd|rmdir)\s+(?:\S+\s+)*?/s\b|\b(?:del|erase)\s+(?:\S+\s+)*?/s\b|\bformat-volume\b|\bclear-disk\b|\bformat\s+[a-z]:(?![\w\\/]))'
+      pattern: '\brm\b(?=[^;&|\n]*\s(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\b)(?=[^;&|\n]*\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)\b)|\bfind\b[^;&|\n]*\s-delete\b|\bfind\b[^;&|\n]*\s-exec\s+rm\b|\bshred\s+\S|\bgit\s+clean\b(?![^;&|\n]*\s(?:-[a-zA-Z]*n[a-zA-Z]*|--dry-run)\b)(?=[^;&|\n]*\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)\b)|\bgit\s+reset\b[^;&|\n]*\s--hard\b|\bgit\s+checkout\s+(?:--\s+)?\.(?=$|\s|[;&|])|\bgit\s+restore\b(?![^;&|\n]*--staged)[^;&|\n]*\s\.(?=$|\s|[;&|])|\bmkfs(\.\w+)?\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:|\bchmod\s+-R\s+777\s+/|\bgit\s+push\s+.*(--force\b|-f\b)|(?i:\bremove-item\b[^;|&\n]*?\s-r\w*\b|(?<!git\s)\b(?:ri|rm|del|erase|rmdir|rd)\s(?:[^;|&\n]*?\s)?-rec\w*\b|\b(?:rd|rmdir)\s+(?:\S+\s+)*?/s\b|\b(?:del|erase)\s+(?:\S+\s+)*?/s\b|\bformat-volume\b|\bclear-disk\b|\bformat\s+[a-z]:(?![\w\\/]))|(?:^|,)(?:rm-recursive-force|find-delete|find-exec-rm|shred-file|git-clean-force|git-reset-hard|git-checkout-all|git-restore-all|git-push-force|mkfs-format|dd-raw-write|chmod-777-root)(?=,|$)'
 
   # T17 (docs/incidents.md: Replit, Amazon Q). 셸 룰이 못 보는 DB·클라우드 경로.
   # 오탐 주의: 개발 DB를 일부러 초기화하는 작업도 걸린다. 그래서 block이 아니라 require_approval.
@@ -88,14 +98,15 @@ rules:
   # 미탐 주의: 문구를 바꾼 인젝션은 첫 룰이 놓치고 두 번째 룰(승인)로만 잡힌다. 다른 대화·하위 에이전트로 넘어간 경우는
   #   묶지 않는다(위임 통제는 따로). 센서 데몬이 없으면(hook 단독) 시퀀스를 기억하지 못한다.
   - id: injection-then-destructive-action
-    version: "3"
+    version: "4"
     severity: critical
     category: prompt_injection
     title: 인젝션 이후 파괴적 행동
     message: 인젝션 의심 텍스트를 읽은 직후 같은 대화에서 되돌릴 수 없는 삭제·파괴 명령이 실행되려 해 차단했습니다.
     recommended_action: 인젝션이 들어온 문서(근거 이벤트의 첫 결과)의 출처를 확인하고, 같은 대화를 검토하세요.
     response: block
-    tags: ["grade:3-1", owasp-llm:LLM01, owasp-llm:LLM06, scenario:F1]
+    # 구조 판정(2026-11-17): 파괴적 행동 단계는 destructive-shell-command와 같이 센서가 해석한 행동 라벨을 본다(normalized-by).
+    tags: ["grade:3-1", owasp-llm:LLM01, owasp-llm:LLM06, scenario:F1, "normalized-by:sga_act"]
     match:
       type: sequence
       within_seconds: 600
@@ -109,7 +120,7 @@ rules:
           pattern: 'ignore (all )?(previous|prior|above) instructions|<important>|<\|im_start\|>system|<<SYS>>|\.env.*읽|읽.*\.env|단계별.*지시|send .{0,40}(\.env|credentials|secret)'
         - name: destructive-action
           when: {payload.kind: tool.call}
-          fields: &destructive_fields [payload.arguments.command, payload.arguments.cmd, payload.arguments.query, payload.arguments.sql, payload.arguments.statement]
+          fields: &destructive_fields [payload.arguments.command, payload.arguments.cmd, payload.arguments.query, payload.arguments.sql, payload.arguments.statement, labels.sga_act_destroy]
           ignore_case: true
           pattern: &destructive >-
             (?x)\brm\b(?=[^;&|\n]*\s(?:-[a-z]*r[a-z]*|--recursive)\b)(?=[^;&|\n]*\s(?:-[a-z]*f[a-z]*|--force)\b)|\bfind\b[^;&|\n]*\s-delete\b|\bfind\b[^;&|\n]*\s-exec\s+rm\b|\bshred\s+\S|\bgit\s+clean\b(?![^;&|\n]*\s(?:-[a-z]*n[a-z]*|--dry-run)\b)(?=[^;&|\n]*\s(?:-[a-z]*f[a-z]*|--force)\b)|\bgit\s+reset\b[^;&|\n]*\s--hard\b|\bgit\s+checkout\s+(?:--\s+)?\.(?=$|\s|[;&|])|\bgit\s+restore\b(?![^;&|\n]*--staged)[^;&|\n]*\s\.(?=$|\s|[;&|])|\bmkfs(\.\w+)?\b|\bdd\s+if=|:\(\)\s*\{\s*:\|:&\s*\};:|\bchmod\s+-R\s+777\s+/|\bgit\s+push\s+.*(--force\b|-f\b)
@@ -118,19 +129,21 @@ rules:
             |(?:^|;)(?:\s|--[^\n]*\n)*(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))
             |\b(?:psql|mysql|mariadb|sqlite3|sqlcmd|clickhouse-client|duckdb|snowsql|mongosh|cqlsh|cockroach\s+sql|bq\s+query)\b[\s\S]*?\b(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))
             |\b(?:drop\s+(?:table|database|schema)\b|truncate\s+(?:table\s+)?[\w."]+|delete\s+from\s+[\w."]+\s*(?:;|$|[''"]))[^|\n]*\|\s*(?:\S+\s+)*?(?:psql|mysql|mariadb|sqlite3|sqlcmd|clickhouse-client|duckdb|snowsql|mongosh|cqlsh|cockroach\s+sql|bq\s+query)\b
+            |(?:^|,)(?:rm-recursive-force|find-delete|find-exec-rm|shred-file|git-clean-force|git-reset-hard|git-checkout-all|git-restore-all|git-push-force|mkfs-format|dd-raw-write|chmod-777-root)(?=,|$)
 
   # 대응 B, 분류기만 근거 (2026-11-16 사용자 결정 (나)): injection-then-destructive-action(시그니처, 차단)과 짝.
   #   분류기만 인젝션으로 본 결과 뒤의 파괴적 명령은 사용자 승인(오탐이 작업 차단으로 커지지 않게: 한국어 문서 0.94 사례).
   # 오탐 주의: 분류기 오판 뒤 10분 안의 정상 정리 작업. 원래도 destructive-shell-command가 승인을 받으므로 사용자 화면은 같고,
   #   이 룰은 "분류기가 본 인젝션 뒤"라는 근거를 따로 기록한다(critical, 사후 검토).
   - id: classifier-injection-then-destructive-action
+    version: "2"
     severity: critical
     category: prompt_injection
     title: 분류기가 본 인젝션 이후 파괴적 행동
     message: 분류기가 인젝션으로 판정한 외부 입력을 읽은 뒤 같은 대화에서 되돌릴 수 없는 삭제·파괴 명령이 실행되려 해 사용자 승인을 받습니다.
     recommended_action: 승인됐다면 근거 이벤트의 첫 결과(분류기 판정과 원문)와 명령의 대상을 확인하세요. 분류기 오판이면 평가 데이터에 넣으세요.
     response: require_approval
-    tags: ["grade:3-1", owasp-llm:LLM01, owasp-llm:LLM06, scenario:F1]
+    tags: ["grade:3-1", owasp-llm:LLM01, owasp-llm:LLM06, scenario:F1, "normalized-by:sga_act"]
     match:
       type: sequence
       within_seconds: 600
@@ -146,13 +159,14 @@ rules:
           pattern: *destructive
 
   - id: destructive-after-external-input
+    version: "2"
     severity: critical
     category: tool_misuse
     title: 외부 콘텐츠를 읽은 직후의 파괴적 행동
     message: 외부(웹·외부 MCP·검색 등)에서 읽은 내용 직후 같은 대화에서 되돌릴 수 없는 명령이 실행되려 해 사용자 승인을 받습니다.
     recommended_action: 사용자가 승인했다면 보안팀 검토 큐에서 외부 입력(근거 이벤트의 첫 결과)과 명령이 이어지는지 확인하세요.
     response: require_approval
-    tags: ["grade:3-1", owasp-llm:LLM01, owasp-llm:LLM06, scenario:F1]
+    tags: ["grade:3-1", owasp-llm:LLM01, owasp-llm:LLM06, scenario:F1, "normalized-by:sga_act"]
     match:
       type: sequence
       within_seconds: 600

@@ -28,6 +28,7 @@ from ..pki import fingerprint, key_pem, make_csr, new_key
 from ..policy import PolicyBundle, PolicyVerificationError, key_id, load_public_key
 from ..redact import redact_event
 from ..schema import AgentEvent, Enforcement, EventKind
+from . import actions as actions_mod
 from . import delegation as delegation_mod
 from . import downloads as downloads_mod
 from . import identity as identity_mod
@@ -395,6 +396,7 @@ class Sensor:
                 | self.lineage.labels_for(clean)
                 | self.downloads.labels_for(clean)
                 | self.delegation.labels_for(clean)
+                | actions_mod.labels_for(clean)  # what it does (docs/actions.md)
             )
             if labels:
                 update["labels"] = base | labels  # type: ignore[operator]
@@ -421,7 +423,7 @@ class Sensor:
     # to, read from the call's own arguments (URL host, MCP server, search, local). The rules decide
     # what is external. Calls are remembered until their result arrives (bounded).
     _OWN_LABELS = (*lineage_mod.LABELS, "sga_input_source", downloads_mod.LABEL, *delegation_mod.LABELS,
-                   *judge_mod.LABELS)  # fmt: skip
+                   *judge_mod.LABELS, *actions_mod.LABELS)  # fmt: skip
 
     def _judge(self, result: AgentEvent) -> dict[str, str]:
         """First stage: the candidate rules (with the source label already on ``result``). A marked
