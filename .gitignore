@@ -16,8 +16,9 @@ data/
 *.db
 .DS_Store
 
-# Local-only notes (not published)
+# Local-only agent instructions (not published)
 CLAUDE.md
+/AGENTS.md
 
 # understand-anything plugin (local knowledge graph)
 .understand-anything/
