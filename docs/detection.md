@@ -195,6 +195,14 @@ uv run python scripts/replay_history.py data/archive-2026-11-15.db --review data
   - 룰에 걸리지 않아 길이만 보낸 프롬프트(데이터 최소화)는 새 프롬프트 룰로 판정할 수 없다.
   - 기록에는 데모 공격과 시험 대화가 섞여 있다. `--device`, `--exclude-device`, `--exclude-session`, `--since`로 걸러 낸 뒤에 오탐이라고 말한다.
 
+### 5. 내보내기 전에 한 번에 (2026-11-17)
+
+1~4를 한 번에 돌리고, 기준(`HEAD`) 대비 통제가 약해지는 변경(삭제, 비활성, 응답 약화, 심각도 하향, 버전을 안 올린 내용 변경)을 따로 보여 준다. 그다음 단계적 배포 명령을 안내한다([verification.md](verification.md) 4절).
+
+```bash
+uv run python scripts/verify_policy.py --db data/archive-2026-11-15.db
+```
+
 ## 알려진 한계와 튜닝 후보
 
 - `vigil-ipv4`(info): 버전 문자열(`1.2.3.4`)에도 걸린다.
