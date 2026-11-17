@@ -150,6 +150,20 @@ def test_what_is_not_understood_is_never_ok(command: str, parse: str, reason: st
     assert f.parse == parse and reason in f.unknown, f
 
 
+def test_code_mode_javascript_is_never_read_as_shell() -> None:
+    """Real history (2026-11-17): OpenClaw Code Mode's outer exec carries JavaScript; read as shell it came
+    out "partial" only because `return` is unmodelled. Marked unsupported: the raw-text rules always run."""
+    from sg_advance.sensor.actions import labels_for
+    from sg_advance.shorthand import build_event
+
+    js = "text(await x({command:'pwd'}))"
+    ev = build_event({"kind": "tool.call", "tool": "exec", "arguments": {"command": js},
+                      "labels": {"openclaw.tool_kind": "code_mode_exec"}})  # fmt: skip
+    assert labels_for(ev) == {"sga_act_parse": "unsupported", "sga_act_unknown": "language:javascript"}
+    plain = build_event({"kind": "tool.call", "tool": "exec", "arguments": {"command": "pwd"}})
+    assert labels_for(plain) == {"sga_act_parse": "ok"}
+
+
 def test_powershell_is_outside_the_subset() -> None:
     f = analyze_call("PowerShell", {"command": "Remove-Item -Recurse C:\\x"})
     assert f is not None and f.parse == "unsupported" and f.unknown == ["shell:powershell"]

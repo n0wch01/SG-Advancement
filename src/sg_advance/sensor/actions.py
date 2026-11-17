@@ -739,6 +739,12 @@ def analyze_call(tool: str, args: dict[str, Any]) -> Facts | None:
 def labels_for(event: AgentEvent) -> dict[str, str]:
     if event.kind is not EventKind.TOOL_CALL:
         return {}
+    if event.labels.get("openclaw.tool_kind") == "code_mode_exec":
+        # OpenClaw Code Mode's outer call carries JavaScript, not a shell command: never read it as one (it
+        # could come out "ok" and switch the raw-text check off). Its inner calls are judged on their own.
+        facts = Facts()
+        facts.gap("language:javascript", unsupported=True)
+        return facts.labels()
     p = event.payload
     args = getattr(p, "arguments", None)
     facts = analyze_call(getattr(p, "tool", "") or "", args if isinstance(args, dict) else {})
