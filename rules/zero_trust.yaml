@@ -62,14 +62,18 @@ rules:
 
   # 안내서 P1-4·C1-7: 사람의 위험도를 지속적으로 재평가해 접근 범위를 조정. 관제 서버가 최근 24시간 critical 1건 이상
   # 또는 high 3건 이상인 사람을 elevated_risk_users로 내려보낸다(이 파일의 medium 룰은 세지 않음: 되먹임 방지).
-  # 오탐 주의: 오탐 Finding이 많은 룰이 있으면 그 사람이 24시간 동안 보안팀 승인을 기다리게 된다.
+  # 결정(2026-11-17, 사용자): 보안팀 사전 승인을 없애고 거부. 위험한 그 사람이 스스로 승인하면 확인이 안 되므로
+  #   사용자 승인으로 낮추지 않는다. 위험도가 24시간 안에 내려가면 다시 쓸 수 있다.
+  # 오탐 주의: 오탐 Finding이 많은 룰이 있으면 그 사람이 24시간 동안 민감 리소스(crm·hr-db·payments)를 쓰지 못한다.
+  # 미탐 주의: 사람 위험도가 아직 오르지 않은 계정 침해는 못 막는다.
   - id: sensitive-resource-by-elevated-risk-user
+    version: "2"
     severity: medium
     category: policy_violation
     title: 고위험 사용자의 민감 리소스 접근
-    message: 최근 고위험 Finding이 쌓인 사람이 민감한 사내 리소스를 호출해 보안팀 승인을 기다립니다.
-    recommended_action: 최근 Finding을 확인하고 계정 침해가 아니면 승인하세요. 위험도는 24시간이 지나면 내려갑니다.
-    response: security_approval
+    message: 최근 고위험 Finding이 쌓인 사람이 민감한 사내 리소스를 호출해 거부했습니다.
+    recommended_action: 최근 Finding을 확인하세요. 계정 침해가 아니고 업무에 필요하면 원인 Finding을 정리하거나 위험도가 내려가길(24시간) 기다립니다.
+    response: block
     dedup: none
     tags: ["action-independent", zero-trust, "kisa-zt:P1-4"]
     when:

@@ -356,7 +356,8 @@ class IntegrityReport(StrictModel):
 
 
 class ApprovalResolution(StrictModel):
-    """An answer to a pre-execution approval prompt (``require_approval`` or ``security_approval``).
+    """An answer to a pre-execution approval prompt (``require_approval``; ``security_approval`` until
+    2026-11-17, when the security pre-approval hold was removed: old records keep ``via: security``).
 
     Links back to the ``tool.call`` event and findings that asked for it, so security can audit
     what users approved after the fact. ``approver`` is who pressed the button when the agent
@@ -380,8 +381,8 @@ class ApprovalResolution(StrictModel):
     approver: str | None = None
     via: Literal["user", "security"] = Field(
         default="user",
-        description="Who was asked: the person in the agent UI (require_approval), or security in the "
-        "console (security_approval, M11; approver = who decided there)",
+        description="Who was asked: the person in the agent UI (require_approval). 'security' only in "
+        "records from before 2026-11-17 (the security pre-approval hold, removed)",
     )
 
 

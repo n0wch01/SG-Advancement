@@ -40,9 +40,19 @@ from .events import (
     ToolResult,
     UserPrompt,
 )
-from .findings import Enforcement, Finding, ResponseAction, Severity, ThreatCategory
+from .findings import (
+    DECISION_OF_ACTION,
+    Decision,
+    Enforcement,
+    Finding,
+    ResponseAction,
+    Severity,
+    ThreatCategory,
+)
 
 __all__ = [
+    "DECISION_OF_ACTION",
+    "Decision",
     "ApprovalResolution",
     "InstallSnapshot",
     "OperatorAction",

@@ -25,7 +25,6 @@ from .openclaw_people import OpenClawPeople
 
 if TYPE_CHECKING:
     from ..core import ProcessResult, Sensor
-    from ..security_hold import Holds
 
 
 # Remote response (M11): action name → async handler(target) → (ok, detail). The core registers
@@ -41,7 +40,6 @@ class AdapterContext:
     plugins: PluginRegistry = field(default_factory=PluginRegistry)  # in-gateway plugin's judgements
     people: OpenClawPeople = field(default_factory=OpenClawPeople)  # team gateway: session/run → person
     actions: dict[str, ActionHandler] = field(default_factory=dict)  # remote response handlers (M11)
-    holds: Holds | None = None  # security approval waits (M11); only the daemon can wait
 
     def local_event(
         self,

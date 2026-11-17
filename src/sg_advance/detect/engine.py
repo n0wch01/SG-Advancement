@@ -28,6 +28,7 @@ from .fields import condition_holds, first, resolve, string_leaves
 from .rules import (
     AllowlistMatch,
     InSetMatch,
+    NumberMatch,
     RateMatch,
     RegexMatch,
     RepeatMatch,
@@ -201,6 +202,25 @@ class _RegexMatcher:
         return _RawHit("", why, (event.event_id,), (), tuple(found))
 
 
+class _NumberMatcher:
+    def __init__(self, spec: NumberMatch) -> None:
+        self.spec = spec
+
+    def check(self, event: AgentEvent, doc: dict[str, Any]) -> _RawHit | None:
+        for path in self.spec.fields:
+            for value in resolve(doc, path):
+                if isinstance(value, bool):
+                    continue
+                try:
+                    x = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if x == x and self.spec.holds(x):  # NaN never matches
+                    why = f"{path} = {value} ({self.spec.bounds()})"
+                    return _RawHit("", why, (event.event_id,), (str(value),))
+        return None
+
+
 class _AllowlistMatcher:
     def __init__(
         self, spec: AllowlistMatch, trusted: TrustedSets | None = None, split: str | None = None
@@ -365,6 +385,7 @@ class _SequenceMatcher:
 _MATCHERS = {
     "regex": _RegexMatcher,
     "allowlist": _AllowlistMatcher,
+    "number": _NumberMatcher,
     "rate": _RateMatcher,
     "repeat": _RepeatMatcher,
     "sequence": _SequenceMatcher,

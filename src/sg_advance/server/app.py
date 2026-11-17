@@ -38,7 +38,6 @@ from . import (
     manifests,
     policy_admin,
     risk,
-    security_approvals,
 )
 from .auth import (
     DEVICE_PREFIX,
@@ -314,7 +313,13 @@ def enroll(body: EnrollRequest, request: Request, db: DbSession, token: Token) -
     )
 
 
-@sensor.get("/policy", response_model=PolicyBundle, responses={304: {"description": "Not modified"}})
+# exclude_none: a bundle with no start time looks exactly as before, so older sensors still accept it.
+@sensor.get(
+    "/policy",
+    response_model=PolicyBundle,
+    response_model_exclude_none=True,
+    responses={304: {"description": "Not modified"}},
+)
 def get_policy(
     request: Request,
     response: Response,
@@ -325,7 +330,7 @@ def get_policy(
     """This device's policy bundle: common, or common + its group's stricter overrides (M9).
     Send ``If-None-Match: "<version>"`` to get 304 when unchanged."""
     _policy(request)  # refresh when a release cooldown ended
-    bundle = policy_admin.policy_for(request.app, device.group_name)
+    bundle = policy_admin.policy_for(request.app, device.group_name, device.device_id)
     etag = f'"{bundle.version}"'
     device.last_seen = utcnow()
     device.policy_version = bundle.version
@@ -465,7 +470,8 @@ def list_devices(request: Request, db: DbSession) -> list[DeviceOut]:
             enrolled_at=d.enrolled_at,
             last_seen=d.last_seen,
             policy_version=d.policy_version,
-            policy_current=d.policy_version == policy_admin.policy_for(request.app, d.group_name).version,
+            policy_current=d.policy_version
+            == policy_admin.policy_for(request.app, d.group_name, d.device_id).version,
             group=d.group_name,
             client_certificate=d.cert_fingerprint is not None,
             cert_not_after=d.cert_not_after,
@@ -657,9 +663,14 @@ def policy_info(request: Request) -> PolicyInfo:
 @admin.post("/policy/reload", response_model=PolicyInfo)
 def reload_policy(request: Request) -> PolicyInfo:
     """Re-read ``rules/`` from disk. An invalid rule file is rejected and the old policy stays."""
+    if getattr(request.app.state, "staged", None) is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "a rollout is staged: promote or discard it first")
+    previous = getattr(request.app.state, "base_docs", None)
     try:
+        request.app.state.base_docs = policy_admin.read_base_docs(request.app)  # rules/ as on disk now
         bundle = _load_signed_policy(request.app)
     except ValueError as e:  # RuleLoadError is a ValueError
+        request.app.state.base_docs = previous
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from e
     request.app.state.policy = bundle
     return _policy_info(request)
@@ -713,8 +724,6 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.include_router(actions.sensor)
     app.include_router(install.router)
     app.include_router(install.admin)
-    app.include_router(security_approvals.admin)
-    app.include_router(security_approvals.sensor)
     app.include_router(audit_chain.router)
     app.include_router(gateway_authz.router)
     app.include_router(risk.admin)

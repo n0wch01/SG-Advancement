@@ -8,6 +8,7 @@ import { Empty, ErrorBox, Loading } from "../components/States";
 import {
   ACTION_STATUS_LABEL,
   CAMPAIGN_RULE,
+  agentName,
   REMOTE_ACTION_LABEL,
   campaignPeople,
   eventSummary,
@@ -58,7 +59,7 @@ function DetailBody({ d, query }: { d: Detail; query: Record<string, string> }) 
       {f.rule_id === CAMPAIGN_RULE && <Campaign f={f} members={d.campaign_members ?? []} query={query} />}
       <ol className="investigation-trace" aria-label="사람, 에이전트, 적용 정책과 실제 결과">
         <li><span className="trace-label"><Icon name="user" />사람</span><a className="trace-value" href={timelineHref({ range: filters.range, since: filters.since, user_id: f.principal.user_id })}>{f.principal.user_id}</a></li>
-        <li><span className="trace-label"><Icon name="activity" />에이전트</span><span className="trace-value">{f.agent.type}</span></li>
+        <li><span className="trace-label"><Icon name="activity" />에이전트</span><span className="trace-value">{agentName(f.agent)}</span></li>
         <li><span className="trace-label"><Icon name="policy" />적용 정책</span><a className="trace-value mono" href={findingsHref({ ...filters, rule_id: f.rule_id })}>{f.rule_id}</a></li>
         <li><span className="trace-label"><Icon name="shield" />실행 결과</span><ResponseBadge response={f.response} /></li>
       </ol>
@@ -115,7 +116,7 @@ function DetailBody({ d, query }: { d: Detail; query: Record<string, string> }) 
             </dd>
             <dt>에이전트 · 대화</dt>
             <dd className="mono small">
-              {f.agent.type} · {f.agent.session_id}
+              {agentName(f.agent)} · {f.agent.session_id}
               <a className="side" href={timelineHref({ range: filters.range, since: filters.since, session_id: f.agent.root_session_id ?? f.agent.session_id })}>
                 대화 타임라인
               </a>

@@ -376,37 +376,6 @@ def test_post_tool_use_hook_also_fails_closed() -> None:
     assert "onFailure" not in doc["UserPromptSubmit"][0]["hooks"][0]  # a prompt is not an action
 
 
-@pytest.mark.parametrize(
-    "answer",
-    [
-        {},  # the daemon went away during the wait: empty reply → json {}
-        {"ok": False, "error": "unauthorized"},
-        {"ok": False, "error": "security approval is not available"},
-        {"ok": True},  # no decision at all
-        {"ok": True, "decision": "hold"},  # never a final answer
-    ],
-)
-def test_a_held_call_runs_only_on_an_explicit_allow(monkeypatch, tmp_path: Path, answer: dict) -> None:
-    """Fail closed (review 2026-11-15): the answer to await_hold must say allow, or the call is blocked.
-    Before, an empty or ok:false answer had no decision and respond() let the call run."""
-    replies = iter([{"ok": True, "decision": "hold", "hold_id": "h1", "wait_ms": 1000}, answer])
-    monkeypatch.setattr(hook, "ask", lambda *_a, **_k: next(replies))
-    ev = hook.hook_event(pre("Bash", command="psql -c 'DELETE FROM users;'"), user_id="bob", hostname="pc")
-    verdict = hook.judge(tmp_path, ev)  # type: ignore[arg-type]
-    assert verdict["decision"] == "block" and "SG-Advance" in verdict["reason"]
-    code, out, _ = hook.respond("PreToolUse", verdict)
-    assert code == 0 and json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-def test_a_held_call_follows_securitys_answer(monkeypatch, tmp_path: Path) -> None:
-    for final, want in (({"ok": True, "decision": "allow"}, "allow"), ({"ok": True, "decision": "block",
-                        "reason": "SG-Advance: 보안팀이 거부"}, "block")):  # fmt: skip
-        replies = iter([{"ok": True, "decision": "hold", "hold_id": "h1", "wait_ms": 1000}, final])
-        monkeypatch.setattr(hook, "ask", lambda *_a, _r=replies, **_k: next(_r))
-        ev = hook.hook_event(pre("Bash", command="ls"), user_id="bob", hostname="pc")
-        assert hook.judge(tmp_path, ev)["decision"] == want  # type: ignore[arg-type]
-
-
 # ── the cached-policy path takes the same channels as the daemon (improvement 2026-11-15) ────────
 
 _TAGGED_RULES = """
@@ -418,8 +387,8 @@ rules:
     title: 보안팀 확인이 필요한 호출
     message: test
     recommended_action: test
-    response: require_approval
-    tags: ["approval:security", "grade:3-1"]
+    response: security_approval
+    tags: ["grade:3-1"]
     when: {payload.kind: tool.call}
     match: {type: regex, fields: [payload.arguments.command], pattern: 'deploy-prod'}
   - id: asks-person
@@ -454,14 +423,14 @@ def _verdict_with(tmp_path: Path, doc: dict[str, Any]):
     return Engine(RuleSet.load(tmp_path / "rules")).process(AgentEvent.model_validate(doc))
 
 
-def test_cached_policy_sends_security_tagged_calls_nowhere_but_a_block(tmp_path: Path) -> None:
-    """With no daemon there is no one to hold the call for security. Before, the tag was skipped and the
-    person alone could approve it (CLAUDE.md: a failure is never passed on to the person's approval)."""
+def test_an_old_rule_asking_for_security_approval_is_a_block(tmp_path: Path) -> None:
+    """The security pre-approval hold was removed (2026-11-17). A cached policy written before still says
+    ``security_approval``: it is read as a deny, never passed on to the person (fail closed)."""
     doc = hook.hook_event(pre("Bash", command="./deploy-prod.sh"), user_id="bob", hostname="pc")
     verdict = _verdict_with(tmp_path, doc)  # type: ignore[arg-type]
     response, enforcement = hook.degraded_response(verdict)
-    assert response["decision"] == "block" and "보안팀" in response["reason"]
-    assert enforcement is not None and enforcement.enforced
+    assert response["decision"] == "block"
+    assert enforcement is not None and enforcement.enforced and enforcement.decision == "deny"
 
 
 def test_cached_policy_blocks_a_prompt_the_daemon_would_block(tmp_path: Path) -> None:
@@ -477,7 +446,7 @@ def test_cached_policy_blocks_a_prompt_the_daemon_would_block(tmp_path: Path) ->
 def test_cached_policy_still_asks_the_person_for_untagged_approvals(tmp_path: Path) -> None:
     doc = hook.hook_event(pre("Bash", command="./rm-old.sh"), user_id="bob", hostname="pc")
     response, _ = hook.degraded_response(_verdict_with(tmp_path, doc))  # type: ignore[arg-type]
-    assert response["decision"] == "approve"  # untagged: the person's own prompt, as with the daemon
+    assert response["decision"] == "approve"  # the person's own prompt, as with the daemon
     plain = hook.hook_event(pre("Bash", command="ls"), user_id="bob", hostname="pc")
     plain_answer, _ = hook.degraded_response(_verdict_with(tmp_path, plain))  # type: ignore[arg-type]
     assert plain_answer["decision"] == "allow"

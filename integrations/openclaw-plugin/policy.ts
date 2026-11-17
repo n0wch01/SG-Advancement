@@ -5,8 +5,8 @@
 //   1. the local sensor daemon over its unix socket (full, stateful rules)        -> source "daemon"
 //   2. `sga-sensor evaluate` (signed policy cache, stateless rules)          -> source "degraded"
 //   3. risk tiers: read-only tools pass, everything else is blocked (fail closed) -> source "fallback"
-// A daemon "hold" (M11 security_approval) waits for security's decision in the console: up to
-// securityWaitMs, then denied. Any failure while waiting blocks: nobody approved the call.
+// Four decisions (2026-11-17): allow, approve (the person, in OpenClaw's approval card), block, and on
+// results mask. The security team's pre-approval hold was removed; anything but an explicit allow blocks.
 // decide() never throws: an exception inside a before_tool_call handler would make OpenClaw block
 // the call (its failure policy), which is stricter than the policy we chose.
 
@@ -16,7 +16,7 @@ import net from "node:net";
 
 export type Verdict = {
   ok: boolean;
-  decision?: "allow" | "block" | "approve" | "hold";
+  decision?: "allow" | "block" | "approve";
   action?: string;
   rules?: string[];
   severity?: string;
@@ -24,8 +24,6 @@ export type Verdict = {
   title?: string;
   reason?: string;
   error?: string;
-  hold_id?: string; // decision "hold": ask await_hold with it
-  wait_ms?: number;
   outcome?: string;
 };
 
@@ -55,13 +53,11 @@ export type PluginSettings = {
   daemonTimeoutMs: number;
   cliTimeoutMs: number;
   approvalTimeoutMs: number;
-  securityWaitMs: number;
 };
 
 export type Deps = {
   askDaemon: (req: object) => Promise<Verdict>;
   askCli: (req: object) => Promise<Verdict>;
-  askHold?: (req: object) => Promise<Verdict>; // the daemon socket with a timeout past securityWaitMs
   log?: (level: "info" | "warn", msg: string) => void;
 };
 
@@ -86,38 +82,13 @@ export function settingsFrom(
     daemonTimeoutMs: Number(c.daemonTimeoutMs ?? 3000),
     cliTimeoutMs: Number(c.cliTimeoutMs ?? 8000),
     approvalTimeoutMs: Number(c.approvalTimeoutMs ?? 120_000),
-    securityWaitMs: Number(c.securityWaitMs ?? 300_000), // decision 2026-11-12: 5 minutes
   };
 }
 
-/** How long OpenClaw may wait on our hook. before_tool_call is fail-closed, so running past this
- * blocks the call too; the daemon normally answers well before (its own wait ends first). */
+/** How long OpenClaw may wait on our hook: the daemon, then the cached-policy CLI. before_tool_call is
+ * fail-closed, so running past this blocks the call too. */
 export function hookTimeoutMs(s: PluginSettings): number {
-  return Math.max(s.daemonTimeoutMs + s.cliTimeoutMs + 2000, s.securityWaitMs + 30_000);
-}
-
-/** Wait for security's decision on a held call. Aborting the run cancels the hold. */
-export async function awaitSecurity(v: Verdict, ctx: any, deps: Deps): Promise<HookResult> {
-  const holdId = v.hold_id;
-  if (!holdId || !deps.askHold) {
-    return { block: true, blockReason: "SG-Advance: 보안팀 승인을 기다릴 수 없어 차단했습니다" };
-  }
-  const signal: AbortSignal | undefined = ctx?.abortSignal;
-  const cancel = () => {
-    deps.askDaemon({ op: "cancel_hold", hold_id: holdId }).catch(() => {});
-  };
-  signal?.addEventListener?.("abort", cancel, { once: true });
-  try {
-    const r = await deps.askHold({ op: "await_hold", hold_id: holdId });
-    if (r.ok && r.decision === "allow") return undefined;
-    return { block: true, blockReason: r.reason || "SG-Advance: 보안팀 승인을 받지 못했습니다" };
-  } catch (e) {
-    const msg = String((e as Error)?.message ?? e);
-    deps.log?.("warn", `security approval wait failed for ${v.rules?.join(", ")}: ${msg}`);
-    return { block: true, blockReason: `SG-Advance: 보안팀 승인을 기다리는 중 센서와 연결이 끊겨 차단했습니다 (${msg})` };
-  } finally {
-    signal?.removeEventListener?.("abort", cancel);
-  }
+  return s.daemonTimeoutMs + s.cliTimeoutMs + 2000;
 }
 
 // before_tool_call event/ctx -> the daemon's request (sensor/plugin_api.py)
@@ -152,19 +123,21 @@ export function toHookResult(
   if (v.decision === "block") {
     return { block: true, blockReason: v.reason || `SG-Advance blocked this call (${why})` };
   }
-  if (v.decision === "approve") {
-    return {
-      requireApproval: {
-        title: v.title || "SG-Advance",
-        description: `${why}${source === "daemon" ? "" : ` [${source}]`}`,
-        severity: v.action === "require_approval" && v.grade !== "3-1" ? "warning" : "critical",
-        timeoutMs: s.approvalTimeoutMs,
-        allowedDecisions: ["allow-once", "deny"], // a policy hit must not become a permanent allow rule
-        onResolution,
-      },
-    };
+  if (v.decision !== "approve") {
+    if (v.decision === "allow") return undefined;
+    // Fail closed: a decision this plugin does not know (an older daemon's "hold") never runs the call.
+    return { block: true, blockReason: `SG-Advance: unknown decision ${String(v.decision)}; blocked (${why})` };
   }
-  return undefined;
+  return {
+    requireApproval: {
+      title: v.title || "SG-Advance",
+      description: `${why}${source === "daemon" ? "" : ` [${source}]`}`,
+      severity: v.action === "require_approval" && v.grade !== "3-1" ? "warning" : "critical",
+      timeoutMs: s.approvalTimeoutMs,
+      allowedDecisions: ["allow-once", "deny"], // a policy hit must not become a permanent allow rule
+      onResolution,
+    },
+  };
 }
 
 export function fallbackResult(
@@ -215,10 +188,6 @@ export async function decide(
   let firstError = "";
   try {
     const v = await deps.askDaemon(req);
-    if (v.ok && v.decision === "hold") {
-      deps.log?.("info", `holding ${tool} for security approval (${v.hold_id})`);
-      return { result: await awaitSecurity(v, ctx, deps), source: "daemon" };
-    }
     if (v.ok) return { result: toHookResult(v, s, "daemon", resolver("daemon", v)), source: "daemon" };
     firstError = v.error || "daemon error";
   } catch (e) {

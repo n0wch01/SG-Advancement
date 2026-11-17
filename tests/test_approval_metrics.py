@@ -35,4 +35,4 @@ def test_metrics_show_waits_rejections_fast_approvals_and_automation_candidates(
     assert not any(t["automation_candidate"] for t in m["repeated"][1:])
     people = {p["user_id"]: p for p in m["people"]}
     assert people["alice"]["busiest_day"] == 6 and people["alice"]["fast_approval_rate"] == 1.0
-    assert m["security"]["requests"] == 0
+    assert "security" not in m  # one channel since 2026-11-17: the person's own prompt

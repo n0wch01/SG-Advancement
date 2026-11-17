@@ -13,11 +13,9 @@ Protocol: one JSON object per line, one response line per request.
     being unloaded; a loss is reported unless a new instance says hello within 30s.
 ``{"op": "tool_call", "agentId", "sessionKey", "sessionId", "runId", "toolCallId", "toolName",
    "toolKind", "params", "requester": {...}}``
-    → ``{"ok": true, "decision": "allow"|"block"|"approve"|"hold", "action", "rules", "title", "reason"}``
-    ``hold`` (M11 ``security_approval``) adds ``hold_id`` and ``wait_ms``: the plugin then asks
-``{"op": "await_hold", "hold_id"}`` → ``{"ok": true, "decision": "allow"|"block", "reason"}`` once
-    security decided or the wait ended (sensor/security_hold.py); ``{"op": "cancel_hold", "hold_id"}``
-    when the run was aborted meanwhile.
+    → ``{"ok": true, "decision": "allow"|"block"|"approve", "action", "rules", "title", "reason"}``
+    (the security team's pre-approval hold was removed 2026-11-17: four decisions only, allow / approve
+    by the person / deny / mask).
 
 The daemon judges with its stateful engine (sequence/rate rules see every adapter's events) and
 records the event with the enforcement the plugin is about to apply. When the daemon is down the
@@ -49,7 +47,6 @@ from ..schema.events import ApprovalResolution
 from .adapters.base import AdapterContext
 from .adapters.openclaw_people import OpenClawPeople
 from .envelope import envelope
-from .security_hold import peer_gone, summary_for
 
 log = logging.getLogger(__name__)
 
@@ -196,34 +193,16 @@ def withheld_response(point: EnforcementPoint, hits: list[Any]) -> tuple[dict[st
     )
 
 
-# A rule tagged ``approval:security`` sends its approval to the security hold even where the person could
-# be asked. No bundled rule carries it (decision 2026-11-14); a security team can add it to a rule.
-SECURITY_HOLD_TAG = "approval:security"
-
-
 def approval_channel(verdict: Verdict, point: EnforcementPoint) -> ResponseAction:
     """Grades decide *how* approval happens, never whether (CLAUDE.md). Decision 2026-11-14: the person
-    approves first, including grade 3-1, and the security team reviews those approvals afterwards (review
-    queue, ``user-approved-high-risk``). Only very high risk is blocked outright (the rules' own response).
-    A point that cannot ask anyone (the MCP gateway) still goes to the security hold, where the call is
-    re-checked and bound to the exact request; so does a rule tagged ``approval:security``.
+    approves in the agent's own prompt, including grade 3-1, and security reviews those approvals
+    afterwards (review queue, ``user-approved-high-risk``). Only very high risk is denied outright.
+    A point that cannot ask anyone (the MCP gateway) denies instead: an approval nobody can give is no
+    approval (fail closed). Decision 2026-11-17: the security team's pre-approval hold was removed.
     Limitation: the agent's own prompt runs the call the moment the person clicks, with no re-check."""
-    if verdict.action is ResponseAction.REQUIRE_APPROVAL:
-        asking = [h for h in verdict.hits if h.rule.response is ResponseAction.REQUIRE_APPROVAL]
-        if point.in_path or any(SECURITY_HOLD_TAG in h.rule.tags for h in asking):
-            return ResponseAction.SECURITY_APPROVAL
+    if verdict.action is ResponseAction.REQUIRE_APPROVAL and point.in_path:
+        return ResponseAction.BLOCK
     return verdict.action
-
-
-def held_enforcement(point: EnforcementPoint, why: str) -> Enforcement:
-    return Enforcement(
-        action=ResponseAction.SECURITY_APPROVAL,
-        enforced=True,
-        enforcer=point.sensor,
-        detail=f"pre-exec: held for security approval in the console ({why})",
-        stage="held",
-        **point.outcome("the request is held by the gateway and not forwarded"),
-    )
 
 
 # Irreversible (grade 3-1) calls the person approves get their own prompt (2026-11-14, KISA guide
@@ -270,17 +249,12 @@ def plugin_response(
         base["severity"] = severity
     if action in _BLOCKING:
         detail = f"pre-exec: {point.name} blocked the tool call"
-        return base | {"decision": "block", "reason": f"SG-Advance: {reason}"}, Enforcement(
+        why = f"SG-Advance: {reason}"
+        if verdict.action is ResponseAction.REQUIRE_APPROVAL:  # nobody to ask on this path
+            detail = f"pre-exec: {point.name} cannot ask a person; denied instead of approval (fail closed)"
+            why = f"SG-Advance: 사람에게 물을 수 없는 경로라 승인 대신 거부했습니다 ({reason})"
+        return base | {"decision": "block", "reason": why}, Enforcement(
             action=action, enforced=True, enforcer=sensor, detail=detail,
-            stage="blocked", **point.outcome("the request was not forwarded upstream"),
-        )  # fmt: skip
-    if action is ResponseAction.SECURITY_APPROVAL:  # no daemon to wait with (cached-policy CLI)
-        detail = "pre-exec: security approval needs the sensor daemon; blocked"
-        return base | {
-            "decision": "block",
-            "reason": f"SG-Advance: 보안팀 승인이 필요한 호출이지만 센서 데몬이 없어 차단했습니다 ({reason})",
-        }, Enforcement(
-            action=ResponseAction.BLOCK, enforced=True, enforcer=sensor, detail=detail,
             stage="blocked", **point.outcome("the request was not forwarded upstream"),
         )  # fmt: skip
     if action is ResponseAction.REQUIRE_APPROVAL:
@@ -297,15 +271,15 @@ def plugin_response(
 
 
 def finding_ids_for(verdict: Any, action: ResponseAction) -> list[str]:
-    """The findings a hold or approval record points at. A hold or block also reports the hits dedup
-    suppressed (``Sensor._enforced_repeats``); the agent's own prompt does not, so it doesn't list them."""
+    """The findings an approval or block record points at. A block also reports the hits dedup suppressed
+    (``Sensor._enforced_repeats``); the agent's own prompt does not, so it doesn't list them."""
     if action is ResponseAction.REQUIRE_APPROVAL:
         return [f.finding_id for f in verdict.findings]
     return verdict.enforced_ids
 
 
 def pending_for(result: Any, action: ResponseAction, response: dict[str, Any]) -> dict[str, Any]:
-    """What a prompt or a hold keeps about the call, to link the answer back to it."""
+    """What a prompt keeps about the call, to link the person's answer back to it."""
     return {
         "event_id": result.event.event_id,
         "finding_ids": finding_ids_for(result.verdict, action),
@@ -313,30 +287,6 @@ def pending_for(result: Any, action: ResponseAction, response: dict[str, Any]) -
         "max_severity": response.get("severity"),
         "requested_at": result.event.ts,
     }
-
-
-def hold_reason(point: EnforcementPoint, verdict: Verdict) -> str:
-    """Why a call went to security instead of the person (the enforcement record's detail)."""
-    if verdict.action is not ResponseAction.REQUIRE_APPROVAL:
-        return "policy"  # the rule (or a team policy) asks for security itself
-    return "the gateway cannot ask the person" if point.in_path else SECURITY_HOLD_TAG
-
-
-def open_hold(
-    ctx: AdapterContext,
-    result: Any,
-    response: dict[str, Any],
-    pending: dict[str, Any],
-    point: EnforcementPoint,
-    req: dict[str, Any],
-) -> tuple[dict[str, Any], Enforcement]:
-    """Hold the call for security (the one place both the plugin and event paths open a hold)."""
-    assert ctx.holds is not None
-    response = {k: v for k, v in response.items() if k != "reason"}
-    response["reason"] = rule_titles(result.verdict.hits)
-    hold = ctx.holds.open(req, pending, summary_for(result.event, response, pending), call_event=result.event)
-    response |= {"decision": "hold", "hold_id": hold.id, "wait_ms": int(ctx.holds.wait_seconds * 1000)}
-    return response, held_enforcement(point, hold_reason(point, result.verdict))
 
 
 def judge(
@@ -356,8 +306,6 @@ def judge(
     action = approval_channel(result.verdict, OPENCLAW_PLUGIN)
     response, enforcement = plugin_response(result.verdict, OPENCLAW_PLUGIN, action)
     pending = pending_for(result, action, response)
-    if action is ResponseAction.SECURITY_APPROVAL and ctx.holds is not None:
-        response, enforcement = open_hold(ctx, result, response, pending, OPENCLAW_PLUGIN, req)
     ctx.record(result, enforcement)
     call_id = event.payload.call_id  # type: ignore[union-attr]
     ctx.plugins.mark(call_id)
@@ -410,7 +358,7 @@ def judge_event(
     """Judge and record an event an enforcement point built itself (Claude Code hooks, M6).
 
     ``tool.call``: the same verdicts as the OpenClaw plugin (block / approve → the agent's own
-    prompt / hold for security / allow). ``prompt.user``: blocked only by a blocking verdict.
+    prompt / allow). ``prompt.user``: blocked only by a blocking verdict.
     Anything else is recorded. A ``tool.result`` for a call that was sent to the person's own
     prompt means they approved it: recorded as ``approval.resolved`` (a refusal leaves no result,
     so it cannot be told apart from an abandoned call)."""
@@ -421,9 +369,6 @@ def judge_event(
         action = approval_channel(result.verdict, point)
         response, enforcement = plugin_response(result.verdict, point, action)
         pending = pending_for(result, action, response) | {"call": result.event}
-        if action is ResponseAction.SECURITY_APPROVAL and ctx.holds is not None:
-            tool_req = {"toolName": result.event.payload.tool}  # type: ignore[union-attr]
-            response, enforcement = open_hold(ctx, result, response, pending, point, tool_req)
         ctx.record(result, enforcement)
         if response.get("decision") == "approve" and point.sensor is SensorType.CLAUDE_CODE_HOOK:
             # Claude Code asked the person: a later result means they approved. The MCP gateway asks no one.
@@ -592,22 +537,12 @@ class LocalApiServer:
         return isinstance(given, str) and hmac.compare_digest(given, self.token)
 
     async def handle_async(self, line: bytes, reader: asyncio.StreamReader | None = None) -> dict[str, Any]:
-        """``await_hold`` waits (up to minutes) for security; everything else answers at once. With the
-        requester's ``reader``, the hold is cancelled if it closes the connection while waiting."""
         try:
             req = json.loads(line)
         except json.JSONDecodeError:
             req = None
         if self.token is not None and not self._authorized(req):
             return {"ok": False, "error": "unauthorized"}
-        if isinstance(req, dict) and req.get("op") == "await_hold":
-            if self.ctx.holds is None:
-                return {"ok": False, "error": "security approval is not available"}
-            self.ctx.plugins.touch()
-            hold_id = str(req.get("hold_id") or "")
-            if reader is None:
-                return await self.ctx.holds.wait(self.ctx, hold_id)
-            return await self.ctx.holds.wait_while(self.ctx, hold_id, peer_gone(reader))
         return self.handle(line)
 
     def handle(self, line: bytes) -> dict[str, Any]:
@@ -643,10 +578,6 @@ class LocalApiServer:
             except Exception as e:  # validation errors included: the hook falls back on its own
                 log.exception("hook event failed")
                 return {"ok": False, "error": str(e)[:500]}
-        if op == "cancel_hold":  # the run was aborted while security had not decided yet
-            holds, hold_id = self.ctx.holds, str(req.get("hold_id") or "")
-            found = holds is not None and holds.resolve(hold_id, "cancelled")
-            return {"ok": True, "found": found}
         if op == "resolution":  # a person's answer to a requireApproval prompt (audit trail)
             try:
                 record_resolution(self.ctx, req)

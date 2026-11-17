@@ -454,6 +454,7 @@ async def test_observe_only_never_aborts(gateway, enrolled: Sensor) -> None:
             "stage": "blocked",
             "confirmation": "failed",  # decided, not applied: recorded as such (2026-11-13)
             "evidence": None,
+            "decision": "deny",  # what was decided; not applied (confirmation says so)
         }
         assert gw.aborts() == []
     finally:

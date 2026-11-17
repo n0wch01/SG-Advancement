@@ -6,7 +6,7 @@ import { RefreshStatus } from "../components/RefreshStatus";
 import { ResponseBadge } from "../components/ResponseBadge";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
-import { SEVERITIES, SEVERITY_LABEL, TIME_RANGES, approvalsHref, findingHref, findingsHref, formatTime, overviewHref, rangeQuery, relativeTime, riskBand, sinceFor, timelineHref, timeRange, type TimeRange } from "../format";
+import { SEVERITIES, agentName, SEVERITY_LABEL, TIME_RANGES, approvalsHref, findingHref, findingsHref, formatTime, overviewHref, rangeQuery, relativeTime, riskBand, sinceFor, timelineHref, timeRange, type TimeRange } from "../format";
 import type { PersonRisk, Summary } from "../types";
 import { REFRESH_MS, useAsync } from "../useAsync";
 
@@ -61,7 +61,7 @@ function OverviewBody({ s, range, reviewPending, people }: { s: Summary; range: 
           {s.recent.length === 0 ? <Empty>이 기간에는 탐지된 Finding이 없습니다.</Empty> : <ul className="recent-findings">
             {s.recent.map((x) => <li key={x.finding_id}><a className="recent-finding" href={findingHref(x.finding_id, { ...period, from: "overview" })}>
               <SeverityBadge severity={x.severity} />
-              <div className="recent-finding-content"><h3>{x.title}</h3><p>{x.principal.user_id}<span aria-hidden="true"> · </span>{x.agent.type}</p><ResponseBadge response={x.response} /></div>
+              <div className="recent-finding-content"><h3>{x.title}</h3><p>{x.principal.user_id}<span aria-hidden="true"> · </span>{agentName(x.agent)}</p><ResponseBadge response={x.response} /></div>
               <time dateTime={x.ts} title={formatTime(x.ts)}>{relativeTime(x.ts)}</time>
             </a></li>)}
           </ul>}

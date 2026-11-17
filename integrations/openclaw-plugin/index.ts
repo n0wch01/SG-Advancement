@@ -18,8 +18,6 @@ export default definePluginEntry({
     const s = settingsFrom(api.pluginConfig);
     const askDaemon = daemonAsk(s, s.daemonTimeoutMs);
     const askCli = cliAsk(s.sensorCli, s.sensorHome, s.cliTimeoutMs);
-    // Security approval (M11): the daemon answers once security decided or its wait ended.
-    const askHold = daemonAsk(s, s.securityWaitMs + 15_000);
     const log = (level: "info" | "warn", msg: string) => api.logger?.[level]?.(msg);
 
     // Announce ourselves: the daemon only treats unjudged tool calls as a bypass while we're around.
@@ -31,12 +29,12 @@ export default definePluginEntry({
     api.on(
       "before_tool_call",
       async (event: any, ctx: any) => {
-        const { result, source } = await decide(event, ctx, s, { askDaemon, askCli, askHold, log });
+        const { result, source } = await decide(event, ctx, s, { askDaemon, askCli, log });
         if (result && "block" in result) log("info", `blocked ${event?.toolName} (${source})`);
         return result;
       },
-      // Run before other policy plugins; a block from us is terminal. Long enough for a security
-      // approval wait (before_tool_call is fail-closed: a timeout blocks the call).
+      // Run before other policy plugins; a block from us is terminal (before_tool_call is fail-closed:
+      // a timeout blocks the call).
       { priority: 1000, timeoutMs: hookTimeoutMs(s) },
     );
   },

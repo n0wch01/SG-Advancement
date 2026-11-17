@@ -95,6 +95,7 @@ async def test_verdicts_map_to_plugin_decisions(api, enrolled: Sensor) -> None:
         # OpenClaw applies the plugin's decision: not confirmed until evidence arrives (2026-11-13)
         "confirmation": "unconfirmed",
         "evidence": "OpenClaw applies the decision",
+        "decision": "deny",
     }
     assert findings["destructive-sql"]["response"]["detail"].startswith("pre-exec: user approval")
     ev = next(e for e in spooled(enrolled, "event") if e["payload"]["call_id"] == "c1")

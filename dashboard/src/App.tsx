@@ -6,7 +6,6 @@ import { findingsHref, overviewHref, parseHash, type Route } from "./format";
 import type { FindingFeedCache } from "./findingFeed";
 import { Actions } from "./pages/Actions";
 import { Approvals } from "./pages/Approvals";
-import { Security } from "./pages/Security";
 import { FindingDetail } from "./pages/FindingDetail";
 import { Findings } from "./pages/Findings";
 import { Inventory } from "./pages/Inventory";
@@ -23,7 +22,6 @@ const NAVIGATION: { label: string; items: { page: Route["page"]; label: string; 
     { page: "inventory", label: "인벤토리", href: "#/inventory", icon: "inventory" },
   ] },
   { label: "보안 운영", items: [
-    { page: "security", label: "보안 승인", href: "#/security", icon: "security" },
     { page: "approvals", label: "승인 감사", href: "#/approvals", icon: "approvals" },
     { page: "actions", label: "대응", href: "#/actions", icon: "actions" },
     { page: "policy", label: "정책", href: "#/policy", icon: "policy" },
@@ -189,7 +187,6 @@ export function App() {
             {route.page === "timeline" && <Timeline api={api} query={route.query} />}
             {route.page === "policy" && <Policy api={api} role={role} query={route.query} />}
             {route.page === "actions" && <Actions api={api} role={role} />}
-            {route.page === "security" && <Security api={api} role={role} />}
           </main>
         </div>
       </div>

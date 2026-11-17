@@ -4,7 +4,6 @@ import {
   activeBlocks,
   mergeNewest,
   campaignPeople,
-  remainingText,
   agentPosture,
   reasonText,
   responseChoices,
@@ -19,6 +18,7 @@ import {
   findingBackHref,
   findingFilters,
   findingQueue,
+  agentName,
   judgeText,
   findingHref,
   overviewHref,
@@ -55,18 +55,27 @@ describe("format", () => {
   });
 
   it("describes the response and whether it was enforced", () => {
-    expect(responseText(null)).toBe("알림");
-    expect(responseText({ action: "block", enforced: true })).toBe("차단 (집행됨)");
-    expect(responseText({ action: "abort_session", enforced: false })).toBe("실행 중단 (집행 안 됨)");
+    expect(responseText(null)).toBe("허용 · 경보");
+    expect(responseText({ action: "block", enforced: true })).toBe("거부 (집행됨)");
+    expect(responseText({ action: "abort_session", enforced: false })).toBe("거부 · 대화 중단 (집행 안 됨)");
     expect(responseText({ action: "block", enforced: true, stage: "blocked", confirmation: "unconfirmed" })).toBe(
-      "차단 · 적용 미확인",
+      "거부 · 적용 미확인",
     );
     expect(responseText({ action: "block", enforced: true, stage: "blocked", confirmation: "confirmed" })).toBe(
-      "차단 · 실제 적용 확인",
+      "거부 · 실제 적용 확인",
     );
     expect(responseText({ action: "alert", enforced: false, stage: "detected", confirmation: "not_applicable" })).toBe(
-      "탐지",
+      "허용 · 경보",
     );
+  });
+
+  it("reads every outcome as one of four decisions: allow, deny, approve, mask (2026-11-16)", () => {
+    const r = (action: string, stage: string) => responseText({ action, enforced: true, stage, confirmation: "unconfirmed" });
+    expect(r("require_approval", "approval_requested")).toBe("승인 · 사용자 · 적용 미확인");
+    expect(r("block", "result_withheld")).toBe("가림 · 적용 미확인");
+    expect(r("abort_session", "session_aborted")).toBe("거부 · 대화 중단 · 적용 미확인");
+    expect(r("quarantine", "quarantined")).toBe("거부 · 격리 · 적용 미확인");
+    expect(responseText({ action: "allow", enforced: false, stage: "detected", confirmation: "not_applicable" })).toBe("허용");
   });
 
   it("never shows withheld chat text, only its length", () => {
@@ -157,12 +166,11 @@ describe("format", () => {
     expect(responseChoices("common", "block")[0]).toBe("allow");
     expect(responseChoices("data-team", "require_approval")).toEqual([
       "require_approval",
-      "security_approval",
       "block",
       "abort_session",
       "quarantine",
     ]);
-    expect(responseChoices("data-team", "block")).not.toContain("security_approval"); // weaker than block
+    expect(responseChoices("data-team", "block")).not.toContain("require_approval"); // weaker than block
     expect(parseHash("#/policy?scope=data-team")).toEqual({ page: "policy", query: { scope: "data-team" } });
   });
 
@@ -192,14 +200,6 @@ describe("format", () => {
       ["alice", ["pc-a", "pc-a2"], 2],
       ["bob", ["pc-b"], 1],
     ]);
-  });
-
-  it("shows the time left to decide", () => {
-    const now = new Date("2026-11-12T12:00:00Z");
-    expect(remainingText("2026-11-12T12:04:59Z", now)).toBe("4:59");
-    expect(remainingText("2026-11-12T12:00:05Z", now)).toBe("0:05");
-    expect(remainingText("2026-11-12T11:59:00Z", now)).toBe("0:00");
-    expect(parseHash("#/security")).toEqual({ page: "security" });
   });
 
   it("computes time ranges", () => {
@@ -318,5 +318,10 @@ describe("investigation navigation", () => {
     expect(judgeText({ sga_judge_injection: "malicious", sga_judge_score: "0.970" })).toEqual({ text: "분류기: 인젝션 0.97", tone: "bad" });
     expect(judgeText({ sga_judge_injection: "unavailable" })).toEqual({ text: "분류기: 판정 실패", tone: "warn" });
     expect(judgeText({})).toBeNull();
+  });
+
+  it("names the agent with its configured name when the sensor knows it", () => {
+    expect(agentName({ type: "claude_code", agent_id: "fixer" })).toBe("claude_code · fixer");
+    expect(agentName({ type: "mcp_client" })).toBe("mcp_client");
   });
 });

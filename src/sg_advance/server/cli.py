@@ -19,7 +19,6 @@
     sga-server action unblock-session|block-user|unblock-user|abort DEVICE TARGET ...
     sga-server action disable-plugin|disable-skill DEVICE TARGET ...
     sga-server action list [--device D]
-    sga-server security list [--all] | approve ID | deny ID --by me --reason "..."   (M11)
     sga-server tls ca | server-cert --host 192.168.0.10 [--host my-mac.local] [--out /lan-tls]   (M12)
     sga-server device list | revoke DEVICE --by me --reason "..."   (M12)
 
@@ -204,7 +203,7 @@ def policy_main(argv: list[str]) -> int:
     on.add_argument("--enable", dest="enabled", action="store_const", const=True)
     on.add_argument("--disable", dest="enabled", action="store_const", const=False)
     p.add_argument(
-        "--response", help="allow|alert|require_approval|security_approval|block|abort_session|quarantine"
+        "--response", help="allow|alert|require_approval|block|abort_session|quarantine"
     )
     p.add_argument("--allow", help="allowlist entries, comma separated (allowlist rules only)")
     _who(p)
@@ -215,9 +214,39 @@ def policy_main(argv: list[str]) -> int:
     p = sub.add_parser("log", help="policy change log, newest first")
     p.add_argument("--scope")
     p.add_argument("--limit", type=int, default=30)
+    # Staged rollout (2026-11-16): canaries first, then everyone, optionally from one start time.
+    sub.add_parser("rollout", help="current policy and any staged rollout")
+    p = sub.add_parser("stage", help="give the rules on disk to these devices first")
+    p.add_argument("devices", nargs="+")
+    p.add_argument("--from", dest="effective_from", help="canaries install it from this ISO time on")
+    _who(p)
+    p = sub.add_parser("promote", help="the staged rules become everyone's")
+    p.add_argument("--from", dest="effective_from", help="every device installs it from this ISO time on")
+    _who(p)
+    p = sub.add_parser("discard", help="drop the staged rules (canaries go back)")
+    _who(p)
     args = ap.parse_args(argv)
     who = {"by": getattr(args, "by", None), "reason": getattr(args, "reason", None)}
 
+    if args.cmd in ("rollout", "stage", "promote", "discard"):
+        if args.cmd == "rollout":
+            doc = _api(args.server, "GET", "/v1/admin/policy/rollout")
+        else:
+            body: dict[str, object] = dict(who)
+            if args.cmd == "stage":
+                body["devices"] = args.devices
+            if getattr(args, "effective_from", None):
+                body["effective_from"] = args.effective_from
+            doc = _api(args.server, "POST", f"/v1/admin/policy/{args.cmd}", body)
+        start = doc["current_effective_from"]  # type: ignore[index]
+        print(f"current {doc['current_version'][:16]}…" + (f" from {start}" if start else ""))  # type: ignore[index]
+        if doc["staged_version"]:  # type: ignore[index]
+            when = doc["staged_effective_from"]  # type: ignore[index]
+            print(f"staged  {doc['staged_version'][:16]}… for {', '.join(doc['staged_devices'])}"  # type: ignore[index]
+                  + (f" from {when}" if when else ""))  # fmt: skip
+        else:
+            print("staged  (none)")
+        return 0
     if args.cmd == "scopes":
         doc = _api(args.server, "GET", "/v1/admin/policy/scopes")
         print(f"revision {doc['revision']}")  # type: ignore[index]
@@ -325,37 +354,6 @@ def action_main(argv: list[str]) -> int:
         f"queued {a['action']} {a['target']} on {a['device_id']} ({a['id'][:8]}); "
         "the sensor picks it up in seconds"
     )  # type: ignore[index]
-    return 0
-
-
-def security_main(argv: list[str]) -> int:
-    import os
-    import urllib.parse
-
-    ap = argparse.ArgumentParser(prog="sga-server security", description="security approval queue (M11)")
-    ap.add_argument("--server", default=os.environ.get("SGA_SERVER", "http://127.0.0.1:8000"))
-    sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("list", help="calls waiting for security (with --all: decided and expired too)")
-    p.add_argument("--all", action="store_true")
-    p.add_argument("--limit", type=int, default=30)
-    for name in ("approve", "deny"):
-        p = sub.add_parser(name)
-        p.add_argument("id", help="the request id (a prefix from `list` is not enough: give all of it)")
-        _who(p)
-    args = ap.parse_args(argv)
-    if args.cmd == "list":
-        q = {"limit": args.limit} | ({} if args.all else {"status": "pending"})
-        rows = _api(args.server, "GET", "/v1/admin/security-approvals?" + urllib.parse.urlencode(q))
-        for a in rows:  # type: ignore[union-attr]
-            print(
-                f"{a['id']} {a['created_at'][:19]} {a['status']:<8} {a['outcome'] or '-':<11} "
-                f"{a['user_id']:<20} {a['tool']:<10} {','.join(a['rule_ids'])}"
-                f"  until {a['expires_at'][11:19]}  {a['arguments_preview'][:80]}"
-            )
-        return 0
-    body = {"decision": args.cmd, "by": args.by, "reason": args.reason}
-    a = _api(args.server, "POST", f"/v1/admin/security-approvals/{args.id}/decision", body)
-    print(f"{a['status']} {a['tool']} for {a['user_id']}; the device hears it within a second or two")  # type: ignore[index]
     return 0
 
 
@@ -491,8 +489,6 @@ def main(argv: list[str] | None = None) -> int:
         return tls_main(argv[1:])
     if argv[:1] == ["device"]:
         return device_main(argv[1:])
-    if argv[:1] == ["security"]:
-        return security_main(argv[1:])
     if argv[:1] == ["action"]:
         return action_main(argv[1:])
     if argv[:1] == ["policy"]:

@@ -18,6 +18,7 @@ export interface AgentRef {
   parent_session_id?: string | null;
   root_session_id?: string | null;
   spawn_depth?: number | null;
+  agent_id?: string | null;  // which configured agent: Claude Code main/subagent, OpenClaw agent (2026-11-16)
 }
 
 export interface Enforcement {
@@ -29,6 +30,7 @@ export interface Enforcement {
   stage?: string | null;
   confirmation?: "not_applicable" | "unconfirmed" | "confirmed" | "contradicted" | "failed" | null;
   evidence?: string | null;
+  decision?: "allow" | "deny" | "approve" | "mask" | null;  // the four decisions (2026-11-16)
 }
 
 export interface Finding {
@@ -245,29 +247,6 @@ export interface Device {
   group: string | null;
 }
 
-export interface SecurityApproval {
-  id: string;
-  device_id: string;
-  status: "pending" | "approved" | "denied" | "expired";
-  created_at: string;
-  expires_at: string;
-  user_id: string;
-  session_id: string;
-  tool: string;
-  arguments_preview: string;
-  reason: string;
-  rule_ids: string[];
-  severity: Severity | null;
-  event_id: string | null;
-  finding_ids: string[];
-  decided_at: string | null;
-  decided_by: string | null;
-  decision_reason: string | null;
-  delivered_at: string | null;
-  outcome: string | null;
-  outcome_at: string | null;
-}
-
 export interface RemoteAction {
   id: string;
   device_id: string;
@@ -300,7 +279,6 @@ export interface ApprovalMetrics {
   window_days: number;
   since: string;
   user: ChannelStats;
-  security: ChannelStats;
   repeated: { channel: string; tool: string; rule_ids: string[]; requests: number; approval_rate: number; people: number; automation_candidate: boolean }[];
   people: { user_id: string; requests: number; busiest_day: number; fast_approval_rate: number | null }[];
 }

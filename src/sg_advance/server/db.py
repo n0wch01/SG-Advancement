@@ -271,7 +271,9 @@ class AuditEntry(Base):
 
 
 class SecurityApproval(Base):
-    """A tool call held on a device until security decides (M11 ``security_approval``).
+    """Legacy (the security pre-approval hold was removed 2026-11-17, user decision). Nothing writes here any
+    more; the table and this model stay so records written before are kept and readable (audit), and the
+    migrations still match the models. A tool call that was held on a device until security decided.
 
     ``status`` is security's decision (pending → approved | denied); ``outcome`` is what the sensor
     reports actually happened to the call (allowed, denied, timeout, cancelled, unreachable), since a

@@ -84,7 +84,7 @@ GRADES = {"0", "1", "2-1", "2-2", "3-1", "3-2"}
 # 2-x·3-x: 사람의 명시 승인(require_approval·security_approval) 이상.
 # 3-1의 사람 승인에는 사후 감사가 붙어야 한다(user-approved-high-risk는 high 이상 승인만 본다).
 # 2-2·3-2(실시간, 사전 승인 정책 내 자동 실행)는 아직 쓰지 않는다.
-HUMAN_OR_STRICTER = {"require_approval", "security_approval", "block", "abort_session", "quarantine"}
+HUMAN_OR_STRICTER = {"require_approval", "block", "abort_session", "quarantine"}
 
 
 def _kinds(rule: Any) -> set[str]:

@@ -50,7 +50,8 @@ class ResponseAction(StrEnum):
     ALLOW = "allow"
     ALERT = "alert"
     REQUIRE_APPROVAL = "require_approval"
-    # Hold the call until security decides in the console (M11); denied if nobody does in time.
+    # Legacy (removed 2026-11-17, user decision: four decisions, no security pre-approval hold). Kept only
+    # so records written before can still be read; no rule can use it (detect/rules.py turns it into block).
     SECURITY_APPROVAL = "security_approval"
     BLOCK = "block"  # deny this single tool call / request
     ABORT_SESSION = "abort_session"  # stop the whole agent run
@@ -60,7 +61,7 @@ class ResponseAction(StrEnum):
 EnforcementStage = Literal[
     "detected",  # recorded only
     "approval_requested",  # a person was asked in the agent's own prompt
-    "held",  # execution paused for a security decision
+    "held",  # legacy: execution paused for a security decision (removed 2026-11-17)
     "blocked",  # this one call was refused
     "result_withheld",  # the call ran; its result was kept from the model
     "session_aborted",  # the run or session was stopped
@@ -73,6 +74,30 @@ Confirmation = Literal[
     "contradicted",  # later evidence says it ran anyway (e.g. its result arrived)
     "failed",  # the enforcement point could not apply it
 ]
+
+# The four decisions people read (2026-11-16, user decision; the shape Microsoft's agent Authorization
+# Fabric uses too): allow, deny, approve, mask. The seven actions and stages below stay as *how* it was
+# done (who approves, what was stopped); the decision is *what* was decided. Alerts are allow: the call
+# ran, it was recorded. Mask is a tool result kept from the model.
+Decision = Literal["allow", "deny", "approve", "mask"]
+DECISION_OF_ACTION: dict[str, Decision] = {
+    "allow": "allow",
+    "alert": "allow",
+    "require_approval": "approve",
+    "security_approval": "approve",
+    "block": "deny",
+    "abort_session": "deny",
+    "quarantine": "deny",
+}
+DECISION_OF_STAGE: dict[str, Decision] = {
+    "detected": "allow",
+    "approval_requested": "approve",
+    "held": "approve",
+    "blocked": "deny",
+    "result_withheld": "mask",
+    "session_aborted": "deny",
+    "quarantined": "deny",
+}
 
 _STAGE_OF = {
     "allow": "detected",
@@ -100,6 +125,9 @@ class Enforcement(StrictModel):
         default="unconfirmed", description="Whether the side effect is known not to have happened"
     )
     evidence: str | None = Field(default=None, description="How the outcome was confirmed or contradicted")
+    decision: Decision | None = Field(
+        default=None, description="allow / deny / approve / mask: what was decided (filled from stage)"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -112,6 +140,8 @@ class Enforcement(StrictModel):
         action = getattr(action, "value", action)
         if d.get("stage") is None:
             d["stage"] = _STAGE_OF.get(str(action), "detected")
+        if d.get("decision") is None:
+            d["decision"] = DECISION_OF_STAGE.get(str(d["stage"]), "allow")
         if d["stage"] == "detected":
             d["confirmation"] = "not_applicable"
         elif d.get("enforced") is False and d.get("confirmation", "unconfirmed") == "unconfirmed":

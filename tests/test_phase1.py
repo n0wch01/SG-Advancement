@@ -1,6 +1,7 @@
-"""CLAUDE.md phase 1 (2026-11-13): approvals are confirmed before anything runs, bound to the exact
-request and re-checked right before release; remote actions are redelivered until acknowledged and
-run once; tool results are inspected whole and withheld when they cannot be inspected.
+"""CLAUDE.md phase 1 (2026-11-13): an approval nobody confirmed never runs; remote actions are redelivered
+until acknowledged and run once; tool results are inspected whole and withheld when they cannot be
+inspected. (The security team's pre-approval hold, which bound an approval to the exact request and
+re-checked it before release, was removed 2026-11-17: a point that cannot ask a person now denies.)
 
 A block counts only when the side effect did not happen: these tests check the fake MCP server
 never received the request, not just what was logged."""
@@ -18,15 +19,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy import update
 
 from conftest import CP_ADMIN
-from sg_advance.detect import Engine, RuleSet
+from sg_advance.detect import Engine, Rule, RuleSet
 from sg_advance.schema import AgentEvent, Enforcement
 from sg_advance.sensor import Sensor, hook
 from sg_advance.sensor.adapters import AdapterContext
 from sg_advance.sensor.adapters.mcp_gateway import McpGatewayAdapter, read_head
 from sg_advance.sensor.plugin_api import CLAUDE_CODE_HOOK, judge_event
-from sg_advance.sensor.security_hold import Holds
 from sg_advance.server import actions as server_actions
-from sg_advance.server.db import RemoteAction, SecurityApproval, utcnow
+from sg_advance.server.db import RemoteAction, utcnow
 from test_mcp_gateway import FakeMcp, call, rpc
 
 SQL = {"command": "psql -c 'DELETE FROM users;'"}  # destructive-sql: require_approval, grade 3-1
@@ -39,54 +39,29 @@ def spooled(sensor: Sensor, kind: str) -> list[dict[str, Any]]:
         return [json.loads(d) for (d,) in rows]
 
 
-def queue(cp: TestClient, **params: str) -> list[dict[str, Any]]:
-    return cp.get("/v1/admin/security-approvals", params=params, headers=CP_ADMIN).json()
-
-
-async def registered(cp: TestClient, holds: Any = None) -> dict[str, Any]:
-    """The hold reached the control plane, and (with ``holds``) the sensor knows it did: a poll in
-    between fetches nothing (see test_security_approval.registered)."""
-    for _ in range(500):
-        rows = await asyncio.to_thread(queue, cp, status="pending")
-        if rows and (holds is None or holds.waiting):
-            return rows[0]
-        await asyncio.sleep(0.01)
-    raise AssertionError("hold never reached the control plane")
-
-
-def decide(cp: TestClient, hold_id: str, decision: str = "approve") -> None:
-    body = {"decision": decision, "by": "lead@corp.test", "reason": "checked"}
-    r = cp.post(f"/v1/admin/security-approvals/{hold_id}/decision", json=body, headers=CP_ADMIN)
-    assert r.status_code == 200, r.text
-
-
 def hook_call(**tool_input: Any) -> dict[str, Any]:
     inp = {"hook_event_name": "PreToolUse", "session_id": "cc-1", "tool_name": "Bash", "tool_use_id": "t1",
            "tool_input": tool_input}  # fmt: skip
     return hook.hook_event(inp, user_id="bob", hostname="pc")  # type: ignore[return-value]
 
 
-# ── 2·3: approvals go where they can be confirmed, bound and re-checked ─────
+# ── 2·3: an approval goes to the person; where nobody can be asked, it is a deny ─────
 
 
 def test_grade_3_1_asks_the_person_first(enrolled: Sensor, monkeypatch) -> None:
     """Decision 2026-11-14: the person approves first, grade 3-1 included; the security team reviews the
-    approval afterwards. Only a point that cannot ask anyone, or a rule tagged approval:security, holds."""
-    with_holds = AdapterContext(enrolled, "bob", "pc", holds=Holds(wait_seconds=30))
-    assert judge_event(with_holds, hook_call(**SQL), CLAUDE_CODE_HOOK)["decision"] == "approve"
+    approval afterwards. Decision 2026-11-17: no security pre-approval hold; a rule that still asks for one
+    (an old cached policy) is read as a deny, never as something looser."""
+    ctx = AdapterContext(enrolled, "bob", "pc")
+    assert judge_event(ctx, hook_call(**SQL), CLAUDE_CODE_HOOK)["decision"] == "approve"
     asked = next(f for f in spooled(enrolled, "finding") if f["rule_id"] == "destructive-sql")
-    assert asked["response"]["stage"] == "approval_requested"
-    # A security team that wants a rule held before it runs tags it approval:security.
-    rules = enrolled.engine.ruleset  # type: ignore[union-attr]
-    hold = {"tags": ("grade:3-1", "approval:security")}
-    tagged = [r.model_copy(update=hold) if r.id == "destructive-sql" else r for r in rules.rules]
-    monkeypatch.setattr(enrolled, "engine", Engine(RuleSet(tagged), enrolled.trusted))
-    out = judge_event(with_holds, hook_call(command="psql -c 'DROP TABLE users;'"), CLAUDE_CODE_HOOK)
-    assert out["decision"] == "hold"
-    assert (
-        judge_event(AdapterContext(enrolled, "bob", "pc"), hook_call(**SQL), CLAUDE_CODE_HOOK)["decision"]
-        == "block"
-    )
+    assert asked["response"]["stage"] == "approval_requested" and asked["response"]["decision"] == "approve"
+    docs = [r.model_dump(mode="json") for r in enrolled.engine.ruleset.rules]  # type: ignore[union-attr]
+    legacy = [d | {"response": "security_approval"} if d["id"] == "destructive-sql" else d for d in docs]
+    rules = RuleSet([Rule.model_validate(d) for d in legacy])
+    monkeypatch.setattr(enrolled, "engine", Engine(rules, enrolled.trusted))
+    out = judge_event(ctx, hook_call(command="psql -c 'DROP TABLE users;'"), CLAUDE_CODE_HOOK)
+    assert out["decision"] == "block"
 
 
 def test_every_enforced_repeat_is_its_own_finding(enrolled: Sensor) -> None:
@@ -119,78 +94,25 @@ def test_a_repeat_nothing_stopped_stays_suppressed(enrolled: Sensor, outcome: di
     assert len([f for f in spooled(enrolled, "finding") if f["rule_id"] == "destructive-sql"]) == 1
 
 
-async def _gateway(enrolled: Sensor, holds: Holds | None):
+async def _gateway(enrolled: Sensor):
     upstream = FakeMcp(sse=False)
     server = await upstream.start()
     gw = McpGatewayAdapter("127.0.0.1:0", {"db": f"http://127.0.0.1:{upstream.port}/mcp"})
-    ctx = AdapterContext(enrolled, "bob", "pc", holds=holds)
+    ctx = AdapterContext(enrolled, "bob", "pc")
     await gw.start(ctx)
     return upstream, server, gw, ctx
 
 
-async def test_gateway_never_forwards_an_unconfirmed_approval(enrolled: Sensor) -> None:
-    upstream, server, gw, _ = await _gateway(enrolled, holds=None)
+async def test_gateway_denies_what_it_cannot_ask_a_person_about(enrolled: Sensor) -> None:
+    """The gateway sits between the agent and the company server and has no person to ask: an approval
+    verdict is a deny there (fail closed), recorded as such, and the server never receives the call."""
+    upstream, server, gw, _ = await _gateway(enrolled)
     try:
         _, out = await rpc(gw.port, "/mcp/db", call(1, "run_sql", **SQL))
         assert out["result"]["isError"] and upstream.seen == []  # the server never received it
-    finally:
-        await gw.close()
-        server.close()
-
-
-async def test_gateway_releases_only_an_approved_matching_request(enrolled: Sensor, cp: TestClient) -> None:
-    upstream, server, gw, ctx = await _gateway(enrolled, holds=Holds(wait_seconds=30))
-    try:
-        task = asyncio.create_task(rpc(gw.port, "/mcp/db", call(1, "run_sql", **SQL)))
-        row = await registered(cp, ctx.holds)
-        assert row["request_digest"] and len(row["request_digest"]) == 64 and upstream.seen == []
-        await asyncio.to_thread(decide, cp, row["id"])
-        assert await ctx.holds.poll(ctx) == 1  # type: ignore[union-attr]
-        _, out = await task
-        assert out["result"]["content"][0]["text"] == "run_sql ok" and len(upstream.seen) == 1
-        assert queue(cp)[0]["outcome"] == "allowed"
-    finally:
-        await gw.close()
-        server.close()
-
-
-async def test_an_approval_for_another_request_is_refused(enrolled: Sensor, cp: TestClient) -> None:
-    upstream, server, gw, ctx = await _gateway(enrolled, holds=Holds(wait_seconds=30))
-    try:
-        task = asyncio.create_task(rpc(gw.port, "/mcp/db", call(1, "run_sql", **SQL)))
-        row = await registered(cp, ctx.holds)
-        with cp.app.state.db._sessions() as db:  # the record now names a different request
-            db.execute(
-                update(SecurityApproval)
-                .where(SecurityApproval.id == row["id"])
-                .values(request_digest="f" * 64)
-            )
-            db.commit()
-        await asyncio.to_thread(decide, cp, row["id"])
-        await ctx.holds.poll(ctx)  # type: ignore[union-attr]
-        _, out = await task
-        assert out["result"]["isError"] and "일치하지 않아" in out["result"]["content"][0]["text"]
-        assert upstream.seen == []
-        assert queue(cp)[0]["outcome"] == "mismatch"
-    finally:
-        await gw.close()
-        server.close()
-
-
-async def test_a_block_that_appears_while_waiting_wins_over_the_approval(
-    enrolled: Sensor, cp: TestClient
-) -> None:
-    upstream, server, gw, ctx = await _gateway(enrolled, holds=Holds(wait_seconds=30))
-    try:
-        task = asyncio.create_task(rpc(gw.port, "/mcp/db", call(1, "run_sql", **SQL)))
-        row = await registered(cp, ctx.holds)
-        enrolled.set_trusted("remote_blocked_users", {"bob"})  # security blocks bob meanwhile
-        await asyncio.to_thread(decide, cp, row["id"])
-        await ctx.holds.poll(ctx)  # type: ignore[union-attr]
-        _, out = await task
-        assert out["result"]["isError"] and "다시 확인" in out["result"]["content"][0]["text"]
-        assert upstream.seen == []
-        assert queue(cp)[0]["outcome"] == "rechecked"
+        assert "승인 대신 거부" in out["result"]["content"][0]["text"]
+        f = next(f for f in spooled(enrolled, "finding") if f["rule_id"] == "destructive-sql")
+        assert f["response"]["decision"] == "deny" and f["response"]["confirmation"] == "confirmed"
     finally:
         await gw.close()
         server.close()
@@ -356,36 +278,3 @@ def test_a_late_result_replaces_the_servers_unacknowledged(cp: TestClient, enrol
     # A result the device itself reported still stands against a later duplicate.
     enrolled.client.report_action(aid, False, "duplicate", "failed")
     assert _row(cp, aid)["applied"] == "applied"
-
-
-async def test_a_gateway_hold_whose_client_left_never_reaches_the_server(
-    enrolled: Sensor, cp: TestClient
-) -> None:
-    """Improvement 2026-11-15: the client (or nginx's read timeout) dropped the connection while the call
-    was held. Before, security's approval still sent the call to the company server with nobody
-    waiting. Now the hold ends cancelled and the server never sees the call (checked on the server)."""
-    upstream, server, gw, ctx = await _gateway(enrolled, holds=Holds(wait_seconds=30))
-    try:
-        r, w = await asyncio.open_connection("127.0.0.1", gw.port)
-        body = json.dumps(call(1, "run_sql", **SQL)).encode()
-        w.write(b"POST /mcp/db HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
-                b"Accept: application/json\r\nUser-Agent: claude-code/2.1\r\n"
-                + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)  # fmt: skip
-        await w.drain()
-        row = await registered(cp, ctx.holds)
-        w.close()  # the client gives up
-        for _ in range(200):
-            if queue(cp)[0]["outcome"]:
-                break
-            await asyncio.sleep(0.01)
-        assert queue(cp)[0]["outcome"] == "cancelled"
-        late = cp.post(f"/v1/admin/security-approvals/{row['id']}/decision",
-                       json={"decision": "approve", "by": "secops@corp.test", "reason": "late"},
-                       headers=CP_ADMIN)  # fmt: skip
-        assert late.status_code == 409  # a hold that ended cannot be approved any more
-        assert await ctx.holds.poll(ctx) == 0  # type: ignore[union-attr]
-        await asyncio.sleep(0.1)
-        assert upstream.seen == []  # the company server never received the call
-    finally:
-        await gw.close()
-        server.close()

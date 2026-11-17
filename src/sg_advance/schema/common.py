@@ -77,6 +77,12 @@ class AgentRef(StrictModel):
     spawn_depth: int | None = Field(default=None, ge=0, description="Delegation hops from the root")
     model: str | None = None
     cwd: str | None = None
+    agent_id: str | None = Field(
+        default=None,
+        description="Which configured agent acts, stable across conversations: Claude Code's main agent is "
+        "'main' and a subagent its definition name; OpenClaw's agent id ('main', 'research'). With the "
+        "person and the device it names one agent (agent identity, 2026-11-16). Filled by the sensor.",
+    )
 
 
 class Source(StrictModel):

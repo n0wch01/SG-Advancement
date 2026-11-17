@@ -20,7 +20,7 @@ AgentEvent ──▶ Engine.process(event) ──▶ Verdict { hits, action, fin
 - **hit와 finding은 다르다.** 룰이 맞으면 매번 hit가 생기고 판정(`action`)에 반영된다.
   `dedup: session`(기본값)이면 같은 룰·세션·키 조합에 대해 첫 번째 hit만 Finding으로 남는다.
   같은 시도를 다섯 번 하면 다섯 번 다 판정한다. `session.end` 이벤트가 오면 해당 세션의 dedup 기록이 초기화된다.
-  - 예외(2026-11-13 결정): 집행 지점이 그 호출을 **실제로 막거나 보류한 경우**(차단, 보안팀 보류, 결과 가림, 세션 중단, 격리)에는
+  - 예외(2026-11-13 결정): 집행 지점이 그 호출을 **실제로 막거나 보류한 경우**(차단, 결과 가림, 세션 중단, 격리)에는
     반복이어도 매번 Finding을 남기고 `labels.sga_repeat=true`를 붙인다. 막은 호출 하나하나가 별도 기록이어야 하기 때문이다.
   - 경보만 내는 룰, 에이전트 자체 확인 창으로 보낸 승인 요청, 감시 모드(실제로 막지 않음)의 반복은 그대로 한 건만 남는다.
   - 엔진은 실제로 막았는지 모른다. 그래서 반복 hit의 Finding 후보를 `Verdict.suppressed`에 두고, 센서가 집행 결과를 보고 고른다.
@@ -29,6 +29,25 @@ AgentEvent ──▶ Engine.process(event) ──▶ Verdict { hits, action, fin
   - `split:<구분자>`: allowlist가 값을 나눠 각각 비교한다(예: `labels.sga_destinations`).
 - **M2에서는 집행하지 않는다.** `Finding.response`에는 `enforced: false`가 기록된다.
   실제 deny나 abort는 센서 어댑터(M5, M6, M8)가 `Verdict.action`을 보고 수행한다.
+
+## 판정 4종과 평가 순서 (2026-11-16)
+
+사람이 읽는 판정은 네 가지다(허용 · 사용자 승인 · 거부 · 가림). 보안팀 사전 승인은 2026-11-17에 없앴다([response.md](response.md#보안팀-승인-큐-2026-11-17-제거)). 룰의 `response`(여섯 가지)는 **어떻게 집행하나**로 남고, 기록(`Finding.response.decision`)과 콘솔은 판정으로 말한다.
+Microsoft의 에이전트 인가 설계(Authorization Fabric)의 ALLOW / DENY / REQUIRE_APPROVAL / MASK와 같은 모양이다.
+
+| 판정 | 룰의 `response`(집행 방식) | 기록된 단계(`stage`) |
+|---|---|---|
+| **허용** | `allow`, `alert`(실행하고 경보) | `detected` |
+| **사용자 승인** | `require_approval`(에이전트 확인 창. 사람에게 물을 수 없는 MCP 게이트웨이에서는 거부) | `approval_requested` |
+| **거부** | `block`(이 호출), `abort_session`(대화 중단), `quarantine`(도구·플러그인 격리) | `blocked`, `session_aborted`, `quarantined` |
+| **가림** | 툴 결과에 high 이상 인젝션 룰(시그니처·분류기) → 입력 PEP | `result_withheld` |
+
+**평가 순서**: 한 호출에 여러 룰이 걸리면 가장 강한 집행 방식이 이긴다(`allow < alert < require_approval < block < abort_session < quarantine`). 그래서 다음이 보장된다(`tests/test_decision_order.py`).
+
+1. **신원과 정책을 확인할 수 없으면 판정 전에 막는다.** 등록되지 않은 장비나 서명이 맞지 않는 정책은 엔진에 닿지 않는다. 판정할 수 없으면 사용자 승인으로 넘기지 않고 막는다(fail closed, [fail-closed.md](fail-closed.md)).
+2. **거부가 승인을 이긴다.** 원격으로 차단된 사람·대화(`in_set`), 공격 진행 신호, 외부 유출 룰이 걸리면, 같은 호출에 승인 룰이 함께 걸려도 거부다. 승인으로 거부를 넘을 수 없다.
+3. **물을 사람이 없으면 승인이 아니라 거부다.** MCP 게이트웨이처럼 사람에게 물을 수 없는 경로에서는 사용자 승인 판정이 거부가 된다. 그 사람 자체가 위험할 때(고위험 사용자의 민감 리소스)도 본인 승인으로 끝내지 않고 거부한다.
+4. **가림은 결과에만 있다.** 호출 판정과 따로, 툴 결과가 모델에 가기 전에 입력 PEP가 정한다. 분류기는 가림을 더할 수만 있고 룰의 판정을 풀지 못한다.
 
 ## 룰 형식
 
@@ -43,7 +62,7 @@ rules:
     title: 민감 파일 접근
     message: ...
     recommended_action: ...
-    response: alert                  # allow | alert | require_approval | security_approval | block | abort_session | quarantine
+    response: alert                  # allow | alert | require_approval | block | abort_session | quarantine
     confidence: 1.0
     tags: [owasp-llm:LLM02, scenario:S2]
     dedup: session                   # session | none
@@ -94,6 +113,7 @@ YAML 인라인 리스트 안에 `[]`가 들어간 경로를 쓸 때는 따옴표
 | `regex` | `fields` 아래 문자열 중 하나에 `pattern`이 있음 | `fields`, `pattern`, `ignore_case` | trace_line_regex, event_payload_regex |
 | `allowlist` | `field` 값이 `allow` glob 목록 어디에도 해당하지 않음. 값이 없으면 무시 | `field`, `allow`, `ignore_case`(기본 true) | tools_effective_diff, whitelist-violation |
 | `in_set` | `fields` 중 한 값이 센서가 관리하는 집합 `set`에 있음. 센서 밖(재생)에서는 집합이 비어 걸리지 않는다 (M11 원격 대응: `remote_blocked_sessions`, `remote_blocked_users`) | `set`, `fields` | (새로 추가) |
+| `number` | `fields` 아래 값 중 하나가 숫자로 읽히고 범위 안에 있음. 문자열 숫자(labels)도 읽음 (2026-11-16) | `fields`, `at_least`, `above`, `at_most`, `below` (하나 이상) | (새로 추가) |
 | `rate` | 한 그룹에서 `window_seconds` 안에 이벤트가 `threshold`개 이상 | `group_by`(기본 device, session, tool) | rate_limit |
 | `repeat` | 한 그룹에서 `same` 값이 같은 이벤트가 `threshold`번 연속 | `group_by`, `same` | loop_detect |
 | `sequence` | 같은 세션에서 `steps`가 순서대로, 모두 `within_seconds` 안에 일어남 | `steps[].when`, `pattern`, `fields`, `name`, `scope`, `distinct_sessions` | event_sequence |

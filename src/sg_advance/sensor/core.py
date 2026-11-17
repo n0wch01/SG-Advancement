@@ -30,6 +30,7 @@ from ..redact import redact_event
 from ..schema import AgentEvent, Enforcement, EventKind
 from . import delegation as delegation_mod
 from . import downloads as downloads_mod
+from . import identity as identity_mod
 from . import judge as judge_mod
 from . import lineage as lineage_mod
 from .client import ControlPlaneClient, ControlPlaneError, Offline, Transport, urllib_transport
@@ -57,6 +58,7 @@ class SyncStatus(StrEnum):
     UNCHANGED = "unchanged"  # 304
     OFFLINE = "offline"  # kept the policy we had
     REFUSED = "refused"  # the server said no (revoked device, bad token or certificate); cache kept
+    SCHEDULED = "scheduled"  # a verified bundle that starts later (effective_from); the current one stays
 
 
 def enroll(
@@ -179,6 +181,7 @@ class Sensor:
         self.client = ControlPlaneClient(creds.server_url, creds.device_token, transport)
         self.spool = Spool(home.spool_path)
         self.policy: PolicyBundle | None = None
+        self.scheduled: PolicyBundle | None = None  # verified, waiting for its effective_from
         self.engine: Engine | None = None
         # Rule → classifier cascade (docs/classifier.md): the candidate rules of the same signed policy, and
         # the judge for what they mark. Only the daemon sets a judge (``sga-sensor run``); without one
@@ -339,7 +342,17 @@ class Sensor:
         if bundle is None:
             self._mark_checked()
             return SyncStatus.UNCHANGED
+        later = bundle.effective_from is not None and now_utc() < bundle.effective_from
+        if later and self.engine is not None:
+            # Staged rollout (2026-11-16): one cut-over time for every device. Verified now (a forged
+            # bundle is refused at once), installed at the next sync after its start time. A sensor with no
+            # policy at all installs it right away: any signed policy is better than none (fail closed).
+            bundle.verify(self._key)
+            self.scheduled = bundle
+            self._mark_checked()
+            return SyncStatus.SCHEDULED
         self._install(bundle)  # raises PolicyVerificationError before touching the cache
+        self.scheduled = None
         write_private(self.home.policy_path, bundle.model_dump_json())
         self._mark_checked()
         return SyncStatus.UPDATED
@@ -368,6 +381,8 @@ class Sensor:
         update: dict[str, object] = {}
         if ep.device_id != self.creds.device_id:
             update["endpoint"] = ep.model_copy(update={"device_id": self.creds.device_id})
+        if event.agent.agent_id is None and (aid := identity_mod.agent_id_of(event)):
+            update["agent"] = event.agent.model_copy(update={"agent_id": aid})  # agent identity (2026-11-16)
         if any(k in event.labels for k in self._OWN_LABELS):  # the sensor's own; never taken from input
             update["labels"] = {k: v for k, v in event.labels.items() if k not in self._OWN_LABELS}
         if event.kind in (EventKind.INVENTORY_SNAPSHOT, EventKind.CONFIG_SNAPSHOT):
@@ -478,22 +493,6 @@ class Sensor:
         event = self.stamp(event)
         verdict = self.engine.process(event)  # detection sees the original (unredacted) event
         return ProcessResult(verdict, event)
-
-    _STATE_LABELS = ("sga_policy_stale", "sga_policy_age_hours", "sga_posture", "sga_posture_reasons")
-    _BLOCKING = frozenset({"block", "abort_session", "quarantine"})
-
-    def recheck(self, event: AgentEvent) -> list[Any]:
-        """The hits that would block this call *now* (latest policy, sets, posture, freshness), without
-        recording anything or touching the live engine's state. Used right before an approved call is
-        released (CLAUDE.md phase 1). Sequence rules start empty here: they were judged when it was held."""
-        if self.engine is None:
-            raise NoPolicy("call start() first")
-        fresh = Engine(self.engine.ruleset, self.trusted)
-        clean = event.model_copy(
-            update={"labels": {k: v for k, v in event.labels.items() if k not in self._STATE_LABELS}}
-        )
-        verdict = fresh.process(self.stamp(clean))
-        return [h for h in verdict.hits if str(h.rule.response.value) in self._BLOCKING]
 
     def record(self, result: ProcessResult, enforcement: Enforcement | None = None) -> None:
         """Step 2: queue the redacted event and its findings, with the enforcement outcome."""

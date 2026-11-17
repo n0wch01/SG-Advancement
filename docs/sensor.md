@@ -242,7 +242,7 @@ OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──
 | 데몬 판정 | 플러그인이 하는 일 | finding의 `response.detail` |
 |---|---|---|
 | `block` 이상 | `{block: true}` — 툴이 실행되지 않는다 | `pre-exec: openclaw plugin blocked the tool call` |
-| `security_approval` (M11) | 데몬이 `hold`로 답하고 플러그인이 `await_hold`로 **보안팀** 결정을 기다림(기본 5분, `securityWaitMs`). 승인이면 실행, 거부·시간 초과·관제 서버 연결 실패면 막음. 실행을 멈추면 `cancel_hold` | `pre-exec: held for security approval in the console` |
+| (2026-11-17 제거) `security_approval` | 예전 정책에 남아 있으면 `block`으로 읽음. 플러그인은 모르는 판정(예전 데몬의 `hold`)을 차단 | `pre-exec: held for security approval in the console` |
 | `require_approval` | `requireApproval` — OpenClaw 승인 창에서 **사용자**가 결정 (한 번 허용 / 거부만, 영구 허용은 막음) | `pre-exec: user approval requested through OpenClaw` |
 | `allow`, `alert` | 아무것도 하지 않음 | (alert면 기록만) |
 
@@ -254,8 +254,8 @@ OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──
 | 데몬이 응답 없음 | `sga-sensor evaluate` 실행 → 서명된 정책 캐시로 판정 (상태 없는 룰만) | `labels.sga_verdict = degraded` |
 | 캐시도 없음 | 읽기 전용 툴(`read`, `memory_search`, `memory_get`, `session_status`)만 통과, 나머지는 사용자 승인 | 기록 없음 (센서가 없으므로) |
 
-`before_tool_call`은 핸들러가 예외를 던지거나 정한 시간(플러그인이 등록 때 `securityWaitMs + 30초`로 정함, 기본 15초)을 넘기면 OpenClaw가 그 호출을 **막는다**(fail-closed).
-캐시된 정책으로 판정하는 경로는 기다릴 데몬이 없어서 `security_approval`을 차단으로 바꾼다. 플러그인은 예외를 밖으로 내지 않고 위 순서로 직접 처리한다.
+`before_tool_call`은 핸들러가 예외를 던지거나 정한 시간(플러그인이 등록 때 데몬 대기 + CLI 대기 + 2초로 정함, 기본 13초)을 넘기면 OpenClaw가 그 호출을 **막는다**(fail-closed).
+플러그인은 예외를 밖으로 내지 않고 위 순서로 직접 처리한다.
 
 **우회 탐지**: 플러그인이 판정한 호출 ID는 데몬에 등록된다. WebSocket 어댑터는 등록된 호출을 다시 판정하지 않고(중복 방지),
 플러그인이 최근 5분 안에 연결된 상태인데 등록되지 않은 호출을 보면 `labels.sga_plugin = missing`을 붙인다.
@@ -565,12 +565,12 @@ sga-sensor run --openclaw          # 데몬이 <home>/sga.sock을 연다 (--sock
 
 ```
 Claude Code ─ PreToolUse 등 hook (JSON stdin) ─▶ sga-hook ─▶ 로컬 판정 API (유닉스 소켓 / Windows는 루프백 TCP+토큰)
-            ◀─ permissionDecision: deny | ask | (없음)      ◀─ 데몬 판정: block | approve | hold | allow
+            ◀─ permissionDecision: deny | ask | (없음)      ◀─ 데몬 판정: block | approve | allow
 ```
 
 | hook | 이벤트 | 응답 |
 |---|---|---|
-| `PreToolUse` | `tool.call` (MCP 툴 `mcp__<서버>__<툴>`은 provider mcp) | block → `deny`(사유 표시), require_approval → `ask`(Claude Code 확인 창), security_approval → 보안팀 결정까지 대기 후 allow/deny, allow → **아무 말 안 함**(Claude Code 자체 권한 규칙이 그대로 결정: hook이 권한을 넓히지 않음) |
+| `PreToolUse` | `tool.call` (MCP 툴 `mcp__<서버>__<툴>`은 provider mcp) | block → `deny`(사유 표시), require_approval → `ask`(Claude Code 확인 창), allow → **아무 말 안 함**(Claude Code 자체 권한 규칙이 그대로 결정: hook이 권한을 넓히지 않음) |
 | `PostToolUse` / `PostToolUseFailure` | `tool.result` | 기록. `ask`로 넘긴 호출의 결과가 오면 사람이 승인한 것: `approval.resolved`(`labels.sga_approval_inferred`) |
 | `UserPromptSubmit` | `prompt.user` | 차단 판정이면 프롬프트를 멈춤(exit 2) |
 | `SessionStart` / `SessionEnd` | `session.start`(권한 모드, 사람 유무 `interactive`, 실행한 프로그램 `parent_process`) / `session.end` | 기록. 우회 모드로 시작하면 `agent-safety-bypass`, 사람 없이 우회 모드면 `agent-unattended-safety-bypass` |
@@ -642,7 +642,7 @@ claude mcp add --transport http crm http://127.0.0.1:18790/mcp/crm      # 에이
 |---|---|
 | `/mcp/<이름>` | 등록된 서버만 있다. 모르는 이름은 404 |
 | `tools/list` 응답 | `inventory.snapshot`(툴 설명, 서버 URL)으로 판정. 격리급 룰(툴 설명 변조 등)에 걸린 툴은 **목록에서 숨기고** 호출도 거부(`quarantine` 집행 기록) |
-| `tools/call` 요청 | 서버에 보내기 **전에** `tool.call`로 판정. 차단이면 모델이 읽을 수 있는 MCP 툴 오류(`isError`)로 답하고 서버는 모른다. 보안팀 승인은 결정까지 대기. 승인 요청은 통과(게이트웨이는 묻지 못함: 에이전트 확인 창에 맡김) |
+| `tools/call` 요청 | 서버에 보내기 **전에** `tool.call`로 판정. 차단이면 모델이 읽을 수 있는 MCP 툴 오류(`isError`)로 답하고 서버는 모른다. 승인 요청은 **거부**(게이트웨이는 사람에게 묻지 못함, 2026-11-17) |
 | `tools/call` 응답 | `tool.result`로 기록·판정(결과 속 인젝션, 비밀값). 같은 대화의 다음 호출은 시퀀스 룰이 본다 |
 
 - JSON과 SSE(청크) 응답을 모두 중계한다. SSE는 이벤트 단위로 그대로 흘려보내면서 검사한다.

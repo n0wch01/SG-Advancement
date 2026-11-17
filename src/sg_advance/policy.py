@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -34,11 +35,23 @@ class PolicyVerificationError(ValueError):
     pass
 
 
-def _digest(rules: list[dict[str, Any]], manifests: list[dict[str, Any]] | None = None) -> str:
-    """Rules only (as before) when there are no manifests, so older bundles keep their version."""
+def _digest(
+    rules: list[dict[str, Any]],
+    manifests: list[dict[str, Any]] | None = None,
+    effective_from: str | None = None,
+) -> str:
+    """Rules only (as before) when there are no manifests, so older bundles keep their version. A start
+    time (staged rollout, 2026-11-16) is part of what is signed: nobody on the way can move it."""
     doc: Any = {"manifests": manifests, "rules": rules} if manifests else rules
+    if effective_from is not None:
+        doc = {"effective_from": effective_from, "policy": doc}
     canonical = json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _iso(t: datetime | None) -> str | None:
+    """One spelling of the start time for the digest, whatever zone it was written in."""
+    return None if t is None else t.astimezone(UTC).isoformat()
 
 
 # ── keys ────────────────────────────────────────────────────────────────────
@@ -91,22 +104,36 @@ class PolicyBundle(BaseModel):
     manifests: tuple[dict[str, Any], ...] = Field(
         default=(), description="Known-good package digests (integrity.Manifest), covered by version"
     )
+    effective_from: datetime | None = Field(
+        default=None,
+        description="Sensors install this bundle only from this time on and keep the one they have until "
+        "then (one cut-over time for every device). Covered by version, so signed.",
+    )
     key_id: str | None = Field(default=None, description="Fingerprint of the signing key")
     signature: str | None = Field(default=None, description="base64 Ed25519 signature over version")
 
     @classmethod
-    def from_ruleset(cls, ruleset: RuleSet, manifests: list[dict[str, Any]] | None = None) -> PolicyBundle:
+    def from_ruleset(
+        cls,
+        ruleset: RuleSet,
+        manifests: list[dict[str, Any]] | None = None,
+        effective_from: datetime | None = None,
+    ) -> PolicyBundle:
         docs = [r.model_dump(mode="json") for r in ruleset.rules]
         mans = list(manifests or [])
-        return cls(version=_digest(docs, mans), rules=tuple(docs), manifests=tuple(mans))
+        version = _digest(docs, mans, _iso(effective_from))
+        return cls(version=version, rules=tuple(docs), manifests=tuple(mans), effective_from=effective_from)
 
     @classmethod
     def from_docs(
-        cls, docs: list[dict[str, Any]], manifests: list[dict[str, Any]] | None = None
+        cls,
+        docs: list[dict[str, Any]],
+        manifests: list[dict[str, Any]] | None = None,
+        effective_from: datetime | None = None,
     ) -> PolicyBundle:
         """Rule documents after policy layers (M9); validated so a bad override can't ship."""
         rules = [Rule.model_validate(d) for d in docs]
-        return cls.from_ruleset(RuleSet(rules, {r.id: "policy" for r in rules}), manifests)
+        return cls.from_ruleset(RuleSet(rules, {r.id: "policy" for r in rules}), manifests, effective_from)
 
     @classmethod
     def load(cls, rules_dir: Path, manifests: list[dict[str, Any]] | None = None) -> PolicyBundle:
@@ -120,7 +147,7 @@ class PolicyBundle(BaseModel):
 
     def _check_digest(self) -> list[dict[str, Any]]:
         docs = [dict(r) for r in self.rules]
-        if _digest(docs, [dict(m) for m in self.manifests]) != self.version:
+        if _digest(docs, [dict(m) for m in self.manifests], _iso(self.effective_from)) != self.version:
             raise PolicyVerificationError("policy bundle hash mismatch")
         return docs
 

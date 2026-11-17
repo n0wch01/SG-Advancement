@@ -44,7 +44,6 @@ from urllib.parse import urlsplit
 from ...detect import rule_titles
 from ...schema import AgentEvent, Enforcement, ResponseAction, SensorType
 from ..envelope import envelope
-from ..security_hold import peer_gone
 from .base import AdapterContext
 
 log = logging.getLogger(__name__)
@@ -367,16 +366,8 @@ class McpGatewayAdapter:
                 )
                 continue
             verdict = judge_event(ctx, event, MCP_GATEWAY)
-            if verdict.get("decision") == "hold" and ctx.holds is not None:
-                if not self.enforce:  # monitor mode records, never waits
-                    ctx.holds.discard(str(verdict.get("hold_id")))
-                    verdict = {"decision": "allow"}
-                elif client is None:
-                    verdict = await ctx.holds.wait(ctx, str(verdict.get("hold_id")))
-                else:  # the client went away while held: cancelled, never sent upstream
-                    verdict = await ctx.holds.wait_while(ctx, str(verdict.get("hold_id")), peer_gone(client))
-            # Fail closed (2026-11-13): anything but an explicit allow is refused here; an approval that
-            # was not confirmed never reaches the server.
+            # Fail closed (2026-11-13): anything but an explicit allow is refused here. The gateway cannot
+            # ask a person, so an approval verdict is a deny (2026-11-17: no security pre-approval hold).
             if verdict.get("decision") != "allow" and self.enforce:
                 refusals.append(
                     tool_refusal(mid, str(verdict.get("reason") or "SG-Advance: not allowed by policy"))

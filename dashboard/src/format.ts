@@ -16,14 +16,24 @@ export function severityRank(s: Severity): number {
   return SEVERITIES.length - SEVERITIES.indexOf(s); // critical 5 … info 1
 }
 
+// Four decisions people read (2026-11-16, user decision): allow, deny, approve, mask. The seven actions
+// stay as how it is done, shown after the decision: who approves, what is stopped.
+export const VERDICT_LABEL: Record<string, string> = { allow: "허용", deny: "거부", approve: "승인", mask: "가림" };
+const DECISION_OF_STAGE: Record<string, string> = {
+  detected: "allow", approval_requested: "approve", held: "approve", blocked: "deny",
+  result_withheld: "mask", session_aborted: "deny", quarantined: "deny",
+};
+const HOW_OF_STAGE: Record<string, string> = {
+  approval_requested: "사용자", held: "보안팀", session_aborted: "대화 중단", quarantined: "격리",
+};
+
 export const ACTION_LABEL: Record<string, string> = {
   allow: "허용",
-  alert: "알림",
-  require_approval: "승인 요청",
-  security_approval: "보안팀 승인",
-  block: "차단",
-  abort_session: "실행 중단",
-  quarantine: "격리",
+  alert: "허용 · 경보",
+  require_approval: "승인 · 사용자",
+  block: "거부",
+  abort_session: "거부 · 대화 중단",
+  quarantine: "거부 · 격리",
 };
 
 export const STAGE_LABEL: Record<string, string> = {
@@ -46,17 +56,23 @@ export const CONFIRMATION_LABEL: Record<string, string> = {
 // Decision stage and whether it was really applied are shown separately (CLAUDE.md, 2026-11-13).
 // Records from before the outcome model have no stage: shown the old way.
 export function responseText(
-  r: { action: string; enforced: boolean; stage?: string | null; confirmation?: string | null } | null | undefined,
+  r: { action: string; enforced: boolean; stage?: string | null; confirmation?: string | null; decision?: string | null } | null | undefined,
 ): string {
-  if (!r) return "알림";
+  if (!r) return ACTION_LABEL.alert;
   if (r.stage) {
-    const stage = STAGE_LABEL[r.stage] ?? r.stage;
+    const decision = VERDICT_LABEL[r.decision ?? DECISION_OF_STAGE[r.stage] ?? ""] ?? r.stage;
+    const how = r.stage === "detected" ? (r.action === "alert" ? "경보" : undefined) : HOW_OF_STAGE[r.stage];
     const conf = r.confirmation ? CONFIRMATION_LABEL[r.confirmation] : undefined;
-    return conf ? `${stage} · ${conf}` : stage;
+    return [decision, how, conf].filter(Boolean).join(" · ");
   }
   const label = ACTION_LABEL[r.action] ?? r.action;
   if (r.action === "alert" || r.action === "allow") return label;
   return r.enforced ? `${label} (집행됨)` : `${label} (집행 안 됨)`;
+}
+
+/** The agent as people name it: product and configured agent ("claude_code · fixer"). */
+export function agentName(a: { type: string; agent_id?: string | null }): string {
+  return a.agent_id ? `${a.type} · ${a.agent_id}` : a.type;
 }
 
 export function clip(text: string, max = 120): string {
@@ -167,8 +183,7 @@ export type Route =
   | { page: "inventory" }
   | { page: "timeline"; query: Record<string, string> }
   | { page: "policy"; query: Record<string, string> }
-  | { page: "actions" }
-  | { page: "security" };
+  | { page: "actions" };
 
 export function parseHash(hash: string): Route {
   const [path, qs = ""] = hash.replace(/^#/, "").split("?", 2);
@@ -179,7 +194,6 @@ export function parseHash(hash: string): Route {
   if (parts[0] === "findings") return { page: "findings", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "inventory") return { page: "inventory" };
   if (parts[0] === "actions") return { page: "actions" };
-  if (parts[0] === "security") return { page: "security" };
   if (parts[0] === "policy") return { page: "policy", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "timeline") return { page: "timeline", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "approvals") return { page: "approvals", query: Object.fromEntries(new URLSearchParams(qs)) };
@@ -348,7 +362,8 @@ export function sessionTree<T extends { session_id: string; parent_session_id: s
   return out;
 }
 
-export const RESPONSES = ["allow", "alert", "require_approval", "security_approval", "block", "abort_session", "quarantine"];
+// The security pre-approval hold was removed 2026-11-17: not offered as a response any more.
+export const RESPONSES = ["allow", "alert", "require_approval", "block", "abort_session", "quarantine"];
 
 /** Responses a scope may pick: anything for common, the current one or stricter for a group. */
 export function responseChoices(scope: string, current: string): string[] {
@@ -416,28 +431,6 @@ export function campaignPeople(members: Finding[]): CampaignPerson[] {
     by.set(user, p);
   }
   return [...by.values()];
-}
-
-// Security approval queue (M11): a held tool call waits for security; nobody decides in time → denied.
-export const SECURITY_STATUS_LABEL: Record<string, string> = {
-  pending: "결정 대기",
-  approved: "승인",
-  denied: "거부",
-  expired: "시간 초과",
-};
-
-export const SECURITY_OUTCOME_LABEL: Record<string, string> = {
-  allowed: "실행됨",
-  denied: "막힘(거부)",
-  timeout: "막힘(시간 초과)",
-  cancelled: "취소됨(실행 중단)",
-  unreachable: "막힘(관제 서버 연결 실패)",
-};
-
-/** Time left to decide, as "4:59"; "0:00" once it is over. */
-export function remainingText(expiresAt: string, now: Date = new Date()): string {
-  const left = Math.max(0, Math.floor((new Date(expiresAt).getTime() - now.getTime()) / 1000));
-  return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
 }
 
 // Phase 2 (docs/lineage.md): a transfer block read as one flow — the read the data came from, the

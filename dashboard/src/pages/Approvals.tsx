@@ -299,7 +299,6 @@ function FatiguePanel({ api, range }: { api: Api; range: string }) {
         승인 요청이 너무 잦으면 내용을 읽지 않고 누르게 됩니다. 5초 안에 승인한 비율이 높거나 거의 늘 승인되는 반복 요청은 룰을 조정할 후보입니다(조정은 직접 결정).
       </p>
       <ChannelTiles title="사용자 승인 (에이전트 확인 창)" s={m.user} />
-      <ChannelTiles title="보안팀 승인 (콘솔)" s={m.security} />
       {candidates.length > 0 && (
         <div className="table-wrap"><table className="small">
           <thead>

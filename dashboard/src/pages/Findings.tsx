@@ -5,7 +5,7 @@ import { RefreshStatus } from "../components/RefreshStatus";
 import { ResponseBadge } from "../components/ResponseBadge";
 import { SeverityBadge } from "../components/Severity";
 import { Empty, ErrorBox, Loading } from "../components/States";
-import { QUEUES, SEVERITIES, SEVERITY_LABEL, TIME_RANGES, clip, eventSummary, findingFilters, findingHref, findingQueue, findingsHref, formatTime, judgeText, rangeQuery, relativeTime, sinceFor, timeRange } from "../format";
+import { QUEUES, agentName, SEVERITIES, SEVERITY_LABEL, TIME_RANGES, clip, eventSummary, findingFilters, findingHref, findingQueue, findingsHref, formatTime, judgeText, rangeQuery, relativeTime, sinceFor, timeRange } from "../format";
 import type { FindingFeedCache } from "../findingFeed";
 import { REFRESH_MS, useAsync } from "../useAsync";
 import { useFindingFeed } from "../useFindingFeed";
@@ -79,7 +79,7 @@ export function Findings({ api, query, cache }: { api: Api; query: Record<string
                   </td>
                   <td className="small">
                     {f.endpoint.device_id}
-                    <div className="muted">{f.agent.type}</div>
+                    <div className="muted">{agentName(f.agent)}</div>
                   </td>
                   <td className="small"><ResponseBadge response={f.response} /><JudgeChip labels={f.labels} /></td>
                 </tr>

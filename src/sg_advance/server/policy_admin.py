@@ -13,11 +13,12 @@ Its id is the policy revision. Reads work with the dashboard token; writes need 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -46,19 +47,68 @@ def _overrides(db: Session, scope: str) -> dict[str, Override]:
     }
 
 
-def base_docs(app: FastAPI) -> list[dict[str, Any]]:
+def read_base_docs(app: FastAPI) -> list[dict[str, Any]]:
     return [r.model_dump(mode="json") for r in RuleSet.load(app.state.settings.rules_dir).rules]
+
+
+def base_docs(app: FastAPI) -> list[dict[str, Any]]:
+    """The reviewed rules the fleet runs. Read from ``rules/`` at start and on an explicit reload or promote
+    only (2026-11-16): an override or manifest change rebuilds from this snapshot, so a rules/ file edited
+    on disk never reaches every device behind a staged rollout's back."""
+    docs = getattr(app.state, "base_docs", None)
+    if docs is None:
+        docs = app.state.base_docs = read_base_docs(app)
+    return docs
 
 
 def build_common(app: FastAPI, db: Session, manifests: list[dict[str, Any]]) -> PolicyBundle:
     docs = apply_common(base_docs(app), _overrides(db, COMMON))
     app.state.common_docs = docs
     app.state.group_policies = {}
-    return PolicyBundle.from_docs(docs, manifests).signed(app.state.signing_key)
+    staged: Staged | None = getattr(app.state, "staged", None)
+    if staged is not None:
+        staged.bundles.clear()  # overrides or manifests changed: canaries get them too
+    effective_from = getattr(app.state, "effective_from", None)
+    return PolicyBundle.from_docs(docs, manifests, effective_from).signed(app.state.signing_key)
 
 
-def policy_for(app: FastAPI, group: str | None) -> PolicyBundle:
-    """The bundle a device of ``group`` gets (common when None or unknown)."""
+# ── staged rollout (2026-11-16, Microsoft's PolicyPack has version/effectiveFrom/priority) ──────────
+# New rules go to a few named devices first (canaries); everyone else keeps the current policy. Promote
+# makes the staged rules everyone's, optionally from one start time (effective_from: sensors install it
+# then, not when they happen to sync). Discard drops them. Every step is in the policy change log and
+# the audit chain. Kept in memory: a control plane restart discards a staging (canaries fall back to the
+# current policy, never to something unreviewed).
+
+
+@dataclass
+class Staged:
+    base: list[dict[str, Any]]
+    devices: frozenset[str]
+    effective_from: datetime | None
+    version: str
+    bundles: dict[str, PolicyBundle] = field(default_factory=dict)
+
+
+def _staged_bundle(app: FastAPI, staged: Staged, group: str | None) -> PolicyBundle:
+    key = group or COMMON
+    if key not in staged.bundles:
+        for db in app.state.db.session():
+            docs = apply_common(staged.base, _overrides(db, COMMON))
+            if group and db.get(Group, group) is not None:
+                docs = apply_group(docs, _overrides(db, group))
+        manifests = list(app.state.policy.manifests)
+        staged.bundles[key] = PolicyBundle.from_docs(docs, manifests, staged.effective_from).signed(
+            app.state.signing_key
+        )
+    return staged.bundles[key]
+
+
+def policy_for(app: FastAPI, group: str | None, device_id: str | None = None) -> PolicyBundle:
+    """The bundle a device of ``group`` gets (common when None or unknown); a canary of a staged rollout
+    gets the staged rules (with its group's overrides)."""
+    staged: Staged | None = getattr(app.state, "staged", None)
+    if staged is not None and device_id is not None and device_id in staged.devices:
+        return _staged_bundle(app, staged, group)
     common: PolicyBundle = app.state.policy
     if not group:
         return common
@@ -155,6 +205,25 @@ class ChangeOut(_Model):
     before: dict[str, Any] | None
     after: dict[str, Any] | None
     reason: str
+
+
+class StageIn(Who):
+    devices: list[str] = Field(min_length=1, description="Canary device ids that get the new rules first")
+    effective_from: AwareDatetime | None = Field(default=None, description="Canaries install it from then on")
+
+
+class PromoteIn(Who):
+    effective_from: AwareDatetime | None = Field(
+        default=None, description="Every device installs the new policy from this time on (one cut-over)"
+    )
+
+
+class RolloutOut(_Model):
+    current_version: str
+    current_effective_from: datetime | None
+    staged_version: str | None
+    staged_devices: list[str]
+    staged_effective_from: datetime | None
 
 
 class WriteResult(_Model):
@@ -395,3 +464,82 @@ def _version(app: FastAPI, scope: str) -> str:
 
 
 RESPONSE_CHOICES = RESPONSES  # re-exported for the CLI's help text
+
+
+# ── staged rollout routes ───────────────────────────────────────────────────
+
+
+def _rollout(app: FastAPI) -> RolloutOut:
+    staged: Staged | None = getattr(app.state, "staged", None)
+    return RolloutOut(
+        current_version=app.state.policy.version,
+        current_effective_from=app.state.policy.effective_from,
+        staged_version=staged.version if staged else None,
+        staged_devices=sorted(staged.devices) if staged else [],
+        staged_effective_from=staged.effective_from if staged else None,
+    )
+
+
+@router.get("/policy/rollout", response_model=RolloutOut)
+def rollout(request: Request) -> RolloutOut:
+    return _rollout(request.app)
+
+
+@router.post("/policy/stage", response_model=RolloutOut)
+def stage(body: StageIn, request: Request, db: DbSession) -> RolloutOut:
+    """Read ``rules/`` now and give those rules to the named devices only."""
+    _need_admin(request)
+    app = request.app
+    if getattr(app.state, "staged", None) is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "a rollout is already staged: promote or discard it")
+    unknown = [d for d in body.devices if db.get(Device, d) is None]
+    if unknown:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no such device: {', '.join(unknown)}")
+    try:
+        base = read_base_docs(app)
+    except ValueError as e:  # RuleLoadError: a broken rules/ never reaches even a canary
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from e
+    devices = frozenset(body.devices)
+    staged = Staged(base=base, devices=devices, effective_from=body.effective_from, version="")
+    staged.version = _staged_bundle(app, staged, None).version
+    app.state.staged = staged
+    after = {"version": staged.version, "devices": sorted(staged.devices),
+             "effective_from": body.effective_from.isoformat() if body.effective_from else None}  # fmt: skip
+    _log(db, request, body, "rollout.stage", target=",".join(sorted(staged.devices))[:200], after=after)
+    db.commit()
+    return _rollout(app)
+
+
+@router.post("/policy/promote", response_model=RolloutOut)
+def promote(body: PromoteIn, request: Request, db: DbSession) -> RolloutOut:
+    """The staged rules become everyone's (from ``effective_from`` on, when given)."""
+    _need_admin(request)
+    app = request.app
+    staged: Staged | None = getattr(app.state, "staged", None)
+    if staged is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "nothing is staged")
+    before = {"version": app.state.policy.version}
+    app.state.base_docs = staged.base
+    app.state.effective_from = body.effective_from
+    app.state.staged = None
+    app.state.refresh_policy()
+    after = {"version": app.state.policy.version, "staged_version": staged.version,
+             "effective_from": body.effective_from.isoformat() if body.effective_from else None}  # fmt: skip
+    _log(db, request, body, "rollout.promote", before=before, after=after)
+    db.commit()
+    return _rollout(app)
+
+
+@router.post("/policy/discard", response_model=RolloutOut)
+def discard(body: Who, request: Request, db: DbSession) -> RolloutOut:
+    """Drop the staged rules: canaries go back to the current policy at their next sync."""
+    _need_admin(request)
+    app = request.app
+    staged: Staged | None = getattr(app.state, "staged", None)
+    if staged is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "nothing is staged")
+    app.state.staged = None
+    _log(db, request, body, "rollout.discard", target=",".join(sorted(staged.devices))[:200],
+         before={"version": staged.version})  # fmt: skip
+    db.commit()
+    return _rollout(app)

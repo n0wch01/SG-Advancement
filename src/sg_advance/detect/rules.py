@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from ..schema import ResponseAction, Severity, ThreatCategory
 
@@ -92,6 +92,37 @@ class InSetMatch(_Model):
     fields: tuple[str, ...] = Field(min_length=1)
 
 
+class NumberMatch(_Model):
+    """Fires when a number under ``fields`` falls inside the bounds (2026-11-16: thresholds belong in the
+    signed policy, not in code). Strings that read as numbers count (labels are strings, e.g.
+    ``labels.sga_judge_score: "0.970"``); anything else under the field is ignored. At least one bound."""
+
+    type: Literal["number"]
+    fields: tuple[str, ...] = Field(min_length=1)
+    at_least: float | None = None
+    above: float | None = None
+    at_most: float | None = None
+    below: float | None = None
+
+    @model_validator(mode="after")
+    def _one_bound(self) -> NumberMatch:
+        if all(b is None for b in (self.at_least, self.above, self.at_most, self.below)):
+            raise ValueError("number match needs at least one of at_least, above, at_most, below")
+        return self
+
+    def holds(self, x: float) -> bool:
+        return (
+            (self.at_least is None or x >= self.at_least)
+            and (self.above is None or x > self.above)
+            and (self.at_most is None or x <= self.at_most)
+            and (self.below is None or x < self.below)
+        )
+
+    def bounds(self) -> str:
+        parts = [(self.at_least, "≥"), (self.above, ">"), (self.at_most, "≤"), (self.below, "<")]
+        return " and ".join(f"{op} {v:g}" for v, op in parts if v is not None)
+
+
 class RateMatch(_Model):
     """Fires once ``threshold`` matching events occur within ``window_seconds`` for one group."""
 
@@ -137,7 +168,7 @@ class SequenceMatch(_Model):
 
 
 Match = Annotated[
-    RegexMatch | AllowlistMatch | InSetMatch | RateMatch | RepeatMatch | SequenceMatch,
+    RegexMatch | AllowlistMatch | InSetMatch | NumberMatch | RateMatch | RepeatMatch | SequenceMatch,
     Field(discriminator="type"),
 ]
 
@@ -171,6 +202,14 @@ class Rule(_Model):
     @classmethod
     def _coerce_when(cls, v: object) -> object:
         return _coerce_condition(v)
+
+    @field_validator("response", mode="before")
+    @classmethod
+    def _no_security_hold(cls, v: object) -> object:
+        """The security team's pre-approval hold was removed (2026-11-17). A rule that still asks for it
+        (an old cached policy, an old rules file) is a deny: stricter, never looser (fail closed)."""
+        legacy = v in ("security_approval", ResponseAction.SECURITY_APPROVAL)
+        return ResponseAction.BLOCK.value if legacy else v
 
 
 class RuleFile(_Model):

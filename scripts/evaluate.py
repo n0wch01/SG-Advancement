@@ -338,7 +338,7 @@ async def run_mcp(sensor: Sensor, case: dict[str, Any]) -> Outcome:
             up.tools.append({"name": name, "description": f"{name} tool", "inputSchema": {}})
     started = [await u.start() for u in servers.values()]
     gw = McpGatewayAdapter("127.0.0.1:0", {n: f"http://127.0.0.1:{u.port}/mcp" for n, u in servers.items()})
-    await gw.start(AdapterContext(sensor, "eval-user", "eval-pc"))  # no security hold to wait with
+    await gw.start(AdapterContext(sensor, "eval-user", "eval-pc"))  # approvals are denied (nobody to ask)
     target = _judged_index(steps)
     ms: list[float] = []
     try:

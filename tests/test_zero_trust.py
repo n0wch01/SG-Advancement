@@ -116,7 +116,7 @@ def test_server_scores_people_and_tells_each_device_only_its_own(enrolled: Senso
     assert asyncio.run(refresh_risk(ctx))
     assert enrolled.trusted[ELEVATED_RISK_USERS] == {"mallory"}
     r = enrolled.evaluate(mcp_call("export", "crm", user="mallory"))
-    assert r.verdict.action is ResponseAction.SECURITY_APPROVAL
+    assert r.verdict.action is ResponseAction.BLOCK  # 2026-11-17: deny (no security pre-approval hold)
     bob = enrolled.evaluate(mcp_call("export", "crm", user="bob"))
     assert "sensitive-resource-by-elevated-risk-user" not in bob.verdict.rule_ids
 

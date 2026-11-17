@@ -6,9 +6,8 @@ input to an ``AgentEvent`` dict and asks the sensor daemon over the local API (u
 loopback TCP endpoint on Windows), the same API the OpenClaw plugin uses. Answers:
 
 - ``tool.call`` (PreToolUse): block → ``permissionDecision: deny``; require_approval → ``ask``
-  (Claude Code's own permission prompt); security_approval → wait for security, then allow or
-  deny; allow → no output, so Claude Code's normal permission rules still apply (a hook never
-  widens what the person allowed).
+  (Claude Code's own permission prompt); allow → no output, so Claude Code's normal permission rules
+  still apply (a hook never widens what the person allowed).
 - ``prompt.user`` (UserPromptSubmit): a blocking verdict stops the prompt (exit 2).
 - everything else: recorded, never blocks.
 
@@ -289,10 +288,8 @@ def degraded(home: Path, event: dict[str, Any]) -> dict[str, Any]:
 
 
 def degraded_response(verdict: Any) -> tuple[dict[str, Any], Any]:
-    """The answer from the cached policy: the same channels as the daemon (improvement 2026-11-15).
-    A call for security (team response or ``approval:security``) is blocked, since no daemon is there
-    to hold it; before, the tag was skipped and the person alone could approve it. A prompt with a
-    blocking verdict is blocked, as ``judge_event`` does."""
+    """The answer from the cached policy: the same channels as the daemon (improvement 2026-11-15). A
+    prompt with a blocking verdict is blocked, as ``judge_event`` does."""
     from ..detect import rule_titles
     from .plugin_api import (
         _BLOCKING,
@@ -347,22 +344,6 @@ def judge(home: Path, event: dict[str, Any]) -> dict[str, Any]:
     try:
         r = ask(home, {"op": "event", "event": event})
         if r.get("ok"):
-            if r.get("decision") == "hold":
-                wait = float(r.get("wait_ms") or 300_000) / 1000 + 15
-                try:
-                    final = ask(home, {"op": "await_hold", "hold_id": r.get("hold_id")}, timeout=wait)
-                except (OSError, ValueError) as e:
-                    final = {"error": str(e)}
-                # Fail closed (review 2026-11-15): run only on an explicit answer from the hold. An
-                # empty reply (the daemon went away mid-wait), ok:false or no decision is a block.
-                if final.get("ok") and final.get("decision") in ("allow", "block"):
-                    return final
-                why = final.get("error") or "no decision"
-                return {
-                    "ok": True,
-                    "decision": "block",
-                    "reason": f"SG-Advance: 보안팀 승인 대기 중 센서 응답을 받지 못해 차단 ({why})",
-                }
             return r
     except (OSError, ValueError, KeyError):
         pass

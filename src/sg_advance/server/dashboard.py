@@ -185,7 +185,9 @@ def summary(
             total=len(devices),
             active=sum(1 for d in devices if d.last_seen and _aware(d.last_seen) >= active_after),
             policy_current=sum(
-                1 for d in devices if d.policy_version == policy_for(request.app, d.group_name).version
+                1
+                for d in devices
+                if d.policy_version == policy_for(request.app, d.group_name, d.device_id).version
             ),
         ),
         recent=list(latest),
@@ -328,7 +330,7 @@ def inventory(request: Request, db: DbSession) -> list[DeviceInventory]:
             sensor_version=d.sensor_version,
             enrolled_at=d.enrolled_at,
             last_seen=d.last_seen,
-            policy_current=d.policy_version == policy_for(request.app, d.group_name).version,
+            policy_current=d.policy_version == policy_for(request.app, d.group_name, d.device_id).version,
             installs=snaps(d.device_id, "install.snapshot"),
             agents=snaps(d.device_id, "inventory.snapshot"),
             configs=snaps(d.device_id, "config.snapshot"),

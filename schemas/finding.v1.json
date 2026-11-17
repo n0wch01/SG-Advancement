@@ -101,6 +101,19 @@
           ],
           "default": null,
           "title": "Cwd"
+        },
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which configured agent acts, stable across conversations: Claude Code's main agent is 'main' and a subagent its definition name; OpenClaw's agent id ('main', 'research'). With the person and the device it names one agent (agent identity, 2026-11-16). Filled by the sensor.",
+          "title": "Agent Id"
         }
       },
       "required": [
@@ -259,6 +272,25 @@
           "default": null,
           "description": "How the outcome was confirmed or contradicted",
           "title": "Evidence"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "enum": [
+                "allow",
+                "deny",
+                "approve",
+                "mask"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "allow / deny / approve / mask: what was decided (filled from stage)",
+          "title": "Decision"
         }
       },
       "required": [

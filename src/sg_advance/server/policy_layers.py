@@ -21,7 +21,8 @@ from typing import Any
 from ..schema import ResponseAction
 
 COMMON = "common"
-RESPONSES = [a.value for a in ResponseAction]  # least to most disruptive
+# Least to most disruptive. The security pre-approval hold was removed (2026-11-17): no override asks for it.
+RESPONSES = [a.value for a in ResponseAction if a is not ResponseAction.SECURITY_APPROVAL]
 
 
 def response_rank(value: str) -> int:

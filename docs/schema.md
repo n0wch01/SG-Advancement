@@ -11,7 +11,8 @@ AgentEvent
 ├ endpoint   { device_id, hostname, os, ip }          ← 어디서
 ├ principal  { user_id, display_name, groups }        ← 누구를 대신해
 ├ agent      { type, session_id, run_id, model, cwd,  ← 어떤 에이전트가
-│              parent_session_id, root_session_id, spawn_depth }  ← 하위 에이전트면 누가 위임했나
+│              parent_session_id, root_session_id, spawn_depth,  ← 하위 에이전트면 누가 위임했나
+│              agent_id }                              ← 어느 설정된 에이전트인가 (2026-11-16)
 ├ source     { sensor, sensor_version, seq }          ← 어떻게 관측했나
 ├ payload    (kind로 구분되는 union)
 ├ labels     { scenario: "S1", ... }
@@ -38,6 +39,22 @@ AgentEvent
 | `install.snapshot` | 장비에서 찾은 에이전트 설치 하나 (관리 여부 포함, 처음 볼 때·바뀔 때·사라질 때) | product, instance, present, changed, version, install_path, install_source, config_path, configured, services, running, bind, bind_scope(`loopback\|network`), guard_plugin, watched, managed, unmanaged_reasons |
 
 `provider.kind`는 툴의 출처를 나타낸다: `builtin | plugin | mcp | function | unknown`.
+
+### 에이전트 신원 `agent.agent_id` (2026-11-16)
+
+사람(`principal`)과 장비(`endpoint`)에 더해 **어느 에이전트인가**를 대화와 상관없이 고정된 이름으로 남긴다.
+같은 사람의 Claude Code 본체와 하위 에이전트 "fixer", OpenClaw의 `main`과 `research`가 서로 다른 행위자로 기록된다.
+센서가 직접 본 것으로 정하고(`sensor/identity.py`), 에이전트가 붙여 보낸 값은 쓰지 않는다.
+
+| 에이전트 | `agent_id` | 근거 |
+|---|---|---|
+| Claude Code 본체 | `main` | hook 입력에 하위 에이전트 정보가 없음 |
+| Claude Code 하위 에이전트 | 정의 이름(예: `fixer`) | hook 입력의 `agent_type` |
+| OpenClaw | 세션 키의 에이전트 id(`agent:<id>:…`), 인벤토리 주체(`inventory:<id>`) | 게이트웨이 세션 키 |
+| 그 밖(MCP 게이트웨이 등) | 없음 | 클라이언트가 어떤 에이전트인지 알 수 없음 |
+
+룰은 `agent.agent_id`를 조건으로 쓸 수 있고, 콘솔은 "claude_code · fixer"처럼 보여 준다.
+한계: Microsoft Entra Agent ID 같은 **암호학적 에이전트 신원은 아니다.** 장비 인증서(mTLS)와 사람은 검증되지만, 에이전트 이름은 그 장비의 센서가 관측한 값이다.
 
 센서가 붙이는 예약 라벨(룰의 `when`에서 `labels.<key>`로 쓴다):
 
@@ -89,7 +106,8 @@ Finding
 ├ detector  local | central
 ├ evidence_event_ids
 ├ endpoint, principal, agent   ← 트리거 이벤트에서 상속 (Finding.from_event)
-├ response  { action, enforced, enforcer, detail }
+├ response  { action, enforced, enforcer, detail, stage, confirmation, evidence,
+│             decision }  ← 허용·거부·승인·가림 (2026-11-16, docs/detection.md)
 └ tags      owasp-llm:LLM01, owasp-agentic:T2, mitre-atlas:AML.T0051 ...
 ```
 
