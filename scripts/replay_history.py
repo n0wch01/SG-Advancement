@@ -50,6 +50,7 @@ from pathlib import Path
 from sg_advance.detect import Engine, RuleSet
 from sg_advance.detect.rules import RuleLoadError
 from sg_advance.schema import AgentEvent, ResponseAction
+from sg_advance.sensor import actions
 
 ROOT = Path(__file__).resolve().parents[1]
 FIELDS = ["rule_id", "severity", "response", "case", "count", "devices", "sessions", "first", "last",
@@ -78,7 +79,16 @@ class Filters:
         )
 
 
-def load(db: Path, filters: Filters) -> tuple[list[AgentEvent], int]:
+def renormalized(ev: AgentEvent) -> AgentEvent:
+    """Replace recorded action labels with those today's sensor would write (sensor/actions.py).
+    Events recorded before 2026-11-17 carry none, so structure-reading rules would only see raw text."""
+    if ev.kind.value != "tool.call":
+        return ev
+    kept = {k: v for k, v in ev.labels.items() if k not in actions.LABELS}
+    return ev.model_copy(update={"labels": kept | actions.labels_for(ev)})
+
+
+def load(db: Path, filters: Filters, normalize: bool = False) -> tuple[list[AgentEvent], int]:
     """Recorded events in time order, and how many rows could not be read as a current AgentEvent."""
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)  # never write to the evidence
     try:
@@ -94,7 +104,7 @@ def load(db: Path, filters: Filters) -> tuple[list[AgentEvent], int]:
             bad += 1
             continue
         if filters.keep(ev):
-            events.append(ev)
+            events.append(renormalized(ev) if normalize else ev)
     return sorted(events, key=lambda e: e.ts), bad
 
 
@@ -284,6 +294,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--until", type=parse_time, help="before this time")
     ap.add_argument("--review", type=Path, help="CSV of hits to label tp/fp (labels in it are kept)")
     ap.add_argument("--examples", type=int, default=5, help="changed hits to print per rule (default 5)")
+    ap.add_argument(
+        "--normalize", action="store_true",
+        help="recompute the sensor's action labels (sga_act_*) for each recorded call",
+    )
     args = ap.parse_args(argv)
 
     if not args.db.is_file():
@@ -306,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
         if baseline is not None:
             baseline = RuleSet([r for r in baseline.rules if r.id in args.rule], baseline.sources)
 
-    events, bad = load(args.db, filters)
+    events, bad = load(args.db, filters, args.normalize)
     cur = run(current, events)
     base = run(baseline, events) if baseline is not None else None
     labels = read_labels(args.review) if args.review else {}

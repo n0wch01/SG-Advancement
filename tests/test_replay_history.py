@@ -112,5 +112,39 @@ def test_the_database_is_opened_read_only(tmp_path) -> None:
     assert db.read_bytes() == before
 
 
+def test_normalize_replays_old_calls_with_current_action_labels(tmp_path, capsys) -> None:
+    delete = "r''m -rf ./build"
+    db = _db(tmp_path / "sga.db", [
+        ("my-mac", bash(delete)),
+        ("my-mac", bash("echo 'rm -rf ./build'")),
+        ("my-mac", {"kind": "prompt.user", "text": "explain the build"}),
+    ])
+    before = db.read_bytes()
+    review = tmp_path / "review.csv"
+    assert _replay().main([
+        str(db), "--baseline", "none", "--normalize", "--rule", RULE, "--review", str(review),
+    ]) == 0
+    with review.open(encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert [row["case"] for row in rows] == [f"Bash {delete}"]
+    assert "3 events" in capsys.readouterr().out
+    assert db.read_bytes() == before
+
+
+def test_normalize_replaces_old_action_labels_and_preserves_other_metadata(tmp_path) -> None:
+    db = _db(tmp_path / "sga.db", [("my-mac", bash("rm -rf ./build"))])
+    with sqlite3.connect(db) as con:
+        doc = json.loads(con.execute("SELECT doc FROM events").fetchone()[0])
+        doc["labels"] = {"sga_act_parse": "ok", "sga_act_destroy": "", "sga_source": "claude_code"}
+        con.execute("UPDATE events SET doc = ?", (json.dumps(doc),))
+    module = _replay()
+    events, bad = module.load(db, module.Filters(), normalize=True)
+    assert bad == 0 and len(events) == 1
+    assert events[0].labels == {
+        "sga_source": "claude_code", "sga_act_parse": "ok", "sga_act_ops": "delete",
+        "sga_act_destroy": "rm-recursive-force", "sga_act_targets": "./build",
+    }
+
+
 def test_a_missing_database_is_an_error(tmp_path, capsys) -> None:
     assert _replay().main([str(tmp_path / "nope.db")]) == 2
