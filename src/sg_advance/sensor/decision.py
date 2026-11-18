@@ -29,6 +29,7 @@ from ..detect import Verdict, rule_titles
 from ..redact import redact_text
 from ..schema import AgentEvent, Enforcement, EventKind, ResponseAction, SensorType
 from ..schema.events import ApprovalResolution
+from ..schema.labels import DECISION_OWNED
 from .adapters.base import AdapterContext
 from .response import BLOCKED_SESSIONS
 
@@ -278,9 +279,9 @@ def judge_event(
     runs its own prompt, so nothing can check in between."""
     event = AgentEvent.model_validate(doc)
     point = point or hook_point(event)
-    if MISMATCH_LABEL in event.labels:  # only this daemon compares; never taken from the hook's input
+    if DECISION_OWNED & event.labels.keys():  # only this daemon writes them, never the hook's input
         event = event.model_copy(
-            update={"labels": {k: v for k, v in event.labels.items() if k != MISMATCH_LABEL}}
+            update={"labels": {k: v for k, v in event.labels.items() if k not in DECISION_OWNED}}
         )
     result = ctx.evaluate(event)
     kind = result.event.kind

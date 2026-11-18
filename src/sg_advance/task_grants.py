@@ -14,10 +14,12 @@ from .policy import key_id
 
 CONTEXT = b"SG-Advance task grant v1\x00"
 MAX_TOKEN_BYTES = 16384
-SUPPORTED_ACTIONS = frozenset({"source.read", "source.write", "tests.write"})
+# What a task grant can carry (2026-11-18: + PR and CI at the Git gateway). Production deployment stays
+# out: no task grant can carry it, so deploy refs and tags are refused for every agent in this stage.
+SUPPORTED_ACTIONS = frozenset({"source.read", "source.write", "tests.write", "pr.create", "ci.run"})
 AGENT_PROFILES = {
     "reader": frozenset({"source.read"}),
-    "tester": frozenset({"source.read", "tests.write"}),
+    "tester": frozenset({"source.read", "tests.write", "ci.run"}),
     "coder": SUPPORTED_ACTIONS,
 }
 
@@ -56,7 +58,7 @@ class TaskClaims(BaseModel):
     project_id: str = Field(min_length=1, max_length=100)
     environment: Literal["development", "test"]
     agent_profile: Literal["reader", "tester", "coder"]
-    actions: tuple[str, ...] = Field(min_length=1, max_length=3)
+    actions: tuple[str, ...] = Field(min_length=1, max_length=5)
     paths: tuple[str, ...] = Field(min_length=1, max_length=16)
     issued_at: AwareDatetime
     expires_at: AwareDatetime

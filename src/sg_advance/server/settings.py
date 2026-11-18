@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,6 +42,11 @@ class Settings:
     resource_root: Path | None = None  # dedicated server-only workspaces; None disables file resources
     resource_posture_max_age_seconds: int = 300
     resource_required_checks: tuple[str, ...] = ("mcp-gateway",)
+    # CI at the Git gateway (2026-11-18): the command run in a temporary checkout of a pushed branch. Empty
+    # disables CI. It runs code an agent pushed, on this host, with a timeout and a minimal environment
+    # but no sandbox: set it only in an isolated lab, or point it at a real runner.
+    resource_ci_command: tuple[str, ...] = ()
+    resource_ci_timeout_seconds: int = 120
 
     @property
     def ca_path(self) -> Path:
@@ -73,4 +79,6 @@ class Settings:
             resource_required_checks=tuple(
                 filter(None, os.environ.get("SGA_RESOURCE_REQUIRED_CHECKS", "mcp-gateway").split(","))
             ),
+            resource_ci_command=tuple(shlex.split(os.environ.get("SGA_RESOURCE_CI_COMMAND", ""))),
+            resource_ci_timeout_seconds=int(os.environ.get("SGA_RESOURCE_CI_TIMEOUT_SECONDS", "120")),
         )

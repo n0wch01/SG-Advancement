@@ -77,7 +77,7 @@
       "items": {
         "type": "string"
       },
-      "maxItems": 3,
+      "maxItems": 5,
       "minItems": 1,
       "title": "Actions",
       "type": "array"

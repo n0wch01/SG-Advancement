@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from conftest import CP_ADMIN
-from sg_advance.server.db import DevicePosture, EventRow, TaskGrant, utcnow
+from sg_advance.server.db import DevicePosture, EventRow, FindingRow, TaskGrant, utcnow
 from test_rbac import device, person, post, session
 
 
@@ -324,3 +324,26 @@ def test_a_protected_write_keeps_the_files_permission_bits(tmp_path):
     resource_files.write_file(root, "tests/new.txt", "z")
     assert stat.S_IMODE(os.stat(root / "tests" / "new.txt").st_mode) == resource_files.NEW_FILE_MODE
     assert not [p for p in (root / "tests").iterdir() if p.name.startswith(".sga-write-")]
+
+
+def test_the_gateway_remembers_a_sessions_calls(cp, resources):
+    """Per-session detection state (2026-11-18, user decision): before, every call was judged by a fresh
+    engine, so history-based rules never fired at the gateway. A burst of writes in one session now trips
+    the same rate rule the endpoint daemon applies (5 in 60 s → the session is stopped), and the blocked
+    write really does not happen; another session keeps its own count."""
+    r = resources
+    developer = grant(cp, r["dev"], r["dev_session"])
+    results = [
+        call(cp, r["dev_device"], developer, "write_file", f"src/burst_{i}.py", content=f"# {i}\n")
+        for i in range(6)
+    ]
+    blocked = [i for i, res in enumerate(results) if res["isError"]]
+    assert blocked and blocked[0] == 4  # the fifth call in the window
+    assert all((r["root"] / f"src/burst_{i}.py").exists() for i in range(4))
+    assert not any((r["root"] / f"src/burst_{i}.py").exists() for i in blocked)
+    tester = grant(cp, r["qa"], r["qa_session"], ["source.read", "tests.write"], agent_profile="tester")
+    assert not call(cp, r["qa_device"], tester, "write_file", "tests/other.py", content="x\n")["isError"]
+    assert len(cp.app.state.session_engines) >= 2
+    with Session(cp.app.state.db.engine) as db:
+        rules = {e.doc["rule_id"] for e in db.scalars(select(FindingRow))}
+    assert "rate-limit-tool-calls" in rules

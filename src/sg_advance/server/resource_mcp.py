@@ -55,7 +55,30 @@ TOOLS = [
         },
         "annotations": {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
     },
+    {
+        "name": "create_pr",
+        "description": "Record a pull request from a pushed work branch (feature/, fix/, test/) to main",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"branch": {"type": "string"}, "title": {"type": "string"}},
+            "required": ["branch", "title"],
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
+    },
+    {
+        "name": "run_ci",
+        "description": "Run the project's configured CI on a pushed work branch",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"branch": {"type": "string"}},
+            "required": ["branch"],
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
+    },
 ]
+GIT_TOOLS = {"create_pr": "pr.create", "run_ci": "ci.run"}  # tool → the grant action it needs
 
 
 class ReadArgs(BaseModel):
@@ -127,11 +150,11 @@ def record(
             }
         )
     now = utcnow()
-    store_event(db, device, event, now)
+    store_event(db, device, event, now, server_built=True)  # this gateway is the control plane
     for finding in findings:
         if enforcement is not None:
             finding = finding.model_copy(update={"response": enforcement})
-        store_finding(db, device.device_id, finding, now)
+        store_finding(db, device.device_id, finding, now, server_built=True)
     db.commit()
 
 
@@ -142,6 +165,7 @@ def auth_failure(
     token: str,
     code: str,
     payload: dict[str, Any] | None = None,
+    evidence: str = "file I/O was not invoked",
 ) -> None:
     audit_chain.append(
         db,
@@ -195,15 +219,27 @@ def auth_failure(
         enforcer=SensorType.MCP_PROXY,
         stage="blocked",
         confirmation="confirmed",
-        evidence="file I/O was not invoked",
+        evidence=evidence,
     )
     record(db, device, event, [finding], enforcement)
+
+
+def judge_in_session(request: Request, device: Device, session_id: str, event: AgentEvent) -> Any:
+    """The session's own engine (server/gateway_state.py): sequence rules, rate limits and dedup see the
+    session's earlier calls at this gateway, as the endpoint daemon's engine does."""
+    policy = policy_for(request.app, device.group_name, device.device_id)
+    key = request.app.state.signing_key.public_key()
+    return request.app.state.session_engines.process(
+        device.device_id, session_id, policy, lambda: Engine(policy.to_ruleset(key)), event
+    )
 
 
 def call_tool(
     request: Request, db: Session, device: Device, token: str, mid: Any, params: dict[str, Any]
 ) -> dict[str, Any]:
     name = params.get("name")
+    if name in GIT_TOOLS:
+        return call_git_tool(request, db, device, token, mid, str(name), params.get("arguments") or {})
     if name not in {"read_file", "write_file"}:
         return tool_result(mid, "Unsupported protected resource tool", True)
     try:
@@ -228,9 +264,7 @@ def call_tool(
     project = db.get(Project, claims.project_id)
     assert project is not None and project.workspace_root is not None
     event = operation_event(device, claims, payload)
-    policy = policy_for(request.app, device.group_name, device.device_id)
-    engine = Engine(policy.to_ruleset(request.app.state.signing_key.public_key()))
-    verdict = engine.process(event)
+    verdict = judge_in_session(request, device, claims.session_id, event)
     response, enforcement = point_response(verdict, POINT, approval_channel(verdict, POINT))
     if response["decision"] != "allow":
         record(db, device, event, verdict.findings + verdict.enforcing_repeats, enforcement)
@@ -287,7 +321,7 @@ def call_tool(
             "output_bytes": len(text.encode()),
         },
     )
-    result_verdict = engine.process(result_event)
+    result_verdict = judge_in_session(request, device, claims.session_id, result_event)
     hits = input_guard_hits(result_verdict)
     enforcement = None
     if hits:
@@ -315,6 +349,43 @@ def call_tool(
             mid, "Operation may have completed; outcome recording failed. Do not retry automatically.", True
         )
     return tool_result(mid, text, bool(hits))
+
+
+def call_git_tool(
+    request: Request, db: Session, device: Device, token: str, mid: Any, name: str, args: dict[str, Any]
+) -> dict[str, Any]:
+    """PR records and CI runs on the project's repository (server/resource_git.py)."""
+    from . import resource_git
+
+    payload = {
+        "kind": "tool.call",
+        "call_id": uuid4().hex,
+        "tool": name,
+        "provider": {"kind": "mcp", "mcp_server": "protected-repository"},
+        "arguments": {k: str(v)[:200] for k, v in args.items() if k in {"branch", "title"}},
+    }
+    if not isinstance(args, dict) or set(args) - {"branch", "title"}:
+        return tool_result(mid, "Task authorization denied: invalid arguments", True)
+    try:
+        claims = online_claims(request, token, device_id=device.device_id, action=GIT_TOOLS[name])
+    except HTTPException as exc:
+        auth_failure(
+            request, db, device, token, str(exc.detail), payload, evidence="the operation was not run"
+        )
+        return tool_result(mid, str(exc.detail), True)
+    if reason := resource_git.threat_check(request, db, device, claims, payload):
+        return tool_result(mid, reason, True)
+    try:
+        # Right before it runs: the newest state, not the state at the first check.
+        online_claims(request, token, device_id=device.device_id, action=GIT_TOOLS[name])
+        if name == "create_pr":
+            return tool_result(mid, resource_git.create_pr(request, db, device, claims, args))
+        text, passed = resource_git.run_ci(request, db, device, claims, args)
+        return tool_result(mid, text, not passed)
+    except HTTPException as exc:
+        return tool_result(mid, str(exc.detail), True)
+    except GrantError as exc:
+        return tool_result(mid, str(exc), True)
 
 
 def safe_call_tool(

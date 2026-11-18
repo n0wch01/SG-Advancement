@@ -51,7 +51,7 @@ class GrantIn(Model):
     binding_id: str = Field(min_length=1, max_length=64)
     environment: Literal["development", "test"] = "development"
     agent_profile: Literal["reader", "tester", "coder"] = "coder"
-    actions: list[str] = Field(min_length=1, max_length=3)
+    actions: list[str] = Field(min_length=1, max_length=5)
     paths: list[Annotated[str, Field(min_length=1, max_length=256)]] = Field(min_length=1, max_length=16)
     lifetime_seconds: int = Field(default=900, ge=1, le=3600)
     parent_token: str | None = Field(default=None, max_length=16384)

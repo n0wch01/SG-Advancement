@@ -35,6 +35,7 @@ from replay_history import rules_at  # noqa: E402
 from sg_advance.detect import RuleSet  # noqa: E402
 from sg_advance.detect.rules import Rule, RuleLoadError  # noqa: E402
 from sg_advance.schema import ResponseAction  # noqa: E402
+from sg_advance.schema.labels import unknown_in_rules  # noqa: E402
 
 _RANK = {a: i for i, a in enumerate(ResponseAction)}
 _SEVERITY = {s: i for i, s in enumerate(["info", "low", "medium", "high", "critical"])}
@@ -112,7 +113,12 @@ def main(argv: list[str] | None = None) -> int:
     except (RuleLoadError, subprocess.CalledProcessError) as e:
         print(f"rules do not load: {e}", file=sys.stderr)
         return 1
-    steps.append(Step("1 rules load", "PASS", f"{len(current.rules)} rules ({len(current.enabled)} enabled)"))
+    unknown = unknown_in_rules([r.model_dump(mode="json") for r in current.rules])
+    note = f"{len(current.rules)} rules ({len(current.enabled)} enabled)"
+    if unknown:  # schema/labels.py: a label no code writes can never match
+        listed = "; ".join(f"{rid}: {', '.join(sorted(m))}" for rid, m in unknown.items())
+        note += f"; unregistered labels: {listed}"
+    steps.append(Step("1 rules load", "FAIL" if unknown else "PASS", note))
 
     # 2. rule cases
     code, out = run([py, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider",

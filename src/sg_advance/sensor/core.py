@@ -28,6 +28,7 @@ from ..pki import fingerprint, key_pem, make_csr, new_key
 from ..policy import PolicyBundle, PolicyVerificationError, key_id, load_public_key
 from ..redact import redact_event
 from ..schema import AgentEvent, Enforcement, EventKind
+from ..schema import labels as labels_mod
 from . import actions as actions_mod
 from . import delegation as delegation_mod
 from . import downloads as downloads_mod
@@ -422,8 +423,10 @@ class Sensor:
     # Follow-up scenario 1 (docs/external-input.md): where a tool result came from = where its call talked
     # to, read from the call's own arguments (URL host, MCP server, search, local). The rules decide
     # what is external. Calls are remembered until their result arrives (bounded).
-    _OWN_LABELS = (*lineage_mod.LABELS, "sga_input_source", downloads_mod.LABEL, *delegation_mod.LABELS,
-                   *judge_mod.LABELS, *actions_mod.LABELS)  # fmt: skip
+    # Every label the sensor computes (schema/labels.py, 2026-11-18): dropped from input, then recomputed.
+    # Before, this list was hand-joined from the modules and left out posture, policy age and the
+    # contradiction labels (a forged "contradicted" result made a false finding).
+    _OWN_LABELS = tuple(sorted(labels_mod.SENSOR_OWNED))
 
     def _judge(self, result: AgentEvent) -> dict[str, str]:
         """First stage: the candidate rules (with the source label already on ``result``). A marked

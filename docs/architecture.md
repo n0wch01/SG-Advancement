@@ -24,6 +24,7 @@
 | Gemini CLI | - | 미구현(선택 과제 X1) | - | 설치·MCP 설정은 섀도 AI 스캔으로 찾는다(`ai-agent-outside-control`, `mcp-server-bypasses-gateway`) |
 | Codex CLI | `codex_cli_hook` (`sga-codex-hook`, 사용자 설정의 `hooks.json`) | **사전**(PreToolUse에서 deny: 셸, `apply_patch`, MCP). Codex `/hooks`에서 사용자가 신뢰해야 동작 | Codex는 사람의 답을 hook에 알려 주지 않아 승인 판정이면 **거부**(2026-11-17 사용자 결정) | 실제 Codex 0.167.0 확인, [codex-cli.md](codex-cli.md) |
 | LangGraph | - | 미구현(M10 미룸) | - | 시나리오 S3(denial of wallet)는 이벤트 재생으로만 보인다 |
+| Git (모든 에이전트) | `sga-sensor run --git-proxy` → 관제 서버 Git 게이트웨이 | **사전**(push를 작업 권한·브랜치·경로 규칙으로 판정, 서버 고정 hook) | 묻지 않는다. 범위 밖이면 거부 | 2026-11-18. [git-gateway.md](git-gateway.md) |
 | 모든 MCP 클라이언트 | `mcp_proxy` (센서의 MCP 게이트웨이, 중앙 MCP 게이트웨이) | **사전**(`tools/call`을 서버에 보내기 전에 거부, 변조 툴은 목록에서 숨김). 사내 MCP 서버로 가는 유일한 길(중앙, 자격증명 보관) | 사람에게 물을 수 없어 승인 판정이면 **거부**(2026-11-17). 확인된 허용 없이는 서버로 보내지 않는다 | 에이전트 종류와 무관한 범용 경로. M8 ✅ |
 | 팀 게이트웨이의 에이전트 | `egress_proxy` | 사전(서명된 정책의 허용 도메인 밖은 차단) | 묻지 않고 차단 | 에이전트 망을 격리하고 이 프록시로만 내보낸다. LLM 비용 한도용 `llm_proxy`는 미구현 |
 

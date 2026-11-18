@@ -7,6 +7,8 @@ const ACTIONS = [
   { id: "source.read", label: "소스·테스트 읽기" },
   { id: "source.write", label: "소스 수정" },
   { id: "tests.write", label: "테스트 수정" },
+  { id: "pr.create", label: "PR 기록" },
+  { id: "ci.run", label: "CI 실행" },
 ];
 
 export function Tasks({ api, sessions }: { api: Api; sessions: SessionBinding[] }) {
@@ -45,7 +47,7 @@ export function Tasks({ api, sessions }: { api: Api; sessions: SessionBinding[] 
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   return <section className="card access-form"><h2>보호 자원 작업 권한</h2>
-    <p className="muted small">현재는 보호 저장소의 파일 읽기·수정을 지원합니다. 매 접근에서 현재 권한과 정책을 확인하며 연결이 끊기면 거부합니다. 다른 로컬 파일·CI·PR 실행은 별도 범위입니다.</p>
+    <p className="muted small">보호 저장소의 파일 읽기·수정, Git push(작업 브랜치만), PR 기록과 CI 실행을 지원합니다. 매 접근에서 현재 권한과 정책을 확인하며 연결이 끊기면 거부합니다. 운영 배포는 작업 권한으로 줄 수 없고, 다른 로컬 파일은 별도 범위입니다.</p>
     {error && <p className="error" role="alert">{error}</p>}
     {mine.length > 0 && actions.length > 0 && <form onSubmit={(e) => void issue(e)}><fieldset disabled={busy}>
       <label>내 등록 세션<select name="session" required><option value="">선택하세요</option>{mine.map((s) => <option key={s.binding_id} value={s.binding_id}>{s.project_id} · {s.agent_type} · {s.session_id}</option>)}</select></label>

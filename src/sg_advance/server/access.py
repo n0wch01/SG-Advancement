@@ -10,6 +10,7 @@ from sqlalchemy import event, false, or_, select
 from sqlalchemy.orm import Session, with_loader_criteria
 
 from ..authorization import GLOBAL_ONLY, PERMISSIONS, RESOURCE_PERMISSIONS, ROLE_DEFAULTS
+from ..schema.labels import CONTROL_PLANE_OWNED
 from .db import (
     AgentSessionBinding,
     Device,
@@ -228,13 +229,19 @@ def attach_scope(db: Session, identity: Identity) -> None:
     event.listen(db, "do_orm_execute", restrict)
 
 
-def collection_identity(db: Session, device: Device, doc: Any) -> tuple[Any, str | None, str | None]:
-    """Attribution is a server registration, never a client project/role label or historic guess."""
-    labels = {
-        k: v
-        for k, v in doc.labels.items()
-        if k not in {"sga_project_id", "sga_verified_user", "sga_identity_source"}
-    }
+IDENTITY_LABELS = frozenset({"sga_project_id", "sga_verified_user", "sga_identity_source"})
+
+
+def collection_identity(
+    db: Session, device: Device, doc: Any, *, server_built: bool = False
+) -> tuple[Any, str | None, str | None]:
+    """Attribution is a server registration, never a client project/role label or historic guess.
+
+    The server's own labels (schema/labels.py ``control_plane``) are dropped from what a client sends.
+    ``server_built``: the server made this record itself (resource gateway) and keeps the labels it set;
+    the identity labels are recomputed from the registration either way."""
+    dropped = IDENTITY_LABELS if server_built else CONTROL_PLANE_OWNED
+    labels = {k: v for k, v in doc.labels.items() if k not in dropped}
     binding = db.scalar(
         select(AgentSessionBinding).where(
             AgentSessionBinding.device_id == device.device_id,

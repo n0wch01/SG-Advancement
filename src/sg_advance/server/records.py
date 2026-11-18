@@ -13,9 +13,11 @@ from .access import collection_identity
 from .db import Device, EventRow, FindingRow
 
 
-def store_event(db: Session, device: Device, event: AgentEvent, now: datetime) -> AgentEvent:
+def store_event(
+    db: Session, device: Device, event: AgentEvent, now: datetime, *, server_built: bool = False
+) -> AgentEvent:
     stored = redact_event(event).model_copy(update={"received_ts": now})
-    stored, project_id, actor_id = collection_identity(db, device, stored)
+    stored, project_id, actor_id = collection_identity(db, device, stored, server_built=server_built)
     db.add(
         EventRow(
             event_id=stored.event_id,
@@ -35,12 +37,14 @@ def store_event(db: Session, device: Device, event: AgentEvent, now: datetime) -
     return stored
 
 
-def store_finding(db: Session, device_id: str, f: Finding, now: datetime) -> Finding:
+def store_finding(
+    db: Session, device_id: str, f: Finding, now: datetime, *, server_built: bool = False
+) -> Finding:
     if f.explanation:
         f = f.model_copy(update={"explanation": redact_text(f.explanation)})
     device = db.get(Device, device_id)
     assert device is not None
-    f, project_id, actor_id = collection_identity(db, device, f)
+    f, project_id, actor_id = collection_identity(db, device, f, server_built=server_built)
     if f.detector != "local":
         # Cross-project campaign aggregates need a separate scoped derivation before disclosure.
         project_id, actor_id = None, None

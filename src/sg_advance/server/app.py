@@ -39,6 +39,7 @@ from . import (
     policy_admin,
     policy_runtime,
     rbac,
+    resource_git,
     resource_mcp,
     risk,
     task_access,
@@ -643,6 +644,9 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.state.settings = settings
     app.state.db = Database(settings.db_url)
     app.state.signing_key = load_or_create_signing_key(settings.signing_key_path)
+    from .gateway_state import SessionEngines
+
+    app.state.session_engines = SessionEngines()  # resource gateways: per-session detection state
     app.state.device_ca = device_ca.load_or_create(settings.ca_path)  # M12 device certificates
     app.state.verify_package = verify_package or _default_package_verifier(settings)
     app.state.verifying = set()
@@ -685,6 +689,7 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.include_router(task_access.admin)
     app.include_router(task_access.sensor)
     app.include_router(resource_mcp.router)
+    app.include_router(resource_git.router)
     _mount_dashboard(app, settings)
     return app
 

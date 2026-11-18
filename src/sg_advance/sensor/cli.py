@@ -287,6 +287,20 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
                 args.openclaw_audit_proxy, args.openclaw_audit_upstream, args.audit_trusted_peer
             )
         )
+    if args.git_proxy:  # agents' git → the control plane's Git gateway, with this device's credential
+        from .task_git import GitProxyAdapter
+
+        creds = home.load_credentials()
+        assert creds is not None
+        host, _, port = args.git_proxy.rpartition(":")
+        try:
+            proxy = GitProxyAdapter(
+                host or "127.0.0.1", int(port), creds.server_url, creds.device_token, home.ssl_context()
+            )
+            adapters.append(proxy)
+        except ValueError as e:
+            print(f"--git-proxy: {e}", file=sys.stderr)
+            return 2
     if args.replay:
         adapters.append(ReplayAdapter(args.replay, delay=args.replay_delay))
     if not adapters and args.no_local_api:
@@ -477,6 +491,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-local-api", action="store_true", help="don't serve verdicts to gateway plugins")
     p.add_argument("--egress-proxy", metavar="HOST:PORT", help="run the egress proxy (HTTP + CONNECT)")
     p.add_argument("--mcp-gateway", metavar="HOST:PORT", help="run the MCP gateway (agents use /mcp/<name>)")
+    p.add_argument("--git-proxy", metavar="HOST:PORT",
+                   help="loopback Git proxy to the control plane's protected repositories")
     p.add_argument(
         "--mcp-server",
         action="append",
