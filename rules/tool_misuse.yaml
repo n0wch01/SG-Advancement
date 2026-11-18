@@ -187,13 +187,14 @@ rules:
   # 2026-11-17 사용자 결정(5-C): 외부 입력 직후, 센서가 실행 내용을 읽을 수 없는 명령은 사용자 승인(docs/actions.md).
   #   행동 해석(sga_act_*)이 "해석 못 함"으로 남긴 것 중 실행 내용을 숨길 수 있는 형태만 본다: 변수에 담은 명령, eval,
   #   명령 치환($(…)·백틱), 프로세스 치환, 확장되는 히어독, 동적 bash -c, 스크립트 실행, 인라인 코드(python -c 등),
-  #   셸이 표준입력을 실행, git 실행 설정(-c, --config-env).
+  #   셸이 표준입력을 실행, git 실행 설정(-c, --config-env), 함수 정의, case 안의 명령.
   #   일부러 뺀 것: 모델에 없는 명령(unmodelled: npm·docker 등, 내용은 원문 룰이 본다), PowerShell 전체(항상 해석 불가라
   #   넣으면 Windows의 모든 명령을 묻게 됨), Code Mode 바깥 호출(language:javascript, 안쪽 호출을 따로 판정).
   # 오탐 주의: 외부 문서를 읽은 뒤 10분 안의 cd $(git rev-parse --show-toplevel), ./gradlew build, python -c 같은 일상 명령도 묻는다.
   # 미탐 주의: 외부 입력 없이(사용자 요청만으로) 실행한 숨긴 명령, 10분 뒤, 다른 대화·하위 에이전트로 넘어간 경우.
   #   라벨이 없는 예전 센서에서는 걸리지 않는다.
   - id: unparsed-command-after-external-input
+    version: "2"
     severity: high
     category: prompt_injection
     title: 외부 입력 직후 내용을 읽을 수 없는 명령
@@ -213,7 +214,7 @@ rules:
         - name: unreadable-command
           when: {payload.kind: tool.call}
           fields: [labels.sga_act_unknown]
-          pattern: '(?:^|,)(?:dynamic-command|dynamic-shell|eval|command-substitution|process-substitution|heredoc-expansion|env-split-string|ansi-c-quote|shell-reads-stdin|git-config|git-config-env|script:[^,]*|inline:[^,]*)(?=,|$)'
+          pattern: '(?:^|,)(?:dynamic-command|dynamic-shell|eval|command-substitution|process-substitution|heredoc-expansion|env-split-string|ansi-c-quote|shell-reads-stdin|git-config|git-config-env|function-definition|control-flow:case|script:[^,]*|inline:[^,]*)(?=,|$)'
 
   # ── 후속 시나리오 ②: 임시 경로에 받은 파일 실행 (docs/downloaded-exec.md, 2026-11-14) ──
   # 출처: 센서가 내려받기 명령(curl -o/-O, wget -O/-P, Invoke-WebRequest -OutFile, git clone)에서 경로와 출처 호스트를

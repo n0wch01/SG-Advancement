@@ -16,7 +16,7 @@ import ast
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -82,7 +82,7 @@ def chunks(text: str, size: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP) -> 
     return [text[i : i + size] for i in range(0, max(len(text) - overlap, 1), step)]
 
 
-RECORD_MERGE = 300  # short lines are scored together up to this size (a log of one-liners stays few calls)
+RECORD_MERGE = 300  # short plain-text paragraphs may share one score
 STRUCTURED_MAX = 200_000  # characters a result may have to be read as JSON / a Python literal
 
 
@@ -112,32 +112,37 @@ def _largest_list(value: object, depth: int = 0) -> list | None:
     return best
 
 
-def records(text: str) -> list[str]:
+def records(text: str, max_records: int = MAX_CHUNKS) -> list[str]:
     """A tool result split into the records it is made of, each scored on its own (2026-11-17,
     docs/classifier.md 13): benign records glued into one window score as an attack (0.90-0.97 measured),
     and an attacker usually controls one record (one mail, one review, one page section). Structured output:
-    the items of its largest list, plus the rest; plain text: paragraphs, short ones merged up to
-    RECORD_MERGE. Records longer than a chunk are chunked as before."""
+    metadata first, followed by the items of its largest list; plain text: paragraphs. Identical records
+    need only one score. Too many distinct records fall back to the original overlapping windows instead
+    of consuming the scan allowance on tiny items. Long records are chunked as before."""
     data = _structured(text)
     parts: list[str]
     if data is not None and (items := _largest_list(data)) is not None:
-        parts = [json.dumps(item, ensure_ascii=False, default=str) for item in items]
         rest = json.dumps(_without(data, items), ensure_ascii=False, default=str)
-        if rest not in ("null", "[]", "{}"):
-            parts.append(rest)
+        parts = [rest] if rest not in ("null", "[]", "{}") else []
+        parts.extend(json.dumps(item, ensure_ascii=False, default=str) for item in items)
     else:
-        parts = []
-        for para in re.split(r"\n\s*\n", text):
-            para = para.strip()
-            if not para:
-                continue
-            if parts and len(parts[-1]) + len(para) + 2 <= RECORD_MERGE:
-                parts[-1] += "\n\n" + para
-            else:
-                parts.append(para)
+        parts = _merge_short(para.strip() for para in re.split(r"\n\s*\n", text) if para.strip())
+    parts = list(dict.fromkeys(parts))
+    if len(parts) > max_records:
+        return chunks(text)
     out: list[str] = []
     for part in parts:
         out.extend(chunks(part) if len(part) > CHUNK_CHARS else [part])
+    return out
+
+
+def _merge_short(parts: Iterable[str]) -> list[str]:
+    out: list[str] = []
+    for part in parts:
+        if out and len(out[-1]) + len(part) + 2 <= RECORD_MERGE:
+            out[-1] += "\n\n" + part
+        else:
+            out.append(part)
     return out
 
 
@@ -183,7 +188,7 @@ class InjectionJudge:
         return self.classifier.name if self.classifier is not None else "none"
 
     def judge(self, text: str) -> Judgement:
-        parts = records(text) if self.by_record else chunks(text)
+        parts = records(text, max_records=self.max_chunks) if self.by_record else chunks(text)
         if self.classifier is None:
             return Judgement("unavailable", None, self.model, 0, len(parts), self.unavailable_reason)
         start = self.clock()

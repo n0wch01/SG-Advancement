@@ -20,7 +20,7 @@ CLAUDE.md 원칙:
 | 정책이 72시간 넘게 확인되지 않음 | `policy-stale-state-changing-tool`: 읽기 전용이 아닌 툴 **차단**(전에는 사용자 확인) | 같음 | 같음 |
 | PC 상태를 모름(점검하는 PC인데 결과가 없거나 1시간 넘게 낡음) | 민감 리소스 **차단**(`sensitive-resource-from-degraded-device`, 전에는 통과) | 같음 | 같음. 중앙 게이트웨이처럼 PC 상태를 점검하지 않는 센서는 라벨을 붙이지 않음 |
 | hook 입력이 JSON이 아님, hook 내부 오류 | exit 2로 **차단**(전에는 Claude Code의 onFailure에 맡김) | 해당 없음 | 처리 중 오류는 502(전달 안 함) |
-| hook 프로세스가 없음·실행 실패·시간 초과 | PreToolUse와 PostToolUse 모두 `onFailure: block`(전에는 PreToolUse만) | 플러그인이 꺼지면 `openclaw-plugin-heartbeat-lost`와 `openclaw-guard-plugin-disabled`로 탐지 | 해당 없음 |
+| hook 프로세스가 없음·실행 실패·시간 초과 | `onFailure: block`을 설정. PreToolUse는 실행 전 거부를 요청한다. PostToolUse 실패는 원래 결과를 가리지 못함을 실제 2.1.326에서 확인(아래 한계) | 플러그인이 꺼지면 `openclaw-plugin-heartbeat-lost`와 `openclaw-guard-plugin-disabled`로 탐지 | 해당 없음 |
 | (2026-11-17 제거) 보안팀 승인 대기 중 관제 서버에 연결 불가 | **거부**(`unreachable`) | 같음 | 같음 |
 | (2026-11-17 제거) 보안팀 승인 대기 중 데몬이 꺼지거나 응답이 비어 있음·`ok:false`·결정 없음 | **거부**(점검 2026-11-15에 수정. 전에는 결정이 없는 응답을 허용으로 처리했음) | 같음(`awaitSecurity`는 처음부터 `allow`만 허용) | 해당 없음(데몬 안에서 기다림) |
 | 보안팀 결정을 장비가 받지 못함(응답 유실) | 15초 동안 결과 보고가 없으면 결정을 다시 보낸다(보류가 만료되면 멈춤). 이미 끝난 보류의 결정은 장비가 무시한다(점검 2026-11-15, 전에는 한 번만 보내 결정이 사라졌음) | 같음 | 같음 |
@@ -123,7 +123,10 @@ CLAUDE.md 원칙:
   - 사용자가 거절하면 Claude Code는 결과를 남기지 않는다. 결과 없이 다음 프롬프트나 세션 종료가 오면 거부로 기록한다(`sga_approval_inferred=no_result`). 거절과 중단(Esc)은 여전히 구별하지 못한다.
   - OpenClaw 확인 창은 결과가 승인 응답(`onResolution`)으로 따로 오고 툴 입력 지문이 없어 대조하지 않는다.
 - **hook의 결과 가림**: Claude Code가 `updatedToolOutput`을 적용했는지 hook은 알 수 없다. 내장 툴은 출력 형식이 다르면 원본을 쓴다. 그래서 확인됨이 아니라 미확인으로 기록한다. 차단 사유는 함께 전달된다.
-- **PostToolUse의 `onFailure: block`**: Claude Code가 이 이벤트에서 어떻게 처리하는지는 실제 Claude Code로 확인해야 한다(노트북 실설치).
+- **PostToolUse의 `onFailure: block`**: macOS Claude Code 2.1.326에서 실행 파일이 없는 필수 PostToolUse hook을
+  추가해 시험했다. 오류가 표시돼도 원래 Read 결과의 임의 마커가 도구 결과와 모델 답변에 모두 나타났다.
+  이 설정은 실패 시 결과 가림을 보장하지 않는다. 성공한 Read 결과의 가림 시험과 별개다.
+  실패 결과를 확실히 통제해야 하는 경로는 결과를 직접 전달하는 자원 게이트웨이에서 집행해야 한다.
 - **반증 감지의 범위**: 에이전트가 차단을 무시했더라도 결과 이벤트가 오지 않으면 모른다. 센서를 다시 시작하기 전의 차단은 기억하지 못한다(24시간, 최대 5000건).
 - **재검사의 범위**: 승인 후 재검사는 기록을 남기지 않는 새 엔진으로 한다. 시퀀스 룰(앞뒤 행동의 연결)은 보류할 때 이미 판정했으므로 재검사에서는 빈 상태로 시작한다.
 - **관리자 권한 없이 설치한 PC**: 사용자가 센서 파일(정책 캐시, 상태 결과)을 지우거나 데몬을 끌 수 있다. 이 경우에도 결과는 차단 쪽(읽기 전용만 허용)이다. hook 자체를 지우는 것은 사용자 설정 설치에서 막을 수 없고 탐지만 한다(`claude-code-guard-hook-removable`).
