@@ -172,6 +172,7 @@ def admin_permission(path: str, method: str) -> str | None:
             },
             "response.manage": {"/actions"},
             "approvals.review": {"/approvals/{event_id}/review"},
+            "findings.triage": {"/findings/{finding_id}/disposition"},
         }
     suffix = path.removeprefix("/v1/admin")
     return next((permission for permission, paths in groups.items() if suffix in paths), None)

@@ -9,6 +9,7 @@ import type {
   ApprovalReview,
   Device,
   DeviceInventory,
+  Disposition,
   Finding,
   FindingDetail,
   Identity,
@@ -204,5 +205,9 @@ export class Api {
 
   finding(id: string) {
     return this.get<FindingDetail>(`/findings/${encodeURIComponent(id)}`);
+  }
+
+  markFinding(id: string, body: { status: "false_positive"; reason: string }) {
+    return this.call<Disposition>("POST", `/findings/${encodeURIComponent(id)}/disposition`, body);
   }
 }

@@ -68,3 +68,97 @@ cases:
       - {at: 160, kind: tool.call, tool: session_status, arguments: {}}
       - {at: 180, kind: tool.call, tool: session_status, arguments: {}}
     expect_not: [identical-args-loop]
+
+  # 오탐 수정(2026-11-18, 실제 Claude Code 2.1.326 대표 시나리오, 사용자 결정): 개발자 작업에서 Bash를 25초에
+  # 5번(switch·파일 확인·테스트 시도·commit·push) 부르자 rate-limit-tool-calls가 대화를 중단했다.
+  # 코딩 에이전트(claude_code·codex_cli)는 같은 툴 60초 30번에서 중단한다(2초에 한 번을 1분 내내: 사람·모델 속도로는 폭주).
+  # 미탐: 1분에 30번 미만으로 서로 다른 명령을 계속 내는 폭주는 이 룰로 멈추지 않는다(같은 인자 반복은 identical-args-loop).
+  - name: 코딩 에이전트의 정상 작업 (60초에 Bash 12번)
+    agent: claude_code
+    sensor: claude_code_hook
+    events:
+      - {at: 0, kind: tool.call, tool: Bash, arguments: {command: "git status # 0"}}
+      - {at: 4, kind: tool.call, tool: Bash, arguments: {command: "git status # 1"}}
+      - {at: 8, kind: tool.call, tool: Bash, arguments: {command: "git status # 2"}}
+      - {at: 12, kind: tool.call, tool: Bash, arguments: {command: "git status # 3"}}
+      - {at: 16, kind: tool.call, tool: Bash, arguments: {command: "git status # 4"}}
+      - {at: 20, kind: tool.call, tool: Bash, arguments: {command: "git status # 5"}}
+      - {at: 24, kind: tool.call, tool: Bash, arguments: {command: "git status # 6"}}
+      - {at: 28, kind: tool.call, tool: Bash, arguments: {command: "git status # 7"}}
+      - {at: 32, kind: tool.call, tool: Bash, arguments: {command: "git status # 8"}}
+      - {at: 36, kind: tool.call, tool: Bash, arguments: {command: "git status # 9"}}
+      - {at: 40, kind: tool.call, tool: Bash, arguments: {command: "git status # 10"}}
+      - {at: 44, kind: tool.call, tool: Bash, arguments: {command: "git status # 11"}}
+    expect_not: [rate-limit-tool-calls, rate-limit-coding-agent-calls]
+
+  - name: 코딩 에이전트도 60초에 29번까지는 중단하지 않음
+    agent: codex_cli
+    sensor: codex_cli_hook
+    events:
+      - {at: 0, kind: tool.call, tool: Bash, arguments: {command: "git status # 0"}}
+      - {at: 2, kind: tool.call, tool: Bash, arguments: {command: "git status # 1"}}
+      - {at: 4, kind: tool.call, tool: Bash, arguments: {command: "git status # 2"}}
+      - {at: 6, kind: tool.call, tool: Bash, arguments: {command: "git status # 3"}}
+      - {at: 8, kind: tool.call, tool: Bash, arguments: {command: "git status # 4"}}
+      - {at: 10, kind: tool.call, tool: Bash, arguments: {command: "git status # 5"}}
+      - {at: 12, kind: tool.call, tool: Bash, arguments: {command: "git status # 6"}}
+      - {at: 14, kind: tool.call, tool: Bash, arguments: {command: "git status # 7"}}
+      - {at: 16, kind: tool.call, tool: Bash, arguments: {command: "git status # 8"}}
+      - {at: 18, kind: tool.call, tool: Bash, arguments: {command: "git status # 9"}}
+      - {at: 20, kind: tool.call, tool: Bash, arguments: {command: "git status # 10"}}
+      - {at: 22, kind: tool.call, tool: Bash, arguments: {command: "git status # 11"}}
+      - {at: 24, kind: tool.call, tool: Bash, arguments: {command: "git status # 12"}}
+      - {at: 26, kind: tool.call, tool: Bash, arguments: {command: "git status # 13"}}
+      - {at: 28, kind: tool.call, tool: Bash, arguments: {command: "git status # 14"}}
+      - {at: 30, kind: tool.call, tool: Bash, arguments: {command: "git status # 15"}}
+      - {at: 32, kind: tool.call, tool: Bash, arguments: {command: "git status # 16"}}
+      - {at: 34, kind: tool.call, tool: Bash, arguments: {command: "git status # 17"}}
+      - {at: 36, kind: tool.call, tool: Bash, arguments: {command: "git status # 18"}}
+      - {at: 38, kind: tool.call, tool: Bash, arguments: {command: "git status # 19"}}
+      - {at: 40, kind: tool.call, tool: Bash, arguments: {command: "git status # 20"}}
+      - {at: 42, kind: tool.call, tool: Bash, arguments: {command: "git status # 21"}}
+      - {at: 44, kind: tool.call, tool: Bash, arguments: {command: "git status # 22"}}
+      - {at: 46, kind: tool.call, tool: Bash, arguments: {command: "git status # 23"}}
+      - {at: 48, kind: tool.call, tool: Bash, arguments: {command: "git status # 24"}}
+      - {at: 50, kind: tool.call, tool: Bash, arguments: {command: "git status # 25"}}
+      - {at: 52, kind: tool.call, tool: Bash, arguments: {command: "git status # 26"}}
+      - {at: 54, kind: tool.call, tool: Bash, arguments: {command: "git status # 27"}}
+      - {at: 56, kind: tool.call, tool: Bash, arguments: {command: "git status # 28"}}
+    expect_not: [rate-limit-tool-calls, rate-limit-coding-agent-calls]
+
+  - name: 코딩 에이전트가 60초에 같은 툴 30번 (폭주)
+    agent: codex_cli
+    sensor: codex_cli_hook
+    events:
+      - {at: 0, kind: tool.call, tool: Bash, arguments: {command: "git status # 0"}}
+      - {at: 2, kind: tool.call, tool: Bash, arguments: {command: "git status # 1"}}
+      - {at: 4, kind: tool.call, tool: Bash, arguments: {command: "git status # 2"}}
+      - {at: 6, kind: tool.call, tool: Bash, arguments: {command: "git status # 3"}}
+      - {at: 8, kind: tool.call, tool: Bash, arguments: {command: "git status # 4"}}
+      - {at: 10, kind: tool.call, tool: Bash, arguments: {command: "git status # 5"}}
+      - {at: 12, kind: tool.call, tool: Bash, arguments: {command: "git status # 6"}}
+      - {at: 14, kind: tool.call, tool: Bash, arguments: {command: "git status # 7"}}
+      - {at: 16, kind: tool.call, tool: Bash, arguments: {command: "git status # 8"}}
+      - {at: 18, kind: tool.call, tool: Bash, arguments: {command: "git status # 9"}}
+      - {at: 20, kind: tool.call, tool: Bash, arguments: {command: "git status # 10"}}
+      - {at: 22, kind: tool.call, tool: Bash, arguments: {command: "git status # 11"}}
+      - {at: 24, kind: tool.call, tool: Bash, arguments: {command: "git status # 12"}}
+      - {at: 26, kind: tool.call, tool: Bash, arguments: {command: "git status # 13"}}
+      - {at: 28, kind: tool.call, tool: Bash, arguments: {command: "git status # 14"}}
+      - {at: 30, kind: tool.call, tool: Bash, arguments: {command: "git status # 15"}}
+      - {at: 32, kind: tool.call, tool: Bash, arguments: {command: "git status # 16"}}
+      - {at: 34, kind: tool.call, tool: Bash, arguments: {command: "git status # 17"}}
+      - {at: 36, kind: tool.call, tool: Bash, arguments: {command: "git status # 18"}}
+      - {at: 38, kind: tool.call, tool: Bash, arguments: {command: "git status # 19"}}
+      - {at: 40, kind: tool.call, tool: Bash, arguments: {command: "git status # 20"}}
+      - {at: 42, kind: tool.call, tool: Bash, arguments: {command: "git status # 21"}}
+      - {at: 44, kind: tool.call, tool: Bash, arguments: {command: "git status # 22"}}
+      - {at: 46, kind: tool.call, tool: Bash, arguments: {command: "git status # 23"}}
+      - {at: 48, kind: tool.call, tool: Bash, arguments: {command: "git status # 24"}}
+      - {at: 50, kind: tool.call, tool: Bash, arguments: {command: "git status # 25"}}
+      - {at: 52, kind: tool.call, tool: Bash, arguments: {command: "git status # 26"}}
+      - {at: 54, kind: tool.call, tool: Bash, arguments: {command: "git status # 27"}}
+      - {at: 56, kind: tool.call, tool: Bash, arguments: {command: "git status # 28"}}
+      - {at: 58, kind: tool.call, tool: Bash, arguments: {command: "git status # 29"}}
+    expect: [rate-limit-coding-agent-calls]
+    expect_not: [rate-limit-tool-calls]

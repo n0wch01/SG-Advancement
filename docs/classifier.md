@@ -149,6 +149,14 @@ tool.result ──▶ 센서 데몬 stamp()
 집행 룰보다 **넓어야** 의미가 있다. 2단 구조는 정밀도를 올리지만, 정탐률은 1단 그물이 집행 룰보다 넓을 때만 오른다.
 
 - **대상:** `tool.result` 중 출처가 외부인 것. 외부 판정은 `destructive-after-external-input`과 같은 식을 쓴다(로컬, 사내 MCP, `*.corp.internal` 제외).
+- **SG-Advance 자신의 문장은 뺀다(2026-11-19 사용자 결정).** 실제 회수 시나리오에서 보호 저장소의 거부 문구(`task authorization denied: grant_revoked`)와 센서의 가림 안내를 분류기가 1.0으로 판정했다. 회수 한 번에 high 2건이 생겼고, 위험도가 올라 작업 권한 발급이 막혔다. `refused`·`blocked`만 있어도 1.0이라 문구로는 피할 수 없었다.
+  - 근거는 이름이 아니라 **데몬이 확인한 출처**다.
+    - 서버는 자신의 거부에만 MCP 결과 `_meta`의 `sg-advance/denial` 표시를 붙인다. 파일 내용, CI 출력(실패 포함)에는 붙이지 않는다.
+    - 센서의 MCP 게이트웨이는 보호 자원(장비 자격 증명으로 붙는 관제 서버)에서 온 표시만 인정한다.
+    - 그 문장과 센서 자신의 가림 안내를 데몬이 기억한다. 같은 실패 결과가 hook으로 다시 오면 센서 라벨 `sga_result_origin`(`control_plane_denial`·`sensor_notice`)을 붙인다.
+    - `external-result-candidate` v2는 이 라벨이 있으면 후보로 삼지 않는다.
+  - 라벨은 센서 고유 라벨이라 입력에서 오면 버린다. 성공 결과나 기억하지 않은 문장에는 붙지 않는다.
+  - 미탐 주의: 보호 자원의 서버가 거부 문구에 지시를 넣으면 보지 않는다. 그 서버는 관제 서버 자신이다.
 - **후보 신호(초안, 확정은 사용자):**
   - AI나 에이전트를 부르는 말: `assistant`, `AI`, `agent`, `model`, `Claude`, `너는`, `에이전트`
   - 명령형 지시와 행동 동사: `you must`, `run`, `execute`, `delete`, `send`, `upload`, `실행해`, `삭제해`, `보내`

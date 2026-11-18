@@ -7,7 +7,8 @@ egress seen at the network) are about the PC, not the person: device posture han
 (``sensitive-resource-from-degraded-device``). Live 2026-11-13, before this filter, configuration
 alerts alone made five people elevated, among them the team gateway's service account.
 Medium and lower never count, so the zero-trust rules' own findings (medium) cannot feed back
-into the score. It decays by itself when the window moves on.
+into the score. It decays by itself when the window moves on. A finding a reviewer marked as a false
+positive (``FindingDisposition``, 2026-11-18) does not count.
 
 Each person also gets a **score** from 0 to 100 (2026-11-14, KISA P1-4: a continuous value rather
 than yes/no): critical counts 60, high 20, each weighted by how recent it is (1.0 now, falling
@@ -32,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .auth import DbSession, require_admin, require_device
-from .db import Device, EventRow, FindingRow, utcnow
+from .db import Device, EventRow, FindingDisposition, FindingRow, utcnow
 
 WINDOW = timedelta(hours=24)
 SEEN_WINDOW = timedelta(days=7)
@@ -87,8 +88,12 @@ def score_of(found: list[tuple[str, datetime]], now: datetime) -> int:
 def scores(db: Session, now: datetime | None = None, *, verified_only: bool = False) -> dict[str, PersonRisk]:
     now = now or utcnow()
     since = now - WINDOW
+    fp = FindingDisposition
+    false_positives = select(fp.finding_id).where(fp.status == "false_positive")
     q = select(FindingRow.user_id, FindingRow.severity, FindingRow.ts, FindingRow.doc).where(
-        FindingRow.ts >= since, FindingRow.severity.in_(("critical", "high"))
+        FindingRow.ts >= since,
+        FindingRow.severity.in_(("critical", "high")),
+        FindingRow.finding_id.not_in(false_positives),  # a reviewer's verdict (2026-11-18)
     )
     if verified_only:
         q = q.where(FindingRow.actor_id == FindingRow.user_id)

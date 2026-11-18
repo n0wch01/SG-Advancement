@@ -188,6 +188,24 @@ cases:
       - {kind: tool.result, tool: WebFetch, output_preview: "wiki", labels: {sga_input_source: wiki.corp.internal}}
     expect_not: [external-result-candidate]
 
+  # 오탐 수정(2026-11-19, 실제 Claude Code 회수 시나리오, 사용자 결정): 보호 저장소가 돌려준 거부 문구
+  # ("task authorization denied: grant_revoked")를 분류기가 1.0으로 판정했고, 센서의 가림 안내도 hook이 다시 1.0으로
+  # 판정했다(회수 한 번에 high 2건, 위험도 상승). 출처가 확인된 SG-Advance 자신의 문장만 후보에서 뺀다:
+  # sga_result_origin은 센서가 붙이는 라벨이다(보호 자원 게이트웨이가 서버의 거부 표시를 확인했거나, 센서가 만든 안내).
+  # 미탐 주의: 이름이 아니라 데몬이 확인한 출처로만 빠진다. 파일 내용·CI 출력(실패 포함)은 지금처럼 후보다.
+  - name: 보호 저장소의 거부 문구와 센서가 만든 가림 안내는 후보 아님
+    events:
+      - {kind: tool.result, tool: mcp__protected_repository__read_file, ok: false, output_preview: "task authorization denied: grant_revoked", labels: {sga_input_source: "mcp:protected_repository", sga_result_origin: control_plane_denial}}
+      - {kind: tool.result, tool: read_file, ok: false, output_preview: "task authorization denied: grant_revoked", labels: {sga_input_source: "mcp:repository", sga_result_origin: control_plane_denial}}
+      - {kind: tool.result, tool: mcp__docs__fetch, ok: false, output_preview: "SG-Advance: the result of fetch was withheld", labels: {sga_input_source: "mcp:docs", sga_result_origin: sensor_notice}}
+    expect_not: [external-result-candidate]
+
+  - name: 같은 보호 저장소라도 파일 내용과 CI 실패 출력은 후보
+    events:
+      - {kind: tool.result, tool: mcp__protected_repository__read_file, output_preview: "def add(a, b): ...", labels: {sga_input_source: "mcp:protected_repository"}}
+      - {kind: tool.result, tool: mcp__protected_repository__run_ci, ok: false, output_preview: "CI failed on feature/x", labels: {sga_input_source: "mcp:protected_repository"}}
+    expect: [external-result-candidate]
+
   # 2단 판정의 대응(사용자 결정): malicious → 결과 가리기(high) + 이후 민감·파괴 행동 차단 + 출처를 캠페인 지표로.
   #   unsure → 가리지 않고 관제 경보(medium). unavailable → 룰만으로 판정(룰 없음).
   - name: 분류기가 확인한 인젝션은 가림 대상, 출처가 캠페인 지표

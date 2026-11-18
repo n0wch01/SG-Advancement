@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import secrets
+import shlex
 import socket
 import subprocess
 import sys
@@ -23,6 +24,7 @@ PYTHON = ROOT / ".venv/bin/python"
 SENSOR = ROOT / ".venv/bin/sga-sensor"
 SERVER = "http://127.0.0.1:8775"
 GATEWAY = "http://127.0.0.1:8776/mcp/repository"
+GIT_PROXY = "127.0.0.1:8777"  # the sensor's loopback Git proxy → the control plane's Git gateway
 PROJECT = "sga-task-" + hashlib.sha256(str(ROOT).encode()).hexdigest()[:8]
 CLAUDE_CONFIG = ROOT / "data/cc-live/config"
 CODEX_CONFIG = ROOT / "data/codex-live/config"
@@ -146,6 +148,37 @@ for project in ('alpha','beta'):
 print('Protected fixtures ready inside the container; existing files preserved.')
 """,
     )
+    repositories()
+
+
+REPOSITORY_SETUP = r"""
+from pathlib import Path
+import os, subprocess
+env = {"PATH": os.environ["PATH"], "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+       "GIT_AUTHOR_NAME": "SG-Advance lab", "GIT_AUTHOR_EMAIL": "lab@sga.invalid",
+       "GIT_COMMITTER_NAME": "SG-Advance lab", "GIT_COMMITTER_EMAIL": "lab@sga.invalid"}
+for project in ('alpha', 'beta'):
+    target = Path('/data/resources') / project
+    if (target / '.git').exists():
+        continue
+    # new, runnable files for the Git/CI scenario; the earlier MCP fixtures stay as they are
+    (target / 'src/calc.py').write_text('def add(a, b):\n    return a + b\n')
+    (target / 'tests/test_calc.py').write_text(
+        'import sys\nimport unittest\nfrom pathlib import Path\n\n'
+        'sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))\n'
+        'from calc import add  # noqa: E402\n\n\n'
+        'class AddTest(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n'
+    )
+    (target / '.gitignore').write_text('.env\n.initialized\n')
+    for args in (['init', '-q', '-b', 'main'], ['add', '-A'], ['commit', '-q', '-m', 'Lab baseline']):
+        subprocess.run(['git', *args], cwd=target, env=env, check=True)
+    print(f'{project}: repository provisioned on main (.env is ignored, never committed)')
+"""
+
+
+def repositories() -> None:
+    """A Git repository in each project workspace for the Git gateway (docs/git-gateway.md)."""
+    compose("exec", "-T", "control-plane", "python", "-", text=True, input=REPOSITORY_SETUP)
 
 
 def seed() -> None:
@@ -227,6 +260,8 @@ def up() -> None:
             f"repository={SERVER}/v1/resources/mcp",
             "--mcp-protected-resource",
             "repository",
+            "--git-proxy",
+            GIT_PROXY,
             "--classifier",
             ROOT / "data/models/protectai-v2",
         )
@@ -294,6 +329,7 @@ def slot(agent: str) -> str:
             env=env,
             stdout=subprocess.DEVNULL,
         )
+    working_copy(value, grant_path)
     print(value)
     return value
 
@@ -324,7 +360,11 @@ def prepare(args) -> None:
             },
             user=args.user,
         )
-    actions = ["source.read", "tests.write"] + (["source.write"] if args.user == "developer" else [])
+    actions = (
+        ["source.read", "source.write", "tests.write", "pr.create", "ci.run"]
+        if args.user == "developer"
+        else ["source.read", "tests.write", "ci.run"]
+    )
     issued = api(
         "POST",
         "/v1/admin/tasks",
@@ -337,7 +377,9 @@ def prepare(args) -> None:
         user=args.user,
     )
     private(Path(config["grant_file"]), issued["token"])
-    config.update(session_id=args.session, user=args.user, grant_id=issued["grant_id"])
+    clone = working_copy(args.slot, Path(config["grant_file"]))
+    fetch(clone)
+    config.update(session_id=args.session, user=args.user, grant_id=issued["grant_id"], clone=str(clone))
     private(path, json.dumps(config))
     print(
         json.dumps(
@@ -349,6 +391,35 @@ def prepare(args) -> None:
             }
         )
     )
+
+
+def working_copy(slot_id: str, grant_file: Path) -> Path:
+    """The agent's working copy of alpha, made when the slot is (before any grant exists, so an agent can
+    start in it): its remote is the sensor's Git proxy and its only credential is the slot's task grant.
+    ``credential.helper=`` first drops any system/user helper (for example the macOS keychain), so the
+    grant is never stored elsewhere. ``prepare`` fetches once the grant is issued."""
+    target = LAB / "workspace" / slot_id
+    if (target / ".git").is_dir():
+        return target
+    helper = "!" + shlex.join(
+        [str(PYTHON), "-m", "sg_advance.sensor.task_git", "credential", "--grant-file", str(grant_file)]
+    )
+    git = ["git", "-C", target]
+    run(["git", "init", "-q", "-b", "main", target])
+    run([*git, "remote", "add", "origin", f"http://{GIT_PROXY}/git/alpha.git"])
+    run([*git, "config", "credential.helper", ""])
+    run([*git, "config", "--add", "credential.helper", helper])
+    run([*git, "config", "user.name", "Lab agent"])
+    run([*git, "config", "user.email", "agent@sga.invalid"])
+    return target
+
+
+def fetch(target: Path) -> None:
+    """With the grant in place: bring the working copy to the protected repository's main."""
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    run(["git", "-C", target, "fetch", "-q", "origin"], env=env)
+    run(["git", "-C", target, "reset", "-q", "--hard", "origin/main"], env=env)
+    run(["git", "-C", target, "branch", "-q", "--set-upstream-to", "origin/main"], env=env)
 
 
 def check() -> None:
@@ -366,6 +437,11 @@ root=Path('/data/resources/alpha')
 for name in ('src/app.py','tests/test_app.py','production/deploy.yaml','.env'):
     data=(root/name).read_bytes()
     print(json.dumps({'path':name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}))
+import subprocess
+if (root/'.git').is_dir():
+    refs=subprocess.run(['git','for-each-ref','--format=%(refname) %(objectname:short)'],cwd=root,
+                        capture_output=True,text=True,env={'PATH':'/usr/bin:/bin','GIT_CONFIG_NOSYSTEM':'1'})
+    print(json.dumps({'refs':refs.stdout.splitlines()}))
 """,
     )
 

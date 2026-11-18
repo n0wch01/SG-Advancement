@@ -20,7 +20,7 @@ from ..sensor.decision import (
     point_response,
     withheld_response,
 )
-from ..task_grants import GrantError, TaskClaims, relative_path, verify_task
+from ..task_grants import DENIAL_META, GrantError, TaskClaims, relative_path, verify_task
 from . import audit_chain, resource_files
 from .auth import DbSession
 from .db import Device, Project, utcnow
@@ -88,6 +88,16 @@ class ReadArgs(BaseModel):
 
 class WriteArgs(ReadArgs):
     content: str = Field(max_length=resource_files.MAX_FILE_BYTES)
+
+
+def denial(mid: Any, text: str) -> dict[str, Any]:
+    """A refusal written by this server (authorization, threat policy, invalid input, failed operation),
+    never resource content or CI output. The mark lets the endpoint's protected-resource gateway tell the
+    server's own wording from external input (2026-11-19: the injection classifier scored "task
+    authorization denied: grant_revoked" 1.0). Only honoured from a protected resource upstream."""
+    out = tool_result(mid, text, True)
+    out["result"]["_meta"] = {DENIAL_META: True}
+    return out
 
 
 def tool_result(mid: Any, text: str, error: bool = False) -> dict[str, Any]:
@@ -241,14 +251,14 @@ def call_tool(
     if name in GIT_TOOLS:
         return call_git_tool(request, db, device, token, mid, str(name), params.get("arguments") or {})
     if name not in {"read_file", "write_file"}:
-        return tool_result(mid, "Unsupported protected resource tool", True)
+        return denial(mid, "Unsupported protected resource tool")
     try:
         args = (WriteArgs if name == "write_file" else ReadArgs).model_validate(params.get("arguments") or {})
         path = relative_path(args.path)
         action = resource_files.permission_for(path, write=name == "write_file")
     except (ValueError, ValidationError):
         auth_failure(request, db, device, token, "unsupported_or_invalid_resource")
-        return tool_result(mid, "Task authorization denied: unsupported or invalid resource", True)
+        return denial(mid, "Task authorization denied: unsupported or invalid resource")
     payload = {
         "kind": "tool.call",
         "call_id": uuid4().hex,
@@ -260,7 +270,7 @@ def call_tool(
         claims = online_claims(request, token, device_id=device.device_id, action=action, path=path)
     except HTTPException as exc:
         auth_failure(request, db, device, token, str(exc.detail), payload)
-        return tool_result(mid, str(exc.detail), True)
+        return denial(mid, str(exc.detail))
     project = db.get(Project, claims.project_id)
     assert project is not None and project.workspace_root is not None
     event = operation_event(device, claims, payload)
@@ -268,7 +278,7 @@ def call_tool(
     response, enforcement = point_response(verdict, POINT, approval_channel(verdict, POINT))
     if response["decision"] != "allow":
         record(db, device, event, verdict.findings + verdict.enforcing_repeats, enforcement)
-        return tool_result(mid, response.get("reason", "Blocked by threat policy"), True)
+        return denial(mid, response.get("reason", "Blocked by threat policy"))
     audit_chain.append(
         db,
         "resource_operation",
@@ -307,7 +317,7 @@ def call_tool(
             },
         )
         db.commit()
-        return tool_result(mid, reason, True)
+        return denial(mid, reason)
     result_event = operation_event(
         device,
         claims,
@@ -345,10 +355,10 @@ def call_tool(
         )
     except Exception:
         db.rollback()
-        return tool_result(
-            mid, "Operation may have completed; outcome recording failed. Do not retry automatically.", True
+        return denial(
+            mid, "Operation may have completed; outcome recording failed. Do not retry automatically."
         )
-    return tool_result(mid, text, bool(hits))
+    return denial(mid, text) if hits else tool_result(mid, text)  # withheld: the server's notice
 
 
 def call_git_tool(
@@ -365,16 +375,16 @@ def call_git_tool(
         "arguments": {k: str(v)[:200] for k, v in args.items() if k in {"branch", "title"}},
     }
     if not isinstance(args, dict) or set(args) - {"branch", "title"}:
-        return tool_result(mid, "Task authorization denied: invalid arguments", True)
+        return denial(mid, "Task authorization denied: invalid arguments")
     try:
         claims = online_claims(request, token, device_id=device.device_id, action=GIT_TOOLS[name])
     except HTTPException as exc:
         auth_failure(
             request, db, device, token, str(exc.detail), payload, evidence="the operation was not run"
         )
-        return tool_result(mid, str(exc.detail), True)
+        return denial(mid, str(exc.detail))
     if reason := resource_git.threat_check(request, db, device, claims, payload):
-        return tool_result(mid, reason, True)
+        return denial(mid, reason)
     try:
         # Right before it runs: the newest state, not the state at the first check.
         online_claims(request, token, device_id=device.device_id, action=GIT_TOOLS[name])
@@ -383,9 +393,9 @@ def call_git_tool(
         text, passed = resource_git.run_ci(request, db, device, claims, args)
         return tool_result(mid, text, not passed)
     except HTTPException as exc:
-        return tool_result(mid, str(exc.detail), True)
+        return denial(mid, str(exc.detail))
     except GrantError as exc:
-        return tool_result(mid, str(exc), True)
+        return denial(mid, str(exc))
 
 
 def safe_call_tool(
@@ -395,9 +405,7 @@ def safe_call_tool(
         return call_tool(request, db, device, token, mid, params)
     except Exception:
         db.rollback()
-        return tool_result(
-            mid, "Protected operation failed; inspect its recorded intent before retrying.", True
-        )
+        return denial(mid, "Protected operation failed; inspect its recorded intent before retrying.")
 
 
 @router.post("/mcp")

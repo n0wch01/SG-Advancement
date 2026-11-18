@@ -206,6 +206,7 @@ rules:
   # 미탐 주의: 로컬 파일은 보지 않는다(사용자 결정: 전부 제외). clone한 저장소의 README·코드 주석에 숨긴 지시도 여기에 든다.
   #   이미지·첨부 속 지시, 출처가 사내로 적힌 오염된 사내 문서도 보지 않는다.
   - id: external-result-candidate
+    version: "2"
     severity: info
     category: prompt_injection
     title: 분류기 검사 대상 (외부 출처 툴 결과)
@@ -213,6 +214,10 @@ rules:
     response: allow
     tags: ["stage:candidate"]
     when: {payload.kind: tool.result}
+    # 오탐 수정(2026-11-19, 사용자 결정): 출처가 확인된 SG-Advance 자신의 문장은 뺀다. 보호 자원 게이트웨이가 서버의
+    #   거부 표시를 확인한 결과(control_plane_denial)와 센서가 만든 가림 안내(sensor_notice). 분류기가 거부 문구를 1.0으로
+    #   판정해 회수·거부 한 번에 high 2건이 생겼다. 라벨은 센서가 붙이며 입력에서 오면 버린다(schema/labels.py).
+    unless: {labels.sga_result_origin: [control_plane_denial, sensor_notice]}
     match:
       type: regex
       fields: [labels.sga_input_source]

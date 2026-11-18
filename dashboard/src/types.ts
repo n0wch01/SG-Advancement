@@ -162,6 +162,15 @@ export interface FindingDetail {
   session_findings: Finding[];
   campaign_members?: Finding[];
   campaigns?: Finding[];
+  disposition?: Disposition | null;
+}
+
+// A reviewer's verdict on a finding (2026-11-18): a false positive stops counting toward the person's risk.
+export interface Disposition {
+  status: "false_positive";
+  decided_by: string;
+  reason: string;
+  decided_at: string;
 }
 
 export interface FindingRef {

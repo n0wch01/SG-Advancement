@@ -10,6 +10,7 @@ control plane happens later through the spool and never blocks the agent.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -220,6 +221,9 @@ class Sensor:
         # Outcome model (2026-11-13): tool calls refused by handing the decision to the agent, kept until
         # their result shows up (then the refusal was not applied) or they age out.
         self._refused: dict[str, tuple[list[str], datetime]] = {}
+        # SG-Advance's own wording (2026-11-19): denials a protected resource marked and this daemon's
+        # notices, by digest, so the copy an agent's hook reports back is not judged as external input.
+        self._own_texts: dict[str, tuple[str, datetime]] = {}
         # Rule tuning (2026-11-15): snapshot findings already reported, kept across restarts.
         self._standing: dict[str, str] | None = None
 
@@ -407,6 +411,8 @@ class Sensor:
                 update["labels"] = update.get("labels", event.labels) | tracked  # type: ignore[operator]
             if source := self._source_of(event):
                 update["labels"] = update.get("labels", event.labels) | {"sga_input_source": source}  # type: ignore[operator]
+            if origin := self._own_text_origin(event):
+                update["labels"] = update.get("labels", event.labels) | {"sga_result_origin": origin}  # type: ignore[operator]
             if judged := self._judge(event.model_copy(update={"labels": update.get("labels", event.labels)})):
                 update["labels"] = update.get("labels", event.labels) | judged  # type: ignore[operator]
             refused = self._refused.pop(getattr(event.payload, "call_id", ""), None)
@@ -464,6 +470,38 @@ class Sensor:
             return known[0]
         server = lineage_mod.mcp_server_of(result)  # the gateway knows the server from the result itself
         return f"mcp:{server}" if server else None
+
+    OWN_TEXT_KEEP = timedelta(minutes=30)
+    OWN_TEXT_MAX = 5000
+    OWN_TEXT_ORIGINS = ("control_plane_denial", "sensor_notice")
+
+    @staticmethod
+    def _text_key(text: str) -> str:
+        return hashlib.sha256(text.strip().encode()).hexdigest()
+
+    def remember_own_text(self, text: str, origin: str) -> None:
+        """Called in-process by an enforcement point that produced or verified ``text`` itself: the MCP
+        gateway for a protected resource's marked denial and for its own withheld notice. Never reachable
+        from an event or label (a label claiming it is dropped as sensor-owned)."""
+        if origin not in self.OWN_TEXT_ORIGINS or not text.strip():
+            return
+        now = now_utc()
+        if len(self._own_texts) >= self.OWN_TEXT_MAX:
+            self._own_texts = {k: v for k, v in self._own_texts.items() if now - v[1] < self.OWN_TEXT_KEEP}
+            while len(self._own_texts) >= self.OWN_TEXT_MAX:
+                self._own_texts.pop(next(iter(self._own_texts)))
+        self._own_texts[self._text_key(text)] = (origin, now)
+
+    def _own_text_origin(self, result: AgentEvent) -> str | None:
+        """A failed result whose whole text is one this daemon remembered as its own (exact match)."""
+        payload = result.payload
+        if getattr(payload, "ok", True) or not self._own_texts:
+            return None
+        for text in (getattr(payload, "output_preview", None), getattr(payload, "error", None)):
+            found = self._own_texts.get(self._text_key(text)) if text else None
+            if found and now_utc() - found[1] < self.OWN_TEXT_KEEP:
+                return found[0]
+        return None
 
     REFUSED_KEEP = timedelta(hours=24)
     REFUSED_MAX = 5000

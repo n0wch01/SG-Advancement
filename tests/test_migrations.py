@@ -21,7 +21,7 @@ def test_migrations_produce_exactly_the_models(tmp_path) -> None:
     with db.engine.connect() as conn:
         ctx = MigrationContext.configure(conn, opts={"compare_type": True})
         assert compare_metadata(ctx, Base.metadata) == []
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0013"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0014"
     db.create_all()  # idempotent on every start
 
 
@@ -45,7 +45,7 @@ def test_a_database_from_before_migrations_keeps_its_data(tmp_path) -> None:
     db = Database(url)
     db.create_all()
     with db.engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0013"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0014"
         assert conn.execute(text("SELECT device_id, group_name FROM devices")).all() == [("dev-1", None)]
         assert {"policy_groups", "policy_overrides", "policy_changes"} <= set(inspect(conn).get_table_names())
 
@@ -76,3 +76,26 @@ def test_rbac_upgrade_preserves_referenced_device_events_and_findings(tmp_path) 
         for table in ("events", "findings"):
             assert conn.execute(text(f"SELECT project_id, actor_id FROM {table}")).all() == [(None, None)]
         assert conn.execute(text("SELECT owner_user_id FROM devices")).all() == [(None,)]
+
+
+def test_existing_review_roles_get_finding_triage_and_lose_it_on_downgrade(tmp_path) -> None:
+    """0014: roles seeded before it (soc, security_admin) gain findings.triage; other roles do not."""
+    db = Database(f"sqlite:///{tmp_path / 'roles.db'}")
+    cfg = Config()
+    cfg.set_main_option("script_location", str(Path(db_module.__file__).parent / "migrations"))
+
+    def roles(conn) -> dict[str, list[str]]:
+        import json
+
+        return {r: json.loads(p) for r, p in conn.execute(text("SELECT role_id, permissions FROM roles"))}
+
+    with db.engine.begin() as conn:
+        cfg.attributes["connection"] = conn
+        command.upgrade(cfg, "0013")
+        for role, permissions in (("soc", '["response.manage"]'), ("developer", '["source.write"]')):
+            conn.execute(text("INSERT INTO roles (role_id, permissions) VALUES (:r, :p)"),
+                         {"r": role, "p": permissions})  # fmt: skip
+        command.upgrade(cfg, "0014")
+        assert roles(conn) == {"soc": ["findings.triage", "response.manage"], "developer": ["source.write"]}
+        command.downgrade(cfg, "0013")
+        assert roles(conn) == {"soc": ["response.manage"], "developer": ["source.write"]}

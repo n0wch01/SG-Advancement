@@ -7,6 +7,10 @@ services:
       SGA_ADMIN_TOKEN: ${SGA_TASK_LAB_ADMIN_TOKEN:?use scripts/task_live_lab.py up}
       SGA_AUTO_VERIFY: "0"
       SGA_RESOURCE_ROOT: /data/resources
+      # Lab-only CI: runs agent-pushed code inside this isolated container (docs/git-gateway.md, CI).
+      SGA_RESOURCE_CI_COMMAND: python -m unittest discover -s tests -p test_calc*.py
+      # Docker mounts tmpfs noexec; git would skip a hook there. Only this directory may execute.
+      SGA_GIT_HOOKS_DIR: /run/sga-git-hooks
       SGA_DASHBOARD_DIR: /opt/sga-dashboard
       PYTHONDONTWRITEBYTECODE: "1"
     labels:
@@ -17,7 +21,9 @@ services:
       - task-state:/data
       - ./dashboard/dist:/opt/sga-dashboard:ro
     read_only: true
-    tmpfs: [/tmp]
+    tmpfs:
+      - /tmp
+      - /run/sga-git-hooks:exec,mode=0700
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     networks: [task-net]

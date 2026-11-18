@@ -47,6 +47,10 @@ class Settings:
     # but no sandbox: set it only in an isolated lab, or point it at a real runner.
     resource_ci_command: tuple[str, ...] = ()
     resource_ci_timeout_seconds: int = 120
+    # Where the Git gateway writes its pinned pre-receive hook. It must allow execution: git silently
+    # skips a hook it cannot execute (a noexec /tmp, as Docker mounts tmpfs by default), so every push is
+    # preceded by a probe run of the hook and refused if it does not run.
+    resource_git_hooks_dir: Path | None = None
 
     @property
     def ca_path(self) -> Path:
@@ -81,4 +85,5 @@ class Settings:
             ),
             resource_ci_command=tuple(shlex.split(os.environ.get("SGA_RESOURCE_CI_COMMAND", ""))),
             resource_ci_timeout_seconds=int(os.environ.get("SGA_RESOURCE_CI_TIMEOUT_SECONDS", "120")),
+            resource_git_hooks_dir=Path(d) if (d := os.environ.get("SGA_GIT_HOOKS_DIR")) else None,
         )

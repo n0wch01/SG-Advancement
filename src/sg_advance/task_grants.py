@@ -16,6 +16,9 @@ CONTEXT = b"SG-Advance task grant v1\x00"
 MAX_TOKEN_BYTES = 16384
 # What a task grant can carry (2026-11-18: + PR and CI at the Git gateway). Production deployment stays
 # out: no task grant can carry it, so deploy refs and tags are refused for every agent in this stage.
+# A protected resource's own refusal (authorization, threat policy, invalid input), marked in the MCP result's
+# ``_meta`` so the endpoint's protected-resource gateway can tell the server's wording from external input.
+DENIAL_META = "sg-advance/denial"
 SUPPORTED_ACTIONS = frozenset({"source.read", "source.write", "tests.write", "pr.create", "ci.run"})
 AGENT_PROFILES = {
     "reader": frozenset({"source.read"}),

@@ -43,6 +43,7 @@ from urllib.parse import urlsplit
 
 from ...detect import rule_titles
 from ...schema import AgentEvent, Enforcement, ResponseAction, SensorType
+from ...task_grants import DENIAL_META
 from ..envelope import envelope
 from .base import AdapterContext
 
@@ -421,10 +422,24 @@ class McpGatewayAdapter:
                 "output_preview": _text_of(result if result is not None else msg.get("error")),
             }
             uninspected = "too_large" if len(payload["output_preview"]) > INSPECT_MAX else None
+            if self._marked_denial(name, result):  # the server's own refusal, not external input
+                ctx.sensor.remember_own_text(payload["output_preview"], "control_plane_denial")
             payload["output_bytes"] = len(payload["output_preview"].encode())
             payload["output_preview"] = payload["output_preview"][:INSPECT_MAX]
             return self._input_pep(ctx, name, who, msg, payload, uninspected)
         return msg
+
+    def _marked_denial(self, name: str, result: Any) -> bool:
+        """A refusal the protected resource server marked as its own wording (2026-11-19). Honoured only
+        from a protected resource: its upstream is the control plane, reached with this device's
+        credential. Any other server's mark is ignored."""
+        return (
+            name in self.protected_resources
+            and isinstance(result, dict)
+            and result.get("isError") is True
+            and isinstance(result.get("_meta"), dict)
+            and result["_meta"].get(DENIAL_META) is True
+        )
 
     def _unreadable(
         self, ctx: AdapterContext, name: str, who: dict[str, str], pending: dict[Any, Any]
@@ -477,6 +492,7 @@ class McpGatewayAdapter:
             f"injection ({titles}). Do not retry to get the raw content; "
             "tell the user security can review it."
         )
+        ctx.sensor.remember_own_text(notice, "sensor_notice")  # the agent's hook reports this text back
         return {
             "jsonrpc": "2.0",
             "id": msg.get("id"),

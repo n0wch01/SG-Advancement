@@ -429,6 +429,24 @@ class SecurityApproval(Base):
     request_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class FindingDisposition(Base):
+    """A reviewer's verdict that a finding was a false positive (2026-11-18, user decision).
+
+    The finding itself is never changed or deleted; a false positive stops counting toward the person's
+    risk (``risk.scores``), which otherwise refuses their task grants for 24 hours. One verdict per
+    finding, by an authenticated identity with ``findings.triage`` in the finding's project, never about
+    the reviewer's own finding. Kept in the audit chain."""
+
+    __tablename__ = "finding_dispositions"
+
+    finding_id: Mapped[str] = mapped_column(ForeignKey("findings.finding_id"), primary_key=True)
+    status: Mapped[str] = mapped_column(String(20), index=True)  # "false_positive"
+    user_id: Mapped[str] = mapped_column(String(200), index=True)  # whose finding it is
+    decided_by: Mapped[str] = mapped_column(String(200))
+    reason: Mapped[str] = mapped_column(String(1000))
+    decided_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
 class ApprovalReview(Base):
     """Security's after-the-fact review of a person's own approval (decision 2026-11-14: the person
     approves first, only very high risk is blocked, security reviews). One review per approval

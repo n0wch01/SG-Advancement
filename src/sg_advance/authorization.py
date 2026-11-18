@@ -12,6 +12,7 @@ CONTROL_PERMISSIONS = frozenset(
         "policy.write",
         "audit.read",
         "approvals.review",
+        "findings.triage",
         "response.read",
         "response.manage",
         "sessions.register",
@@ -41,9 +42,12 @@ ROLE_DEFAULTS: dict[str, frozenset[str]] = {
             "policy.write",
             "audit.read",
             "approvals.review",
+            "findings.triage",
         }
     ),
-    "soc": frozenset({"activity.read", "devices.read", "response.read", "response.manage"}),
+    "soc": frozenset(
+        {"activity.read", "devices.read", "response.read", "response.manage", "findings.triage"}
+    ),
     "developer": frozenset(
         {
             "activity.read",

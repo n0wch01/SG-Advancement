@@ -17,18 +17,18 @@ Events and findings are stored already masked by the sensors; nothing here unmas
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select
 
 from ..detect.engine import INDICATOR
 from ..schema import Severity
-from . import campaigns
-from .access import current
+from . import audit_chain, campaigns
+from .access import actor, current, require_permission
 from .auth import DbSession, require_admin
-from .db import Device, EventRow, FindingRow
+from .db import Device, EventRow, FindingDisposition, FindingRow, utcnow
 from .policy_admin import policy_for
 
 router = APIRouter(prefix="/v1/admin", tags=["dashboard"], dependencies=[Depends(require_admin)])
@@ -98,6 +98,26 @@ class FindingDetail(BaseModel):
     # (people who joined after it was raised included); for any other finding, the campaigns it is in.
     campaign_members: list[dict[str, Any]] = []
     campaigns: list[dict[str, Any]] = []
+    disposition: Disposition | None = None
+
+
+class DispositionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["false_positive"]
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class Disposition(BaseModel):
+    status: str
+    decided_by: str
+    reason: str
+    decided_at: datetime
+
+
+def _disposition(d: FindingDisposition | None) -> Disposition | None:
+    if d is None:
+        return None
+    return Disposition(status=d.status, decided_by=d.decided_by, reason=d.reason, decided_at=d.decided_at)
 
 
 @router.get("/whoami", response_model=WhoAmI)
@@ -250,8 +270,51 @@ def finding_detail(
         evidence=[evidence[i] for i in ids if i in evidence],
         session_events=list(reversed(window)),
         session_findings=list(others),
+        disposition=_disposition(db.get(FindingDisposition, finding_id)),
         **_campaign_links(db, row),
     )
+
+
+@router.post("/findings/{finding_id}/disposition", response_model=Disposition)
+def mark_finding(finding_id: str, body: DispositionIn, request: Request, db: DbSession) -> Disposition:
+    """A reviewer marks a finding as a false positive (2026-11-18, user decision). The finding stays as it
+    is; it stops counting toward the person's risk, which otherwise refuses their task grants. Not for the
+    reviewer's own finding (separation of duties); one verdict per finding; kept in the audit chain."""
+    row = db.get(FindingRow, finding_id)  # filtered by the reader's project scope like every read
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "finding not found")
+    require_permission(request, "findings.triage", row.project_id)
+    who = actor(request)
+    if who == row.user_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "a finding about yourself needs another reviewer")
+    if db.get(FindingDisposition, finding_id) is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "already decided")
+    d = FindingDisposition(
+        finding_id=finding_id,
+        status=body.status,
+        user_id=row.user_id,
+        decided_by=who,
+        reason=body.reason,
+        decided_at=utcnow(),
+    )
+    db.add(d)
+    audit_chain.append(
+        db,
+        "finding_disposition",
+        finding_id,
+        {
+            "status": d.status,
+            "by": d.decided_by,
+            "reason": d.reason,
+            "at": d.decided_at,
+            "user_id": d.user_id,
+            "rule_id": row.rule_id,
+            "severity": row.severity,
+            "session_id": row.session_id,
+        },
+    )
+    db.commit()
+    return _disposition(d)  # type: ignore[return-value]
 
 
 def _campaign_links(db: DbSession, row: FindingRow) -> dict[str, list[dict[str, Any]]]:

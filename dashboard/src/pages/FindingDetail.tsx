@@ -1,5 +1,5 @@
-import { usePermission, useGlobalPermission } from "../access";
-import { useState } from "react";
+import { IdentityContext, usePermission, useGlobalPermission } from "../access";
+import { useContext, useState } from "react";
 
 import { ApiError, type Api } from "../api";
 import { Icon } from "../components/Icon";
@@ -22,12 +22,13 @@ import {
   relativeTime,
   timelineHref,
 } from "../format";
-import type { AgentEvent, FindingDetail as Detail, Finding, Role } from "../types";
+import type { AgentEvent, FindingDetail as Detail, Disposition, Finding, Role } from "../types";
 import { useAsync } from "../useAsync";
 import { JudgeChip } from "./Findings";
 
 export function FindingDetail({ api, id, role, query }: { api: Api; id: string; role: Role | null; query: Record<string, string> }) {
   const canRespond = usePermission("response.manage", role);
+  const canTriage = usePermission("findings.triage", role);
   const { data, error, loading } = useAsync(() => api.finding(id), [api, id]);
   return (
     <section className="finding-detail">
@@ -35,6 +36,7 @@ export function FindingDetail({ api, id, role, query }: { api: Api; id: string; 
       {error && <ErrorBox error={error} />}
       {loading && !data && <Loading />}
       {data && <DetailBody d={data} query={query} />}
+      {data && (data.disposition || canTriage) && <Triage key={data.finding.finding_id} api={api} f={data.finding} initial={data.disposition ?? null} canTriage={canTriage} />}
       {data && data.finding.rule_id !== CAMPAIGN_RULE && canRespond && <Respond api={api} f={data.finding} />}
     </section>
   );
@@ -265,6 +267,60 @@ function EventCard({ e, open = false }: { e: AgentEvent; open?: boolean }) {
 
 // Remote response (M11), admin token only. Targets come from the finding: the conversation at the top
 // of its delegation chain (blocking it also blocks the sub-agents), the person, the device it came from.
+// A reviewer marks the finding as a false positive (2026-11-18). The finding stays; it stops counting
+// toward the person's risk, which otherwise refuses their task grants. The server refuses one's own finding.
+function Triage({ api, f, initial, canTriage }: { api: Api; f: Finding; initial: Disposition | null; canTriage: boolean }) {
+  const identity = useContext(IdentityContext);
+  const [done, setDone] = useState<Disposition | null>(initial);
+  const [reason, setReason] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const own = identity?.user_id === f.principal.user_id;
+  const submit = async () => {
+    setMsg(null);
+    try {
+      setDone(await api.markFinding(f.finding_id, { status: "false_positive", reason }));
+    } catch (e) {
+      setMsg(e instanceof ApiError ? e.message : String(e));
+    }
+  };
+  return (
+    <div className="card">
+      <h2>오탐 처리</h2>
+      {done ? (
+        <p className="small">
+          <span className="chip chip-neutral">오탐</span> {done.decided_by} · {formatTime(done.decided_at)} · {done.reason}
+          <br />
+          <span className="muted">Finding은 그대로 남고, {f.principal.user_id}의 위험도 계산에서만 빠집니다.</span>
+        </p>
+      ) : own ? (
+        <p className="muted small">본인에 대한 Finding은 다른 검토자가 처리해야 합니다.</p>
+      ) : canTriage ? (
+        <>
+          <p className="muted small">
+            오탐으로 처리하면 {f.principal.user_id}의 위험도 계산에서 빠집니다(위험 상승이면 새 작업 권한이 거부됨). Finding은 지우지 않으며, 로그인한 계정과 사유가 감사 기록에 남습니다.
+          </p>
+          <div className="filters">
+            <label className="grow">
+              왜 오탐인가요
+              <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="예: 정상 개발 작업의 셸 호출 빈도" />
+            </label>
+          </div>
+          <div className="editor-actions">
+            <button className="primary" disabled={reason.trim() === ""} onClick={() => void submit()}>
+              오탐으로 처리
+            </button>
+          </div>
+        </>
+      ) : null}
+      {msg && (
+        <p className="error" role="alert">
+          {msg}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Respond({ api, f }: { api: Api; f: Finding }) {
   const globalResponse = useGlobalPermission("response.manage");
   const session = globalResponse ? f.agent.root_session_id ?? f.agent.session_id : f.agent.session_id;

@@ -2,6 +2,7 @@
 version: 1
 rules:
   - id: rate-limit-tool-calls
+    version: "2"
     severity: high
     category: resource_abuse
     title: 동일 도구 고빈도 호출 (Rate Limit)
@@ -10,12 +11,30 @@ rules:
     response: abort_session
     tags: ["action-independent", owasp-llm:LLM10, scenario:S3]
     when: {payload.kind: tool.call}
+    # 오탐 수정(2026-11-18, 실제 Claude Code 대표 시나리오, 사용자 결정): 코딩 에이전트는 아래 룰이 30번에서 본다.
+    unless: {agent.type: [claude_code, codex_cli]}
     match:
       type: rate
       window_seconds: 60
       threshold: 5          # 60초 안에 5번째 호출에서 발화
       # group_by 기본값: [endpoint.device_id, agent.session_id, payload.tool]
       # 사용자 단위로 보려면: [principal.user_id, payload.tool]
+
+  - id: rate-limit-coding-agent-calls
+    severity: high
+    category: resource_abuse
+    title: 코딩 에이전트의 동일 도구 폭주
+    message: 코딩 에이전트가 1분 동안 같은 도구를 2초에 한 번꼴로 계속 호출하고 있습니다. 사람·모델 속도로 하는 작업이 아니라 폭주 신호입니다.
+    recommended_action: 세션을 중단하고 프롬프트와 직전 도구 결과를 검토하세요.
+    response: abort_session
+    tags: ["action-independent", owasp-llm:LLM10, scenario:S3]
+    # 2026-11-18 사용자 결정: 여러 단계 개발 작업은 1분에 셸 호출 5번을 쉽게 넘는다(실제 Claude Code 25초에 5번).
+    # 미탐: 1분에 30번 미만으로 서로 다른 명령을 계속 내는 폭주는 멈추지 않는다(같은 인자 반복은 identical-args-loop).
+    when: {payload.kind: tool.call, agent.type: [claude_code, codex_cli]}
+    match:
+      type: rate
+      window_seconds: 60
+      threshold: 30         # 60초 안에 30번째 호출에서 발화
 
   - id: identical-args-loop
     severity: critical

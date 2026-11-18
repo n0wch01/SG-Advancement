@@ -20,6 +20,7 @@ from __future__ import annotations
 import gzip
 import io
 import json
+import logging
 import os
 import shutil
 import stat
@@ -44,6 +45,7 @@ from .db import Device, Project
 from .git_policy import WORK_PREFIXES
 from .task_access import CurrentDevice, online_claims
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/resources/git", tags=["protected resources"])
 MAX_BODY = 32 * 1024 * 1024
 GIT_TIMEOUT = 120
@@ -80,21 +82,46 @@ def repository(request: Request, db: Session, project_id: str) -> Path:
     return root
 
 
+HOOK = (
+    "#!{python}\n"
+    "import os, sys\n"
+    "if os.environ.get('SGA_HOOK_PROBE'):  # the server checks that this file really runs\n"
+    "    print(os.environ['SGA_HOOK_PROBE'])\n"
+    "    sys.exit(0)\n"
+    "from sg_advance.server.git_policy import main\n"
+    "sys.exit(main())\n"
+)
+
+
 def hooks_dir(request: Request) -> Path:
-    """The pre-receive hook the server pins for every push (repository hooks are never used)."""
+    """The pre-receive hook the server pins for every push (repository hooks are never used).
+
+    Git skips a hook it cannot execute without failing the push, so a hook that does not run would
+    accept everything. Before every push the hook is run directly with a nonce; if it does not answer,
+    the push is refused (fail closed) and nothing reaches git."""
     with _hooks_lock:
         path = getattr(request.app.state, "git_hooks_dir", None)
         if path is None or not (Path(path) / "pre-receive").exists():
-            path = Path(tempfile.mkdtemp(prefix="sga-git-hooks-"))
+            parent = request.app.state.settings.resource_git_hooks_dir
+            if parent is not None:
+                Path(parent).mkdir(parents=True, exist_ok=True, mode=0o700)
+            path = Path(tempfile.mkdtemp(prefix="sga-git-hooks-", dir=parent))
             hook = path / "pre-receive"
-            hook.write_text(
-                f"#!{sys.executable}\n"
-                "import sys\nfrom sg_advance.server.git_policy import main\nsys.exit(main())\n",
-                encoding="utf-8",
-            )
+            hook.write_text(HOOK.format(python=sys.executable), encoding="utf-8")
             hook.chmod(stat.S_IRWXU)
             request.app.state.git_hooks_dir = path
-        return Path(path)
+    nonce = uuid4().hex
+    try:
+        probe = subprocess.run(
+            [str(Path(path) / "pre-receive")], capture_output=True, text=True, timeout=30,
+            env=git_env({"SGA_HOOK_PROBE": nonce}),
+        )  # fmt: skip
+        runs = probe.returncode == 0 and probe.stdout.strip() == nonce
+    except (OSError, subprocess.SubprocessError):
+        runs = False
+    if not runs:
+        raise HTTPException(503, "the push policy hook cannot run here; push refused (fail closed)")
+    return Path(path)
 
 
 def run_git(args: list[str], *, cwd: Path, stdin: bytes = b"", env: dict[str, str] | None = None) -> bytes:
@@ -293,13 +320,19 @@ def _push(request: Request, db: Session, device: Device, project_id: str, body: 
     except HTTPException as exc:
         denied(request, db, device, token, exc, payload)
         raise
+    try:
+        hooks = hooks_dir(request)
+    except HTTPException as exc:  # the policy hook would be skipped by git: nothing may be pushed
+        record_operation(db, device, claims, payload, allowed=False,
+                         detail={"operation": "push", "reason": str(exc.detail)})  # fmt: skip
+        raise
     with tempfile.TemporaryDirectory(prefix="sga-push-") as tmp:
         report = Path(tmp) / "report.json"
         policy = json.dumps({"actions": sorted(claims.actions), "paths": list(claims.paths)})
         out = run_git(
             [
                 "-c",
-                f"core.hooksPath={hooks_dir(request)}",
+                f"core.hooksPath={hooks}",
                 "-c",
                 "receive.fsckObjects=true",
                 "-c",
@@ -316,11 +349,14 @@ def _push(request: Request, db: Session, device: Device, project_id: str, body: 
             stdin=body,
             env={"SGA_PUSH_POLICY": policy, "SGA_PUSH_REPORT": str(report)},
         )
-        decided = json.loads(report.read_text(encoding="utf-8")) if report.exists() else []
+        ran = report.exists()
+        decided = json.loads(report.read_text(encoding="utf-8")) if ran else []
     allowed = bool(decided) and all(u["allowed"] for u in decided)
-    record_operation(
-        db, device, claims, payload, allowed=allowed, detail={"operation": "push", "updates": decided[:50]}
-    )
+    detail: dict[str, Any] = {"operation": "push", "updates": decided[:50]}
+    if not ran:  # git ran but the hook left no report: what git did is not known from the hook
+        log.error("git push to %s ran without a push policy report", project_id)
+        detail["hook_report_missing"] = True
+    record_operation(db, device, claims, payload, allowed=allowed, detail=detail)
     return Response(
         out, media_type="application/x-git-receive-pack-result", headers={"Cache-Control": "no-cache"}
     )

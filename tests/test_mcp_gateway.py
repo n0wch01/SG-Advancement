@@ -409,3 +409,41 @@ async def test_an_sse_event_over_the_limit_is_cut_not_passed_unchecked(enrolled:
         await gw.close()
         server.close()
     assert b"row row row" not in got  # the oversized event was cut, not buffered and passed on
+
+
+class DenyingMcp(FakeMcp):
+    """A protected resource refusing every call in its own words, marked as such (resource_mcp.denial)."""
+
+    TEXT = "task authorization denied: grant_revoked"
+
+    def answer(self, msg: dict[str, Any]) -> dict[str, Any]:
+        if msg.get("method") != "tools/call":
+            return super().answer(msg)
+        result = {"content": [{"type": "text", "text": self.TEXT}], "isError": True,
+                  "_meta": {"sg-advance/denial": True}}  # fmt: skip
+        return {"jsonrpc": "2.0", "id": msg["id"], "result": result}
+
+
+@pytest.mark.parametrize("protected", [True, False])
+async def test_a_protected_resources_marked_denial_is_remembered_as_its_own(enrolled, protected):
+    """2026-11-19: the classifier scored the server's refusal 1.0. The mark is honoured only from a
+    protected resource (the control plane, reached with this device's credential), and the text is
+    remembered so the copy the agent's hook reports back is not judged as external input either."""
+    upstream = DenyingMcp(sse=False)
+    server = await upstream.start()
+    gateway = McpGatewayAdapter(
+        "127.0.0.1:0", {"repo": f"http://127.0.0.1:{upstream.port}/mcp"},
+        credentials={"repo": "Bearer device-test"},
+        protected_resources=frozenset({"repo"}) if protected else frozenset(),
+    )
+    await gateway.start(AdapterContext(enrolled, "test", "pc"))
+    try:
+        _, reply = await rpc(gateway.port, "/mcp/repo", call(2, "query_customers", name="x"))
+        assert reply["result"]["content"][0]["text"] == DenyingMcp.TEXT  # passed on unchanged
+    finally:
+        await gateway.close()
+        server.close()
+    result = next(e for e in spooled(enrolled, "event") if e["payload"]["kind"] == "tool.result")
+    origin = result["labels"].get("sga_result_origin")
+    assert origin == ("control_plane_denial" if protected else None)
+    assert (enrolled._text_key(DenyingMcp.TEXT) in enrolled._own_texts) is protected

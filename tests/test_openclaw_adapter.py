@@ -430,7 +430,10 @@ async def test_s2_injection_then_exfil_via_chat_history(gateway, enrolled: Senso
         )
         await until(lambda: gw.aborts())
         assert gw.aborts()[0] == {"key": KEY, "runId": "r2"}
-        assert "injection-then-sensitive-action" in {f["rule_id"] for f in queued_findings(enrolled)}
+        # the finding is recorded after the abort's reply, so wait for it rather than racing the adapter
+        await until(
+            lambda: any(f["rule_id"] == "injection-then-sensitive-action" for f in queued_findings(enrolled))
+        )
     finally:
         task.cancel()
 
