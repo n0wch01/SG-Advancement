@@ -14,12 +14,14 @@ import sys
 from pathlib import Path
 
 from sg_advance.schema import AgentEvent, Finding
+from sg_advance.task_grants import TaskClaims
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "schemas"
 MODELS = {
     "agent-event.v1.json": AgentEvent,
     "finding.v1.json": Finding,
+    "task-grant.v1.json": TaskClaims,
 }
 
 

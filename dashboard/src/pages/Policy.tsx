@@ -1,3 +1,4 @@
+import { usePermission } from "../access";
 import { useState } from "react";
 
 import { ApiError, type Api } from "../api";
@@ -17,7 +18,7 @@ export function Policy({ api, role, query }: { api: Api; role: Role | null; quer
   const scopes = useAsync(() => api.policyScopes(), [api, tick]);
   const rules = useAsync(() => api.policyRules(scope), [api, scope, tick]);
   const log = useAsync(() => api.policyChanges(), [api, tick]);
-  const admin = role === "admin";
+  const admin = usePermission("policy.write", role);
   const reload = () => setTick((t) => t + 1);
   const current = scopes.data?.scopes.find((s) => s.name === scope);
 
@@ -202,7 +203,7 @@ function Editor({ api, scope, r, onDone }: { api: Api; scope: string; r: PolicyR
   const [response, setResponse] = useState<string>(mine.response ?? "");
   const [allow, setAllow] = useState<string[]>(mine.allow ?? below.allow ?? []);
   const [allowDraft, setAllowDraft] = useState((mine.allow ?? below.allow ?? []).join("\n"));
-  const [by, setBy] = useState("");
+  const by = "authenticated";
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -278,10 +279,7 @@ function Editor({ api, scope, r, onDone }: { api: Api; scope: string; r: PolicyR
         )}
       </div>
       <div className="editor-fields">
-        <label>
-          누가
-          <input value={by} onChange={(e) => setBy(e.target.value)} placeholder="예: secops@corp.test" required />
-        </label>
+        <p className="muted small">로그인한 계정으로 기록됩니다.</p>
         <label className="wide">
           왜 (변경 이력에 남습니다)
           <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="예: 데이터팀은 운영 DB 접근이 잦아 차단으로 올림" required />
@@ -293,14 +291,14 @@ function Editor({ api, scope, r, onDone }: { api: Api; scope: string; r: PolicyR
         </p>
       )}
       <div className="editor-actions">
-        <button type="button" className="primary" disabled={busy || !by.trim() || !reason.trim()} onClick={() => void save()}>
+        <button type="button" className="primary" disabled={busy || !reason.trim()} onClick={() => void save()}>
           저장
         </button>
         {(team ? r.group_override : r.common_override) && (
           <button
             type="button"
             className="link"
-            disabled={busy || !by.trim() || !reason.trim()}
+            disabled={busy || !reason.trim()}
             onClick={() => void run(() => api.clearOverride({ scope, rule_id: r.id, by, reason }))}
           >
             이 범위의 변경 취소
@@ -314,7 +312,7 @@ function Editor({ api, scope, r, onDone }: { api: Api; scope: string; r: PolicyR
 function NewGroup({ api, onDone }: { api: Api; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [by, setBy] = useState("");
+  const by = "authenticated";
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   if (!open)
@@ -345,10 +343,7 @@ function NewGroup({ api, onDone }: { api: Api; onDone: () => void }) {
         팀 이름
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="예: data-team" required />
       </label>
-      <label>
-        누가
-        <input value={by} onChange={(e) => setBy(e.target.value)} required />
-      </label>
+      <p className="muted small">로그인한 계정으로 기록됩니다.</p>
       <label>
         왜
         <input value={reason} onChange={(e) => setReason(e.target.value)} required />
@@ -368,7 +363,7 @@ function NewGroup({ api, onDone }: { api: Api; onDone: () => void }) {
 
 function Devices({ api, admin, groups, tick, onDone }: { api: Api; admin: boolean; groups: string[]; tick: number; onDone: () => void }) {
   const { data, error } = useAsync(() => api.devices(), [api, tick]);
-  const [by, setBy] = useState("");
+  const by = "authenticated";
   const [reason, setReason] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   if (error) return <ErrorBox error={error} />;
@@ -396,7 +391,7 @@ function Devices({ api, admin, groups, tick, onDone }: { api: Api; admin: boolea
                     value={d.group ?? "common"}
                     onChange={async (e) => {
                       setMsg(null);
-                      if (!by.trim() || !reason.trim()) {
+                      if (!reason.trim()) {
                         setMsg("아래에 누가·왜를 먼저 적어 주세요.");
                         return;
                       }
@@ -425,10 +420,7 @@ function Devices({ api, admin, groups, tick, onDone }: { api: Api; admin: boolea
       </table>
       {admin && (
         <div className="filters">
-          <label>
-            누가
-            <input value={by} onChange={(e) => setBy(e.target.value)} />
-          </label>
+          <p className="muted small">로그인한 계정으로 기록됩니다.</p>
           <label>
             왜
             <input value={reason} onChange={(e) => setReason(e.target.value)} />

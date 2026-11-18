@@ -15,7 +15,8 @@ import pytest
 from sg_advance.sensor import Sensor, hook
 from sg_advance.sensor.adapters import AdapterContext
 from sg_advance.sensor.adapters.openclaw_config import posture
-from sg_advance.sensor.plugin_api import CLAUDE_CODE_HOOK, OPENCLAW_PLUGIN, judge, judge_event
+from sg_advance.sensor.decision import CLAUDE_CODE_HOOK, judge_event
+from sg_advance.sensor.plugin_api import OPENCLAW_PLUGIN, judge
 from sg_advance.shorthand import build_event
 
 AGENTS = {

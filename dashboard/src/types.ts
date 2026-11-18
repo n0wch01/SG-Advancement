@@ -1,7 +1,55 @@
 // The slice of the SG-Advance wire schema (schemas/*.v1.json) the dashboard reads.
 
 export type Severity = "info" | "low" | "medium" | "high" | "critical";
-export type Role = "admin" | "viewer";
+export type Role = "admin" | "viewer" | "member";
+
+export interface Identity {
+  role: Role;
+  user_id: string;
+  display_name: string;
+  permissions: string[];
+  projects: string[];
+  bindings: { role_id: string; project_id: string | null; environment: string; permissions: string[] }[];
+}
+
+export interface Project {
+  project_id: string;
+  name: string;
+  environments: string[];
+  disabled_at: string | null;
+}
+
+export interface SessionBinding {
+  binding_id: string;
+  device_id: string;
+  agent_type: string;
+  session_id: string;
+  project_id: string;
+  user_id: string;
+  revoked_at: string | null;
+}
+
+export interface TaskClaims {
+  grant_id: string; user_id: string; device_id: string; binding_id: string;
+  agent_type: string; session_id: string; project_id: string; environment: string; agent_profile: string;
+  actions: string[]; paths: string[]; issued_at: string; expires_at: string; policy_version: string;
+  parent_id: string | null;
+}
+
+export interface TaskGrant {
+  grant_id: string; claims: TaskClaims; revoked_at: string | null;
+}
+
+export interface IdentityAdministration {
+  users: { user_id: string; display_name: string; disabled_at: string | null }[];
+  teams: { team_id: string; name: string }[];
+  memberships: { user_id: string; team_id: string }[];
+  roles: { role_id: string; permissions: string[] }[];
+  bindings: { binding_id: string; user_id: string | null; team_id: string | null; role_id: string; project_id: string | null; environment: string }[];
+  tokens: { token_id: string; user_id: string; expires_at: string; revoked_at: string | null }[];
+  devices: { device_id: string; owner_user_id: string | null }[];
+  permissions: string[];
+}
 
 export interface Endpoint {
   device_id: string;

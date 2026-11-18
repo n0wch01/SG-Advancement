@@ -14,7 +14,7 @@ from sg_advance.sensor import Sensor, hook
 from sg_advance.sensor.adapters import AdapterContext
 from sg_advance.sensor.adapters.mcp_gateway import McpGatewayAdapter
 from sg_advance.sensor.core import Sensor as CoreSensor
-from sg_advance.sensor.plugin_api import CLAUDE_CODE_HOOK, judge_event
+from sg_advance.sensor.decision import CLAUDE_CODE_HOOK, judge_event
 from test_mcp_gateway import FakeMcp, call, rpc
 
 PHONE, RRN, EMAIL = "010-2481-3579", "900101-1234567", "kim.minsu@example.test"

@@ -22,10 +22,32 @@
 | OpenClaw | `openclaw_plugin` (게이트웨이 플러그인) + `openclaw_gateway` (WS 관측) | **사전, 모든 툴**(`before_tool_call`에서 block). Codex 런타임 툴도 hook 중계로 차단. WS는 관측·탐지만(결정 B) | 플러그인이 `requireApproval`로 OpenClaw 승인 창에 넘긴다(한 번 허용·거절) | WS는 SG 코드 이전, [from-sg.md](from-sg.md). 상세 [sensor.md](sensor.md) |
 | Claude Code | `claude_code_hook` (`sga-hook`) + `claude_code_config` (hook 위치 점검) | **사전, 모든 툴**(PreToolUse에서 deny) | PreToolUse가 `ask`를 돌려 Claude Code의 확인 창으로 넘긴다. 그 툴의 PostToolUse가 오면 승인으로 기록 | 관리 설정(managed-settings.d)으로 강제, 권한 없으면 사용자 설정 + 점검 룰. M6 ✅ |
 | Gemini CLI | - | 미구현(선택 과제 X1) | - | 설치·MCP 설정은 섀도 AI 스캔으로 찾는다(`ai-agent-outside-control`, `mcp-server-bypasses-gateway`) |
-| Codex CLI | - | 미구현(선택 과제 X1). OpenClaw의 Codex 런타임으로 도는 툴은 플러그인이 막는다 | - | 설치·MCP 설정은 섀도 AI 스캔으로 찾는다 |
+| Codex CLI | `codex_cli_hook` (`sga-codex-hook`, 사용자 설정의 `hooks.json`) | **사전**(PreToolUse에서 deny: 셸, `apply_patch`, MCP). Codex `/hooks`에서 사용자가 신뢰해야 동작 | Codex는 사람의 답을 hook에 알려 주지 않아 승인 판정이면 **거부**(2026-11-17 사용자 결정) | 실제 Codex 0.167.0 확인, [codex-cli.md](codex-cli.md) |
 | LangGraph | - | 미구현(M10 미룸) | - | 시나리오 S3(denial of wallet)는 이벤트 재생으로만 보인다 |
 | 모든 MCP 클라이언트 | `mcp_proxy` (센서의 MCP 게이트웨이, 중앙 MCP 게이트웨이) | **사전**(`tools/call`을 서버에 보내기 전에 거부, 변조 툴은 목록에서 숨김). 사내 MCP 서버로 가는 유일한 길(중앙, 자격증명 보관) | 사람에게 물을 수 없어 승인 판정이면 **거부**(2026-11-17). 확인된 허용 없이는 서버로 보내지 않는다 | 에이전트 종류와 무관한 범용 경로. M8 ✅ |
 | 팀 게이트웨이의 에이전트 | `egress_proxy` | 사전(서명된 정책의 허용 도메인 밖은 차단) | 묻지 않고 차단 | 에이전트 망을 격리하고 이 프록시로만 내보낸다. LLM 비용 한도용 `llm_proxy`는 미구현 |
+
+### 새 집행 지점 붙이기 (2026-11-18 정리)
+
+판정 경로는 에이전트 이름을 모른다. 집행 지점은 **할 수 있는 일**로 설명한다.
+
+| 모듈 | 하는 일 |
+|---|---|
+| `sensor/decision.py` | `EnforcementPoint`(사람에게 물을 수 있나, 실행 경로 위인가), `approval_channel`, `point_response`, `judge_event`, 승인-실행 대조, 결과 없는 승인 = 거부 기록, 대화 차단 |
+| `sensor/local_api.py` | PC 안의 로컬 판정 API(유닉스 소켓 0600, Windows는 루프백 TCP + 토큰). 공통 작업은 `event` 하나. 다른 작업은 통합이 등록한다 |
+| `sensor/approvals.py` | 사람의 답을 기다리는 승인 요청(모든 지점 공통) |
+| `sensor/adapters/base.py` `AdapterContext` | 공통 실행 맥락. 제품 이름이 들어간 필드는 없다. 에이전트별 상태는 `extensions`에 둔다 |
+| `sensor/plugin_api.py`, `adapters/openclaw_state.py` | OpenClaw 플러그인 프로토콜(`hello`·`bye`·`tool_call`·`resolution`)과 그 상태(선택 기능) |
+
+새 에이전트(지점)를 붙이는 순서:
+1. 에이전트 입력을 `AgentEvent` v1으로 바꾼다(hook이 만들거나 게이트웨이가 만든다). 툴 입력 지문(`sga_input_digest`)을 실행 전후에 붙이면 승인-실행 대조가 동작한다.
+2. `EnforcementPoint`를 선언한다.
+   - 그 지점이 사람에게 물을 수 있나(`supports_approval`), 실행 경로 위에 있나(`in_path`)를 정한다.
+   - 물을 수 없는 지점은 승인 판정이 자동으로 거부가 된다.
+3. 이벤트를 로컬 API의 `event` 작업으로 보내거나(`decision.judge_event`), 게이트웨이 안에서 같은 함수를 부른다.
+4. 응답(허용·거부·승인·가림)을 에이전트의 형식으로 바꾼다. 실제로 적용됐는지 알 수 없으면 `unconfirmed`로 남긴다.
+5. 데몬이 없을 때는 캐시된 서명 정책으로 같은 판정을 하고(`hook.degraded`), 그것도 없으면 막는다(fail closed).
+6. 에이전트 고유 상태가 필요하면 `ctx.extensions`에 자기 이름으로 둔다. 공통 모듈은 그것을 import하지 않는다(`tests/test_decision.py`가 확인).
 
 ### 현재 구현: OpenClaw (M5c 기준)
 

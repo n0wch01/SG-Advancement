@@ -126,6 +126,14 @@ button.link { background: none; border: 0; color: var(--accent); padding: 0; }
 
 .card { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--line); padding: 22px; margin-bottom: 20px; min-width: 0; overflow-wrap: anywhere; }
 .card.flush { padding: 0; overflow-x: auto; }
+.access-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 20px; margin-bottom: 20px; align-items: start; }
+.access-grid > .card { margin-bottom: 0; }
+.access-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 14px; }
+.access-form label { display: grid; gap: 5px; font-size: 13px; color: var(--ink-2); }
+.access-form input, .access-form select { max-width: 100%; width: 100%; }
+.access-form .permission-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.access-form .permission-options label { display: flex; align-items: center; gap: 8px; }
+.access-form .permission-options input { width: auto; }
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 20px; }
 .grid-2 > .card { margin-bottom: 0; }
 .grid-2 { margin-bottom: 20px; }

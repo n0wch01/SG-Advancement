@@ -9,12 +9,11 @@ loopback TCP endpoint on Windows), the same API the OpenClaw plugin uses. Answer
   (Claude Code's own permission prompt); allow → no output, so Claude Code's normal permission rules
   still apply (a hook never widens what the person allowed).
 - ``prompt.user`` (UserPromptSubmit): a blocking verdict stops the prompt (exit 2).
-- everything else: recorded, never blocks.
+- ``tool.result`` (PostToolUse): input-guard hits request model-facing result replacement.
 
 Daemon unreachable: the cached signed policy judges here (stateless rules only) and the event is
-spooled with ``labels.sga_verdict = degraded``. No policy either: read-only tools pass, anything
-else goes to Claude Code's prompt (``ask``), the same risk tiers as the OpenClaw plugin.
-The hook settings use ``onFailure: block`` for PreToolUse, so a crashed or missing hook blocks.
+spooled with ``labels.sga_verdict = degraded``. No policy either: read-only tools pass and other
+calls are denied. Native hook failures have product-specific limits; see docs/claude-code-live.md.
 """
 
 from __future__ import annotations
@@ -59,6 +58,32 @@ def _provider(tool: str) -> dict[str, Any]:
 
 def _text(value: Any) -> str:
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+
+
+def inspection_text(tool: str, value: Any) -> str:
+    """Inspect MCP text content rather than its transport wrapper. Unknown fields stay inspectable.
+
+    Native clients wrap the same text differently from the gateway. Only the exact text-only MCP
+    shapes are unwrapped; JSON inside a text block is still passed intact to the record-aware judge.
+    The original native response remains unchanged for result replacement and audit digests.
+    """
+    content = value
+    if tool.startswith("mcp__"):
+        if (
+            isinstance(value, dict)
+            and set(value) <= {"content", "isError"}
+            and ("isError" not in value or isinstance(value["isError"], bool))
+        ):
+            content = value.get("content")
+        if isinstance(content, list) and content and all(
+            isinstance(block, dict)
+            and set(block) == {"type", "text"}
+            and block["type"] == "text"
+            and isinstance(block["text"], str)
+            for block in content
+        ):
+            return "\n".join(block["text"] for block in content)
+    return _text(value)
 
 
 def _preview(value: Any) -> str:
@@ -190,7 +215,7 @@ def hook_event(inp: dict[str, Any], *, user_id: str, hostname: str | None) -> di
     elif name in ("PostToolUse", "PostToolUseFailure"):
         ok = name == "PostToolUse"
         response = inp.get("tool_response") if ok else inp.get("error", inp.get("tool_response"))
-        full = _text(response) if response is not None else None
+        full = inspection_text(tool, response) if response is not None else None
         payload = {
             "kind": "tool.result",
             "call_id": call_id,
@@ -226,7 +251,7 @@ def hook_event(inp: dict[str, Any], *, user_id: str, hostname: str | None) -> di
     if payload["kind"] in ("tool.call", "tool.result") and "tool_input" in inp:
         labels["sga_input_digest"] = input_digest(inp["tool_input"])
     full_result = payload.get("output_preview") if payload["kind"] == "tool.result" else None
-    if full_result is not None and len(_text(inp.get("tool_response"))) > INSPECT_MAX:
+    if full_result is not None and full is not None and len(full) > INSPECT_MAX:
         labels["sga_result_uninspected"] = "too_large"
     if isinstance(inp.get("permission_mode"), str):
         labels["claude_code.permission_mode"] = inp["permission_mode"]
@@ -302,20 +327,21 @@ def degraded_response(verdict: Any) -> tuple[dict[str, Any], Any]:
     """The answer from the cached policy: the same channels as the daemon (improvement 2026-11-15). A
     prompt with a blocking verdict is blocked, as ``judge_event`` does."""
     from ..detect import rule_titles
-    from .plugin_api import (
+    from .decision import (
         _BLOCKING,
-        CLAUDE_CODE_HOOK,
         approval_channel,
+        hook_point,
         input_guard_hits,
-        plugin_response,
+        point_response,
         withheld_response,
     )
 
     kind = verdict.event.kind.value
+    point = hook_point(verdict.event)
     if kind == "tool.call":
-        return plugin_response(verdict, CLAUDE_CODE_HOOK, approval_channel(verdict, CLAUDE_CODE_HOOK))
+        return point_response(verdict, point, approval_channel(verdict, point))
     if kind == "tool.result" and (hits := input_guard_hits(verdict)):
-        return withheld_response(CLAUDE_CODE_HOOK, hits)
+        return withheld_response(point, hits)
     if kind == "prompt.user" and verdict.action in _BLOCKING:
         reason = f"SG-Advance: {rule_titles(verdict.hits)}"
         return {"ok": True, "decision": "block", "reason": reason, "rules": verdict.rule_ids}, None

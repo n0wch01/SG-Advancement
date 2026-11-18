@@ -84,20 +84,20 @@ def score_of(found: list[tuple[str, datetime]], now: datetime) -> int:
     return min(SCORE_MAX, round(total))
 
 
-def scores(db: Session, now: datetime | None = None) -> dict[str, PersonRisk]:
+def scores(db: Session, now: datetime | None = None, *, verified_only: bool = False) -> dict[str, PersonRisk]:
     now = now or utcnow()
     since = now - WINDOW
-    rows = db.execute(
-        select(FindingRow.user_id, FindingRow.severity, FindingRow.ts, FindingRow.doc).where(
-            FindingRow.ts >= since, FindingRow.severity.in_(("critical", "high"))
-        )
-    ).all()
-    evidence = {i for r in rows for i in r.doc.get("evidence_event_ids") or ()}
-    actions = set(
-        db.scalars(
-            select(EventRow.event_id).where(EventRow.event_id.in_(evidence), EventRow.kind.in_(ACTION_KINDS))
-        )
+    q = select(FindingRow.user_id, FindingRow.severity, FindingRow.ts, FindingRow.doc).where(
+        FindingRow.ts >= since, FindingRow.severity.in_(("critical", "high"))
     )
+    if verified_only:
+        q = q.where(FindingRow.actor_id == FindingRow.user_id)
+    rows = db.execute(q).all()
+    evidence = {i for r in rows for i in r.doc.get("evidence_event_ids") or ()}
+    events = select(EventRow.event_id).where(EventRow.event_id.in_(evidence), EventRow.kind.in_(ACTION_KINDS))
+    if verified_only:
+        events = events.where(EventRow.actor_id == EventRow.user_id)
+    actions = set(db.scalars(events))
     found: dict[str, list[tuple[str, datetime]]] = {}
     for user, sev, ts, doc in rows:
         if user and user != "unknown" and any(i in actions for i in doc.get("evidence_event_ids") or ()):

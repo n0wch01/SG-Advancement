@@ -24,7 +24,7 @@ from sg_advance.schema import AgentEvent, Enforcement
 from sg_advance.sensor import Sensor, hook
 from sg_advance.sensor.adapters import AdapterContext
 from sg_advance.sensor.adapters.mcp_gateway import McpGatewayAdapter, read_head
-from sg_advance.sensor.plugin_api import CLAUDE_CODE_HOOK, judge_event
+from sg_advance.sensor.decision import CLAUDE_CODE_HOOK, judge_event
 from sg_advance.server import actions as server_actions
 from sg_advance.server.db import RemoteAction, utcnow
 from test_mcp_gateway import FakeMcp, call, rpc

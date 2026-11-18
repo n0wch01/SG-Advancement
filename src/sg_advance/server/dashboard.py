@@ -26,6 +26,7 @@ from sqlalchemy import func, or_, select
 from ..detect.engine import INDICATOR
 from ..schema import Severity
 from . import campaigns
+from .access import current
 from .auth import DbSession, require_admin
 from .db import Device, EventRow, FindingRow
 from .policy_admin import policy_for
@@ -38,6 +39,11 @@ SEVERITY_ORDER = [str(s) for s in Severity]  # low → critical
 
 class WhoAmI(BaseModel):
     role: str
+    user_id: str
+    display_name: str
+    permissions: list[str]
+    projects: list[str]
+    bindings: list[dict[str, Any]]
 
 
 class RuleCount(BaseModel):
@@ -96,7 +102,16 @@ class FindingDetail(BaseModel):
 
 @router.get("/whoami", response_model=WhoAmI)
 def whoami(request: Request) -> WhoAmI:
-    return WhoAmI(role=request.state.role)
+    from ..authorization import PERMISSIONS
+
+    identity = current(request)
+    return WhoAmI(
+        role=request.state.role, user_id=identity.user_id, display_name=identity.display_name,
+        permissions=sorted(p for p in PERMISSIONS if identity.has_any(p)),
+        projects=sorted({a.project_id for a in identity.assignments if a.project_id is not None}),
+        bindings=[{"role_id": a.role_id, "project_id": a.project_id, "environment": a.environment,
+                   "permissions": sorted(a.permissions)} for a in identity.assignments],
+    )
 
 
 def _max_severity(values: list[str]) -> str:

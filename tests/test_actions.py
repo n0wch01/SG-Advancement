@@ -22,7 +22,8 @@ import yaml
 from sg_advance.sensor import Sensor, hook
 from sg_advance.sensor.actions import KINDS, analyze_call, analyze_shell
 from sg_advance.sensor.adapters import AdapterContext
-from sg_advance.sensor.plugin_api import LocalApiServer, judge_event
+from sg_advance.sensor.decision import judge_event
+from sg_advance.sensor.local_api import LocalApiServer
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -415,3 +416,31 @@ def test_an_unreadable_command_after_external_input_asks_the_person(enrolled: Se
         rows = [json.loads(d) for (d,) in db.execute("SELECT doc FROM outbox WHERE kind='finding'")]
     hits = [r for r in rows if r["rule_id"] == "unparsed-command-after-external-input"]
     assert len(hits) == 1 and hits[0]["agent"]["session_id"] == "s1"
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+@pytest.mark.parametrize("template", [
+    "f() {{ r''m -r {target}; }}; f",
+    "case x in x) r''m -r {target};; esac",
+])
+def test_hidden_control_flow_after_external_input_preserves_files(
+    enrolled: Sensor, tmp_path: Path, template: str
+) -> None:
+    from test_external_input import fetch, pre
+
+    ctx = AdapterContext(enrolled, "bob", "pc")
+    control = _victim(tmp_path / "control")
+    raw = template.format(target=shlex.quote(str(control)))
+    assert subprocess.run(["bash", "-c", raw], check=False).returncode == 0
+    assert not control.exists()
+
+    protected = _victim(tmp_path / "protected")
+    command = template.format(target=shlex.quote(str(protected)))
+    assert judge_event(ctx, pre("Bash", 1, command=command))["decision"] == "allow"
+    fetch(ctx, 2, "An ordinary setup guide.")
+    verdict = judge_event(ctx, pre("Bash", 3, command=command))
+    if verdict["decision"] == "allow":
+        subprocess.run(["bash", "-c", command], check=True)
+    assert verdict["decision"] == "approve"
+    assert "unparsed-command-after-external-input" in verdict["rules"]
+    assert (protected / "sub" / "keep.txt").exists()

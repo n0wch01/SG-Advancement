@@ -34,8 +34,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from . import audit_chain
+from .access import actor, current, require_permission
 from .auth import DbSession, require_admin, require_device
-from .db import Device, RemoteAction, utcnow
+from .db import AgentSessionBinding, Device, FindingRow, RemoteAction, utcnow
 
 ACTIONS = (
     "block_session",
@@ -116,20 +117,39 @@ def _out(a: RemoteAction) -> ActionOut:
 
 @admin.post("/actions", response_model=ActionOut, status_code=status.HTTP_201_CREATED)
 def create_action(body: ActionCreate, request: Request, db: DbSession) -> ActionOut:
-    if request.state.role != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "remote response needs the admin token")
+    identity = current(request)
+    project_id = None
+    if not identity.allows("response.manage"):
+        if body.action not in {"block_session", "unblock_session"}:
+            raise HTTPException(403, "scoped response only supports a registered session block/unblock")
+        bindings = list(db.scalars(select(AgentSessionBinding).where(
+            AgentSessionBinding.device_id == body.device_id,
+            AgentSessionBinding.session_id == body.target, AgentSessionBinding.revoked_at.is_(None),
+            AgentSessionBinding.project_id.in_(identity.scope("response.manage") or ()),
+        )))
+        if len(bindings) != 1:
+            raise HTTPException(404, "unambiguous registered session required")
+        project_id = bindings[0].project_id
+        require_permission(request, "response.manage", project_id)
+    if body.finding_id is not None:
+        finding = db.get(FindingRow, body.finding_id)
+        if finding is None or finding.device_id != body.device_id:
+            raise HTTPException(404, "finding not found")
+        if project_id is not None and (finding.project_id != project_id or finding.session_id != body.target):
+            raise HTTPException(403, "finding is outside the target session")
     if db.get(Device, body.device_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
     row = RemoteAction(
         id=uuid4().hex,
         device_id=body.device_id,
+        project_id=project_id,
         action=body.action,
         target=body.target,
         finding_id=body.finding_id,
         status="pending",
         attempts=0,
         created_at=utcnow(),
-        created_by=body.by,
+        created_by=actor(request),
         reason=body.reason,
     )
     db.add(row)

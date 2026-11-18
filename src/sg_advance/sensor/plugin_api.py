@@ -1,4 +1,4 @@
-"""Local verdict API for in-process enforcement points (OpenClaw plugin, later Claude Code hooks).
+"""The OpenClaw gateway plugin protocol (optional integration; transport: ``local_api``).
 
 The OpenClaw gateway plugin calls this from ``before_tool_call`` *before* a tool runs::
 
@@ -17,6 +17,9 @@ Protocol: one JSON object per line, one response line per request.
     (the security team's pre-approval hold was removed 2026-11-17: four decisions only, allow / approve
     by the person / deny / mask).
 
+Agent-neutral judging, response mapping and the approval audit are in ``decision`` (2026-11-18); this
+module only translates the plugin's requests and keeps the plugin's own state (``openclaw(ctx)``).
+
 The daemon judges with its stateful engine (sequence/rate rules see every adapter's events) and
 records the event with the enforcement the plugin is about to apply. When the daemon is down the
 plugin runs ``sga-sensor evaluate`` instead: same request on stdin, stateless judgement from
@@ -29,33 +32,22 @@ must carry ``"auth": token``; anything else on the PC that can reach loopback bu
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import json
 import logging
-import os
 import time
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..detect import Verdict, rule_titles
-from ..redact import redact_text
-from ..schema import AgentEvent, Enforcement, EventKind, ResponseAction, SensorType
-from ..schema.events import ApprovalResolution
+from ..detect import Verdict
+from ..schema import AgentEvent, Enforcement, ResponseAction, SensorType
 from .adapters.base import AdapterContext
 from .adapters.openclaw_people import OpenClawPeople
+from .adapters.openclaw_state import openclaw
+from .decision import EnforcementPoint, approval_channel, pending_for, point_response
 from .envelope import envelope
-from .response import BLOCKED_SESSIONS
+from .local_api import LocalApiServer
 
 log = logging.getLogger(__name__)
-
-SOCKET_NAME = "sga.sock"
-_BLOCKING = {ResponseAction.BLOCK, ResponseAction.ABORT_SESSION, ResponseAction.QUARANTINE}
-DIGEST_LABEL = "sga_input_digest"  # the hook's fingerprint of a tool's input (hook.input_digest)
-MISMATCH_LABEL = "sga_approval_mismatch"  # set only by judge_event: the approved input is not what ran
-
 
 # ── request → AgentEvent ────────────────────────────────────────────────────
 
@@ -126,170 +118,15 @@ def _plugin_envelope(
     )
 
 
-_SEVERITY_RANK = ["info", "low", "medium", "high", "critical"]
-
-
-def max_severity(verdict: Verdict) -> str | None:
-    sev = [str(h.rule.severity) for h in verdict.hits]
-    return max(sev, key=_SEVERITY_RANK.index) if sev else None
-
-
-@dataclass(frozen=True)
-class EnforcementPoint:
-    """Who applies the verdict before the tool runs, for the enforcement record."""
-
-    sensor: SensorType
-    name: str  # "openclaw plugin", "claude code hook"
-    asks: str  # where a require_approval verdict is answered
-    # The point itself sits between the agent and the side effect (it does not forward what it
-    # refuses), so a refusal is confirmed on the spot. Hooks and plugins hand the decision to the agent:
-    # unconfirmed until evidence arrives (a result for a refused call contradicts it).
-    in_path: bool = False
-
-    def outcome(self, in_path_evidence: str) -> dict[str, str]:
-        if self.in_path:
-            return {"confirmation": "confirmed", "evidence": in_path_evidence}
-        return {"confirmation": "unconfirmed", "evidence": f"{self.asks} applies the decision"}
-
-
 OPENCLAW_PLUGIN = EnforcementPoint(SensorType.OPENCLAW_PLUGIN, "openclaw plugin", "OpenClaw")
-CLAUDE_CODE_HOOK = EnforcementPoint(SensorType.CLAUDE_CODE_HOOK, "claude code hook", "Claude Code")
-MCP_GATEWAY = EnforcementPoint(
-    SensorType.MCP_PROXY, "mcp gateway", "the agent's own approval prompt", in_path=True
-)
-
-
-# Input PEP (KISA agentic AI ZT guide 2.4, P6-7): tool results with injection findings this severe never
-# reach the model at the points that can rewrite a result (MCP gateway, Claude Code PostToolUse).
-INPUT_GUARD_SEVERITIES = frozenset({"high", "critical"})
-
-
-def input_guard_hits(verdict: Verdict) -> list[Any]:
-    return [
-        h for h in verdict.hits
-        if str(h.rule.category) == "prompt_injection" and str(h.rule.severity) in INPUT_GUARD_SEVERITIES
-    ]  # fmt: skip
-
-
-def withheld_response(point: EnforcementPoint, hits: list[Any]) -> tuple[dict[str, Any], Enforcement]:
-    titles = rule_titles(hits)
-    return {
-        "ok": True,
-        "decision": "withhold",
-        "reason": f"SG-Advance: tool result withheld, it looks like a prompt injection ({titles})",
-        "rules": [h.rule.id for h in hits],
-    }, Enforcement(
-        action=ResponseAction.BLOCK,
-        enforced=True,
-        enforcer=point.sensor,
-        detail=f"input pep: {point.name} withheld the tool result from the model",
-        stage="result_withheld",
-        **(
-            point.outcome("the result was replaced before it was sent to the agent")
-            if point.in_path
-            else {
-                "confirmation": "unconfirmed",
-                "evidence": "Claude Code keeps the original result if the replacement does not fit the "
-                "tool's output shape; the block reason still reaches the model",
-            }
-        ),
-    )
-
-
-def approval_channel(verdict: Verdict, point: EnforcementPoint) -> ResponseAction:
-    """Grades decide *how* approval happens, never whether (CLAUDE.md). Decision 2026-11-14: the person
-    approves in the agent's own prompt, including grade 3-1, and security reviews those approvals
-    afterwards (review queue, ``user-approved-high-risk``). Only very high risk is denied outright.
-    A point that cannot ask anyone (the MCP gateway) denies instead: an approval nobody can give is no
-    approval (fail closed). Decision 2026-11-17: the security team's pre-approval hold was removed.
-    Limitation: the agent's own prompt runs the call the moment the person clicks, with no re-check."""
-    if verdict.action is ResponseAction.REQUIRE_APPROVAL and point.in_path:
-        return ResponseAction.BLOCK
-    return verdict.action
-
-
-# Irreversible (grade 3-1) calls the person approves get their own prompt (2026-11-14, KISA guide
-# scenario 4: approval fatigue; the user chose "warning text only", the flow stays one click). The
-# same text reaches Claude Code's ask dialog (permissionDecisionReason) and OpenClaw's approval card,
-# where the plugin also raises the severity to critical. What will run is shown clipped and masked:
-# the prompt is local, but a secret in a command has no business in an approval dialog either.
-IRREVERSIBLE_TAG = "grade:3-1"
-IRREVERSIBLE_TITLE = "SG-Advance: 되돌릴 수 없는 작업 확인"
-_WHAT_KEYS = ("command", "cmd", "sql", "query", "statement", "url", "file_path", "path", "prompt")
-_WHAT_MAX = 160
-
-
-def _what_runs(event: AgentEvent) -> str:
-    p = event.payload
-    args: dict[str, Any] = getattr(p, "arguments", None) or {}
-    text = next((str(args[k]) for k in _WHAT_KEYS if isinstance(args.get(k), str) and args[k]), None)
-    if text is None:
-        text = json.dumps(args, ensure_ascii=False, default=str) if args else ""
-    text = " ".join(redact_text(text).split())
-    tool = getattr(p, "tool", "") or "tool"
-    clipped = text if len(text) <= _WHAT_MAX else text[: _WHAT_MAX - 1] + "…"
-    return f"{tool}: {clipped}" if clipped else tool
-
-
-def irreversible_prompt(verdict: Verdict, titles: str) -> str:
-    return (
-        f"[되돌릴 수 없음 · 3-1] {titles}. 실행할 것: {_what_runs(verdict.event)}. "
-        "한 번 실행하면 되돌릴 수 없습니다. 승인하면 보안팀이 사후 검토합니다."
-    )
 
 
 def plugin_response(
     verdict: Verdict, point: EnforcementPoint = OPENCLAW_PLUGIN, action: ResponseAction | None = None
 ) -> tuple[dict[str, Any], Enforcement | None]:
-    """What the plugin (or hook) should do, and the enforcement record that matches it. ``action``:
-    the channel chosen by ``approval_channel`` when it differs from the verdict's."""
-    action = action or verdict.action
-    rules = verdict.rule_ids
-    reason = rule_titles(verdict.hits)
-    sensor = point.sensor
-    base = {"ok": True, "action": action.value, "rules": rules}
-    if severity := max_severity(verdict):
-        base["severity"] = severity
-    if action in _BLOCKING:
-        detail = f"pre-exec: {point.name} blocked the tool call"
-        why = f"SG-Advance: {reason}"
-        if verdict.action is ResponseAction.REQUIRE_APPROVAL:  # nobody to ask on this path
-            detail = f"pre-exec: {point.name} cannot ask a person; denied instead of approval (fail closed)"
-            why = f"SG-Advance: 사람에게 물을 수 없는 경로라 승인 대신 거부했습니다 ({reason})"
-        return base | {"decision": "block", "reason": why}, Enforcement(
-            action=action, enforced=True, enforcer=sensor, detail=detail,
-            stage="blocked", **point.outcome("the request was not forwarded upstream"),
-        )  # fmt: skip
-    if action is ResponseAction.REQUIRE_APPROVAL:
-        detail = f"pre-exec: user approval requested through {point.asks}"
-        if any(IRREVERSIBLE_TAG in h.rule.tags for h in verdict.hits):
-            base |= {"grade": "3-1"}  # the plugin raises its approval card to critical
-            prompt = {"title": IRREVERSIBLE_TITLE, "reason": irreversible_prompt(verdict, reason)}
-        else:
-            prompt = {"title": "SG-Advance", "reason": reason}
-        return base | {"decision": "approve"} | prompt, Enforcement(
-            action=action, enforced=True, enforcer=sensor, detail=detail
-        )
-    return base | {"decision": "allow"}, None
+    """The plugin's answer (``decision.point_response`` at the OpenClaw plugin by default)."""
+    return point_response(verdict, point, action)
 
-
-def finding_ids_for(verdict: Any, action: ResponseAction) -> list[str]:
-    """The findings an approval or block record points at. A block also reports the hits dedup suppressed
-    (``Sensor._enforced_repeats``); the agent's own prompt does not, so it doesn't list them."""
-    if action is ResponseAction.REQUIRE_APPROVAL:
-        return [f.finding_id for f in verdict.findings]
-    return verdict.enforced_ids
-
-
-def pending_for(result: Any, action: ResponseAction, response: dict[str, Any]) -> dict[str, Any]:
-    """What a prompt keeps about the call, to link the person's answer back to it."""
-    return {
-        "event_id": result.event.event_id,
-        "finding_ids": finding_ids_for(result.verdict, action),
-        "rule_ids": result.verdict.rule_ids,
-        "max_severity": response.get("severity"),
-        "requested_at": result.event.ts,
-    }
 
 
 def judge(
@@ -300,153 +137,21 @@ def judge(
         req,
         user_id=ctx.user_id,
         hostname=ctx.hostname,
-        tool_plugins=ctx.plugins.tool_plugins,
-        people=ctx.people,
+        tool_plugins=openclaw(ctx).plugins.tool_plugins,
+        people=openclaw(ctx).people,
     )
     if labels:
         event = event.model_copy(update={"labels": event.labels | labels})
     result = ctx.evaluate(event)
     action = approval_channel(result.verdict, OPENCLAW_PLUGIN)
-    response, enforcement = plugin_response(result.verdict, OPENCLAW_PLUGIN, action)
+    response, enforcement = point_response(result.verdict, OPENCLAW_PLUGIN, action)
     pending = pending_for(result, action, response)
     ctx.record(result, enforcement)
     call_id = event.payload.call_id  # type: ignore[union-attr]
-    ctx.plugins.mark(call_id)
+    openclaw(ctx).plugins.mark(call_id)
     if response.get("decision") == "approve":  # keep what asked, to link the person's answer
-        ctx.plugins.remember_approval(call_id, pending)
+        ctx.approvals.remember(call_id, pending)
     return response
-
-
-def resolution_from_call(
-    call: AgentEvent,
-    decision: str,
-    pending: dict[str, Any],
-    *,
-    approver: str | None = None,
-    via: str = "user",
-    labels: dict[str, str] | None = None,
-) -> AgentEvent:
-    """``approval.resolved`` in the same envelope (who, which agent, which conversation) as the
-    tool call that was held. For enforcement points that hand over a full event (Claude Code)."""
-    requested_at = pending.get("requested_at")
-    now = datetime.now(UTC)
-    wait_ms = int((now - requested_at).total_seconds() * 1000) if requested_at else None
-    p = call.payload
-    return call.model_copy(
-        update={
-            "event_id": AgentEvent.model_fields["event_id"].default_factory(),  # type: ignore[misc]
-            "ts": now,
-            "payload": ApprovalResolution(
-                call_id=p.call_id,  # type: ignore[union-attr]
-                tool=p.tool,  # type: ignore[union-attr]
-                decision=decision,  # type: ignore[arg-type]
-                approved=decision in ("allow-once", "allow-always"),
-                rule_ids=tuple(pending.get("rule_ids") or ()),
-                max_severity=pending.get("max_severity"),
-                request_event_id=pending.get("event_id"),
-                finding_ids=tuple(pending.get("finding_ids") or ()),
-                requested_at=requested_at,
-                wait_ms=max(wait_ms, 0) if wait_ms is not None else None,
-                approver=approver,
-                via=via,  # type: ignore[arg-type]
-            ),
-            "labels": call.labels | (labels or {}),
-        }
-    )
-
-
-def judge_event(
-    ctx: AdapterContext, doc: dict[str, Any], point: EnforcementPoint = CLAUDE_CODE_HOOK
-) -> dict[str, Any]:
-    """Judge and record an event an enforcement point built itself (Claude Code hooks, M6).
-
-    ``tool.call``: the same verdicts as the OpenClaw plugin (block / approve → the agent's own
-    prompt / allow). ``prompt.user``: blocked only by a blocking verdict.
-    Anything else is recorded. A ``tool.result`` for a call that was sent to the person's own
-    prompt means they approved it: recorded as ``approval.resolved``. A refusal leaves no result: when
-    the person's next prompt (or the session's end) arrives first, it is recorded as a denial
-    (``sga_approval_inferred=no_result``; a "No" and an interrupted call look the same).
-
-    Approval binding (verification layer 2b, 2026-11-17): the person approves one input; the result
-    carries the input that ran (``sga_input_digest`` from the hook). When they differ the resolution is
-    marked ``sga_approval_mismatch`` and the rules decide (``approval-execution-mismatch``: the rest of
-    the conversation is blocked). This is detection right after the call, not prevention: the agent
-    runs its own prompt, so nothing can check in between."""
-    event = AgentEvent.model_validate(doc)
-    if MISMATCH_LABEL in event.labels:  # only this daemon compares; never taken from the hook's input
-        event = event.model_copy(
-            update={"labels": {k: v for k, v in event.labels.items() if k != MISMATCH_LABEL}}
-        )
-    result = ctx.evaluate(event)
-    kind = result.event.kind
-    if kind is EventKind.TOOL_CALL:
-        action = approval_channel(result.verdict, point)
-        response, enforcement = plugin_response(result.verdict, point, action)
-        pending = pending_for(result, action, response) | {
-            "call": result.event,
-            "input_digest": result.event.labels.get(DIGEST_LABEL),
-        }
-        ctx.record(result, enforcement)
-        if response.get("decision") == "approve" and point.sensor is SensorType.CLAUDE_CODE_HOOK:
-            # Claude Code asked the person: a later result means they approved. The MCP gateway asks no one.
-            ctx.plugins.remember_approval(result.event.payload.call_id, pending)  # type: ignore[union-attr]
-        return response
-    withheld: dict[str, Any] | None = None
-    if kind is EventKind.TOOL_RESULT and (hits := input_guard_hits(result.verdict)):
-        withheld, enforcement = withheld_response(point, hits)
-        ctx.record(result, enforcement)
-    else:
-        ctx.record(result)
-    if kind is EventKind.TOOL_RESULT:
-        asked = ctx.plugins.take_approval(result.event.payload.call_id)  # type: ignore[union-attr]
-        if asked and isinstance(asked.get("call"), AgentEvent):
-            labels = {"sga_approval_inferred": "tool_result"}
-            approved, ran = asked.get("input_digest"), result.event.labels.get(DIGEST_LABEL)
-            if approved and ran and approved != ran:
-                labels[MISMATCH_LABEL] = "true"
-            inferred = ctx.evaluate(resolution_from_call(asked["call"], "allow-once", asked, labels=labels))
-            ctx.record(inferred, _abort_if_blocking(ctx, inferred, point))
-    elif kind in (EventKind.PROMPT_USER, EventKind.SESSION_END):
-        # The turn is over: an asked call with no result was refused (or interrupted) by the person.
-        for asked in ctx.plugins.take_session(_conversation(result.event)):
-            if isinstance(asked.get("call"), AgentEvent):
-                denied = resolution_from_call(
-                    asked["call"], "deny", asked, labels={"sga_approval_inferred": "no_result"}
-                )
-                ctx.record(ctx.evaluate(denied))
-    if withheld is not None:
-        return withheld
-    if kind is EventKind.PROMPT_USER and result.verdict.action in _BLOCKING:
-        reason = rule_titles(result.verdict.hits)
-        return {
-            "ok": True,
-            "decision": "block",
-            "reason": f"SG-Advance: {reason}",
-            "rules": result.verdict.rule_ids,
-        }
-    return {"ok": True, "decision": "allow"}
-
-
-def _conversation(event: AgentEvent) -> str:
-    """The main conversation a (sub)agent's event belongs to."""
-    return event.agent.root_session_id or event.agent.session_id
-
-
-def _abort_if_blocking(ctx: AdapterContext, result: Any, point: EnforcementPoint) -> Enforcement | None:
-    """A blocking verdict on something that already ran (an approval that does not match what ran):
-    block the rest of the conversation through the same set security's remote block uses, so every
-    later tool call is refused before it runs (``remote-blocked-session``)."""
-    if result.verdict.action not in _BLOCKING:
-        return None
-    current = set(ctx.sensor.trusted.get(BLOCKED_SESSIONS, set()))
-    ctx.sensor.set_trusted(BLOCKED_SESSIONS, current | {_conversation(result.event)})
-    return Enforcement(
-        action=ResponseAction.ABORT_SESSION,
-        enforced=True,
-        enforcer=point.sensor,
-        stage="session_aborted",
-        detail="conversation blocked from now on: what ran is not what the person approved",
-    )
 
 
 DECISIONS = ("allow-once", "allow-always", "deny", "timeout", "cancelled")
@@ -473,7 +178,7 @@ def resolution_event(
         req,
         user_id=ctx.user_id,
         hostname=ctx.hostname,
-        people=ctx.people,
+        people=openclaw(ctx).people,
         payload={
             "kind": "approval.resolved",
             "call_id": str(req.get("toolCallId") or "unknown"),
@@ -492,7 +197,7 @@ def resolution_event(
 
 
 def record_resolution(ctx: AdapterContext, req: dict[str, Any]) -> AgentEvent:
-    pending = ctx.plugins.take_approval(str(req.get("toolCallId") or ""))
+    pending = ctx.approvals.take(str(req.get("toolCallId") or ""))
     event = resolution_event(ctx, req, pending)
     ctx.record(ctx.evaluate(event))
     p = event.payload
@@ -516,121 +221,85 @@ def record_health(ctx: AdapterContext, status: str, detail: str, last_seen: floa
     ctx.record(ctx.evaluate(event))
 
 
-# ── unix socket server ──────────────────────────────────────────────────────
+
+# ── plugin ops on the local API ─────────────────────────────────────────────
+# Only these touch the plugin's liveness. Before 2026-11-18 every local API request did, so a Claude Code
+# hook alone made the sensor expect an OpenClaw plugin and report it "lost" 150 s after the last hook call.
 
 
-ENDPOINT_FILE = "sga-api.json"
+def _contact(ctx: AdapterContext, *, hello: bool = False) -> None:
+    plugins = openclaw(ctx).plugins
+    if (plugins.heartbeat() if hello else plugins.touch()) == "recovered":
+        log.warning("openclaw plugin is back")
+        record_health(ctx, "recovered", "plugin contacted the sensor again")
 
 
-class LocalApiServer:
-    """``path``: a unix socket (macOS, Linux). ``tcp=True``: loopback TCP + token, the endpoint
-    written to ``path`` instead (Windows)."""
+def hello_op(ctx: AdapterContext, req: dict[str, Any]) -> dict[str, Any]:
+    _contact(ctx, hello=True)
+    log.info("openclaw plugin connected: %s %s", req.get("plugin"), req.get("version"))
+    return {"ok": True}
 
-    def __init__(self, ctx: AdapterContext, path: Path, *, tcp: bool = False) -> None:
-        self.ctx = ctx
-        self.path = path
-        self.tcp = tcp
-        self.token: str | None = None
-        self._server: asyncio.base_events.Server | None = None
 
-    async def start(self) -> None:
-        from .state import private_dir
+def bye_op(ctx: AdapterContext, req: dict[str, Any]) -> dict[str, Any]:
+    """Disposed by the gateway (plugin disabled, removed, replaced, or shutdown)."""
+    log.warning("openclaw plugin unloaded: %s (%s)", req.get("plugin"), req.get("reason"))
+    openclaw(ctx).plugins.goodbye()
+    return {"ok": True}
 
-        private_dir(self.path.parent)
-        if self.tcp:
-            import secrets
 
-            from .state import write_private
+def tool_call_op(ctx: AdapterContext, req: dict[str, Any]) -> dict[str, Any]:
+    _contact(ctx)
+    try:
+        return judge(ctx, req)
+    except Exception as e:  # the plugin falls back on its own; tell it why
+        log.exception("plugin request failed")
+        return {"ok": False, "error": str(e)}
 
-            self.token = secrets.token_urlsafe(32)
-            self._server = await asyncio.start_server(self._client, host="127.0.0.1", port=0)
-            port = self._server.sockets[0].getsockname()[1]
-            endpoint = {"host": "127.0.0.1", "port": port, "token": self.token, "pid": os.getpid()}
-            write_private(self.path, json.dumps(endpoint))
-            log.info("local verdict API listening on 127.0.0.1:%d (endpoint %s)", port, self.path)
-            return
-        with contextlib.suppress(FileNotFoundError):
-            self.path.unlink()  # stale socket from a previous run
-        old = os.umask(0o177)  # socket created 0600: only this user's processes may ask
-        try:
-            self._server = await asyncio.start_unix_server(self._client, path=str(self.path))
-        finally:
-            os.umask(old)
-        log.info("local verdict API listening on %s", self.path)
 
-    async def close(self) -> None:
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
-        with contextlib.suppress(FileNotFoundError):
-            self.path.unlink()
+def resolution_op(ctx: AdapterContext, req: dict[str, Any]) -> dict[str, Any]:
+    """A person's answer to a requireApproval prompt (audit trail)."""
+    _contact(ctx)
+    try:
+        record_resolution(ctx, req)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
 
-    async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        try:
-            while line := await reader.readline():
-                writer.write((json.dumps(await self.handle_async(line, reader)) + "\n").encode())
-                await writer.drain()
-        except (ConnectionError, asyncio.IncompleteReadError):
-            pass
-        finally:
-            writer.close()
-            with contextlib.suppress(Exception):
-                await writer.wait_closed()
 
-    def _authorized(self, req: object) -> bool:
-        if self.token is None:  # unix socket: the 0600 file is the access control
-            return True
-        import hmac
+OPENCLAW_OPS = {"hello": hello_op, "bye": bye_op, "tool_call": tool_call_op, "resolution": resolution_op}
 
-        given = req.get("auth") if isinstance(req, dict) else None
-        return isinstance(given, str) and hmac.compare_digest(given, self.token)
 
-    async def handle_async(self, line: bytes, reader: asyncio.StreamReader | None = None) -> dict[str, Any]:
-        try:
-            req = json.loads(line)
-        except json.JSONDecodeError:
-            req = None
-        if self.token is not None and not self._authorized(req):
-            return {"ok": False, "error": "unauthorized"}
-        return self.handle(line)
+def openclaw_local_api(ctx: AdapterContext, path: Path, *, tcp: bool = False) -> LocalApiServer:
+    """The daemon's local API with the OpenClaw plugin protocol enabled (the hook ops are always there)."""
+    return LocalApiServer(ctx, path, tcp=tcp, ops=OPENCLAW_OPS)
 
-    def handle(self, line: bytes) -> dict[str, Any]:
-        try:
-            req = json.loads(line)
-        except json.JSONDecodeError:
-            return {"ok": False, "error": "invalid json"}
-        if not isinstance(req, dict):
-            return {"ok": False, "error": "expected an object"}
-        op = req.get("op")
-        if op == "bye":  # disposed by the gateway (plugin disabled, removed, replaced, or shutdown)
-            log.warning("openclaw plugin unloaded: %s (%s)", req.get("plugin"), req.get("reason"))
-            self.ctx.plugins.goodbye()
-            return {"ok": True}
-        transition = self.ctx.plugins.heartbeat() if op == "hello" else self.ctx.plugins.touch()
-        if transition == "recovered":
-            log.warning("openclaw plugin is back")
-            record_health(self.ctx, "recovered", "plugin contacted the sensor again")
-        if op == "hello":
-            log.info("openclaw plugin connected: %s %s", req.get("plugin"), req.get("version"))
-            return {"ok": True}
-        if op == "tool_call":
-            try:
-                return judge(self.ctx, req)
-            except Exception as e:  # the plugin falls back on its own; tell it why
-                log.exception("plugin request failed")
-                return {"ok": False, "error": str(e)}
-        if op == "event":  # Claude Code hooks (M6): a full AgentEvent built by the hook
-            if not isinstance(req.get("event"), dict):
-                return {"ok": False, "error": "event must be an object"}
-            try:
-                return judge_event(self.ctx, req["event"])
-            except Exception as e:  # validation errors included: the hook falls back on its own
-                log.exception("hook event failed")
-                return {"ok": False, "error": str(e)[:500]}
-        if op == "resolution":  # a person's answer to a requireApproval prompt (audit trail)
-            try:
-                record_resolution(self.ctx, req)
-            except ValueError as e:
-                return {"ok": False, "error": str(e)}
-            return {"ok": True}
-        return {"ok": False, "error": f"unknown op {op!r}"}
+
+# ── plugin liveness (the daemon's health tick) ──────────────────────────────
+
+
+def excuse_host_sleep(ctx: AdapterContext, seconds: float) -> None:
+    openclaw(ctx).plugins.excuse(seconds)
+
+
+def check_plugin_health(ctx: AdapterContext, now: float) -> str | None:
+    """Emit a sensor.health event when the gateway plugin's heartbeats stop."""
+    plugins = openclaw(ctx).plugins
+    said_bye = plugins.bye_at is not None
+    if plugins.check(now) != "lost":
+        return None
+    last = plugins.last_contact
+    quiet = now - last - plugins.excused if last is not None else None
+    if said_bye:
+        detail = f"plugin was unloaded by the gateway and did not return within {plugins.bye_grace:.0f}s"
+    elif quiet is not None and plugins.excused:
+        detail = (
+            f"no heartbeat for {quiet:.0f}s while the host was awake "
+            f"({plugins.excused:.0f}s asleep not counted)"
+        )
+    elif quiet is not None:
+        detail = f"no heartbeat for {quiet:.0f}s"
+    else:
+        detail = "no heartbeat since the sensor started"
+    log.warning("openclaw plugin heartbeat lost (%s)", detail)
+    record_health(ctx, "lost", detail, last)
+    return "lost"

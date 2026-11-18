@@ -122,6 +122,9 @@ class ControlPlaneClient:
         """People who used this device and are elevated risk now (zero trust, 2026-11-13)."""
         return dict(self._ok(self._call("GET", "/v1/risk"), 200))
 
+    def report_posture(self, checks: dict[str, Any]) -> None:
+        self._ok(self._call("POST", "/v1/posture", {"checks": checks}), 200)
+
     def report_action(self, action_id: str, ok: bool, detail: str, applied: str | None = None) -> None:
         body: dict[str, Any] = {"ok": ok, "detail": detail[:1000]}
         if applied is not None:

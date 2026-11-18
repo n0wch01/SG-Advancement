@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..policy import PolicyBundle
 from . import audit_chain, policy_runtime
+from .access import actor, require_permission
 from .auth import DbSession, require_admin
 from .db import Device, Group, PolicyChange, PolicyOverride, utcnow
 from .policy_layers import COMMON, RESPONSES, Override, apply_common, apply_group, check
@@ -61,7 +62,7 @@ def policy_for(app: FastAPI, group: str | None, device_id: str | None = None) ->
     return view.groups.get(group or COMMON, view.policy)
 
 
-def reload_base(app: FastAPI, db: Session, role: str) -> None:
+def reload_base(app: FastAPI, db: Session, role: str, actor_id: str) -> None:
     """Explicitly publish this worker's reviewed files; a failure leaves the DB snapshot intact."""
     view = current_view(app)
     if view.staged is not None:
@@ -76,7 +77,7 @@ def reload_base(app: FastAPI, db: Session, role: str) -> None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from e
     policy_runtime.publish(db, view.generation, base_rules=base)
     audit_chain.append(db, "policy_reload", str(view.generation + 1), {
-        "role": role, "before": view.policy.version, "after": bundle.version,
+        "actor": actor_id, "role": role, "before": view.policy.version, "after": bundle.version,
     })
     db.commit()
 
@@ -195,8 +196,7 @@ class WriteResult(_Model):
 
 
 def _need_admin(request: Request) -> PolicyView:
-    if request.state.role != "admin":  # GET-only dashboard token never gets here; belt and braces
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "policy changes need the admin token")
+    require_permission(request, "policy.write")
     return current_view(request.app)
 
 
@@ -206,10 +206,14 @@ def _scope_exists(db: Session, scope: str) -> None:
 
 
 def _log(db: Session, request: Request, who: Who, action: str, **fields: Any) -> PolicyChange:
-    row = PolicyChange(actor=who.by, role=request.state.role, action=action, reason=who.reason, **fields)
+    row = PolicyChange(
+        actor=actor(request), role=request.state.role, action=action, reason=who.reason, **fields
+    )
     db.add(row)
     db.flush()  # the change id is the audit reference
-    doc = {"actor": who.by, "role": request.state.role, "action": action, "reason": who.reason, **fields}
+    doc = {
+        "actor": actor(request), "role": request.state.role, "action": action, "reason": who.reason, **fields
+    }
     audit_chain.append(db, "policy_change", str(row.id), doc)
     policy_runtime.bump(db)
     return row
@@ -319,7 +323,7 @@ def create_group(body: GroupCreate, request: Request, db: DbSession) -> WriteRes
         )
     if db.get(Group, body.name) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"group {body.name} exists")
-    db.add(Group(name=body.name, description=body.description, created_by=body.by))
+    db.add(Group(name=body.name, description=body.description, created_by=actor(request)))
     row = _log(db, request, body, "group.create", scope=body.name, after={"description": body.description})
     db.commit()
     return WriteResult(revision=row.id, scope=body.name, version=policy_for(request.app, body.name).version)
@@ -384,7 +388,7 @@ def set_override(body: OverrideSet, request: Request, db: DbSession) -> WriteRes
         ov.response,
         list(ov.allow) if ov.allow is not None else None,
     )
-    row.updated_at, row.updated_by, row.reason = utcnow(), body.by, body.reason
+    row.updated_at, row.updated_by, row.reason = utcnow(), actor(request), body.reason
     change = _log(
         db,
         request,

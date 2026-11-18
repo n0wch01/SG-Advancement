@@ -188,7 +188,8 @@ def test_loosening_is_refused_for_teams_but_logged_for_common(cpv: TestClient) -
 
     log = cpv.get("/v1/admin/policy/changes", headers=VIEWER).json()
     assert [c["action"] for c in log] == ["override.set", "override.set", "group.create"]
-    assert log[1]["actor"] == "lead" and log[1]["reason"] == "noisy" and log[1]["after"] == {"enabled": False}
+    assert log[1]["actor"] == "bootstrap:admin"
+    assert log[1]["reason"] == "noisy" and log[1]["after"] == {"enabled": False}
     assert log[0]["id"] > log[1]["id"] > log[2]["id"]
     assert cpv.get("/v1/admin/policy/scopes", headers=VIEWER).json()["revision"] == log[0]["id"]
 

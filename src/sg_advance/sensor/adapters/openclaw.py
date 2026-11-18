@@ -52,6 +52,7 @@ from .openclaw_integrity import cli_disabler
 from .openclaw_people import OpenClawPeople
 from .openclaw_skills import TRUSTED_SET as SKILLS_TRUSTED
 from .openclaw_skills import Digester, SkillDisabler, check_skills, cli_skill_disabler
+from .openclaw_state import openclaw
 
 log = logging.getLogger(__name__)
 
@@ -621,7 +622,7 @@ class OpenClawAdapter:
         return True, "sessions.abort accepted"
 
     async def run(self, ctx: AdapterContext) -> None:
-        mapper = OpenClawMapper(ctx.user_id, ctx.hostname, ctx.people)
+        mapper = OpenClawMapper(ctx.user_id, ctx.hostname, openclaw(ctx).people)
         self._register_actions(ctx)
         first_delay = min(1.0, self.max_backoff)
         delay = first_delay
@@ -801,22 +802,23 @@ class OpenClawAdapter:
         return sessions
 
     async def _handle(self, ctx: AdapterContext, conn: GatewayConnection, event: AgentEvent) -> None:
+        plugins = openclaw(ctx).plugins
         if event.kind.value == "inventory.snapshot":
-            ctx.plugins.tool_plugins.update(  # lets plugin-judged calls carry the right provider
+            plugins.tool_plugins.update(  # lets plugin-judged calls carry the right provider
                 {t.name: t.provider.plugin_id for t in event.payload.tools if t.provider.plugin_id}  # type: ignore[union-attr]
             )
         if event.kind.value == "tool.call":
             call_id = event.payload.call_id  # type: ignore[union-attr]
-            if ctx.plugins.active and not call_id.startswith("approval:") and not ctx.plugins.seen(call_id):
+            if plugins.active and not call_id.startswith("approval:") and not plugins.seen(call_id):
                 # Live gateways can broadcast the tool start before (or while) the plugin's
                 # before_tool_call reaches us, so give the plugin a moment. The daemon runs one
                 # event loop: while we wait here, the plugin's request is still served.
                 deadline = asyncio.get_running_loop().time() + self.plugin_grace
-                while not ctx.plugins.seen(call_id) and asyncio.get_running_loop().time() < deadline:
+                while not plugins.seen(call_id) and asyncio.get_running_loop().time() < deadline:
                     await asyncio.sleep(0.05)
-            if ctx.plugins.seen(call_id):
+            if plugins.seen(call_id):
                 return  # the gateway plugin judged and recorded this call before it ran
-            if ctx.plugins.active and not call_id.startswith("approval:"):
+            if plugins.active and not call_id.startswith("approval:"):
                 # The plugin is running but never saw this call: it was disabled, failed, or the
                 # call took a path it doesn't cover. Rules decide how loud this is.
                 event = event.model_copy(update={"labels": event.labels | {"sga_plugin": "missing"}})

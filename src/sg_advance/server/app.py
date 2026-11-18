@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from .. import __version__
 from ..pki import cert_pem, fingerprint
 from ..policy import PolicyBundle, key_id, load_or_create_signing_key, public_key_b64
-from ..redact import redact_event, redact_text
+from ..redact import redact_text
 from ..schema import AgentEvent, Finding, Severity
 from . import (
     actions,
@@ -38,8 +38,12 @@ from . import (
     manifests,
     policy_admin,
     policy_runtime,
+    rbac,
+    resource_mcp,
     risk,
+    task_access,
 )
+from .access import actor, require_permission, seed_roles
 from .auth import (
     DEVICE_PREFIX,
     ENROLL_PREFIX,
@@ -52,6 +56,8 @@ from .auth import (
     via_gateway,
 )
 from .db import Database, Device, EnrollmentToken, EventRow, FindingRow, Group, utcnow
+from .records import store_event as _store_event
+from .records import store_finding as _store_finding
 from .settings import Settings
 
 log = logging.getLogger(__name__)
@@ -339,22 +345,7 @@ def ingest_events(body: EventBatch, request: Request, device: CurrentDevice, db:
         if ev.event_id in seen:
             continue
         seen.add(ev.event_id)
-        # Sensors redact already; doing it again here is cheap defence in depth (idempotent).
-        stored = redact_event(ev).model_copy(update={"received_ts": now})
-        db.add(
-            EventRow(
-                event_id=stored.event_id,
-                device_id=device.device_id,
-                ts=stored.ts,
-                received_ts=now,
-                kind=str(stored.kind),
-                user_id=stored.principal.user_id,
-                agent_type=str(stored.agent.type),
-                session_id=stored.agent.session_id,
-                sensor=str(stored.source.sensor),
-                doc=stored.model_dump(mode="json"),
-            )
-        )
+        _store_event(db, device, ev, now)
         accepted += 1
     device.last_seen = now
     db.commit()
@@ -381,7 +372,7 @@ def ingest_findings(
             f = f.model_copy(update={"explanation": redact_text(f.explanation)})
         if f.detector != "local":  # central findings are the control plane's own (campaigns)
             f = f.model_copy(update={"detector": "local"})
-        _store_finding(db, device.device_id, f, now)
+        f = _store_finding(db, device.device_id, f, now)
         stored.append((device.device_id, f))
     db.flush()  # finding rows first: the indicator rows reference them
     for _, f in stored:
@@ -395,23 +386,6 @@ def ingest_findings(
     return IngestResult(accepted=len(stored), duplicates=len(body.findings) - len(stored))
 
 
-def _store_finding(db: Session, device_id: str, f: Finding, now: datetime) -> None:
-    db.add(
-        FindingRow(
-            finding_id=f.finding_id,
-            device_id=device_id,
-            ts=f.ts,
-            received_ts=now,
-            rule_id=f.rule_id,
-            severity=str(f.severity),
-            category=str(f.category),
-            user_id=f.principal.user_id,
-            agent_type=str(f.agent.type),
-            session_id=f.agent.session_id,
-            doc=f.model_dump(mode="json"),
-        )
-    )
-    audit_chain.append(db, "finding", f.finding_id, f.model_dump(mode="json"), snapshot=False)
 
 
 # ── admin routes ────────────────────────────────────────────────────────────
@@ -474,13 +448,12 @@ def list_devices(request: Request, db: DbSession) -> list[DeviceOut]:
 def revoke_device(device_id: str, body: RevokeRequest, request: Request, db: DbSession) -> DeviceOut:
     """Stop a device for good (T11: a stolen token or PC). Its token and certificate stop working at
     once; enrolling the PC again needs a new enrollment token and a new device id."""
-    if request.state.role != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "revoking needs the admin token")
+    require_permission(request, "devices.manage")
     d = db.get(Device, device_id)
     if d is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
     if d.revoked_at is None:
-        d.revoked_at, d.revoked_by, d.revoke_reason = utcnow(), body.by, body.reason
+        d.revoked_at, d.revoked_by, d.revoke_reason = utcnow(), actor(request), body.reason
         db.commit()
     return next(x for x in list_devices(request, db) if x.device_id == device_id)
 
@@ -490,15 +463,14 @@ def set_device_owner(device_id: str, body: OwnerRequest, request: Request, db: D
     """Pin the person a single-user device (a laptop) speaks for. The LAN gateway's per-request check
     then forwards this person to the central MCP gateway instead of what the device's request claims,
     so a stolen or misused device certificate cannot act as someone else (review 2026-11-15)."""
-    if request.state.role != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "setting an owner needs the admin token")
+    require_permission(request, "devices.manage")
     d = db.get(Device, device_id)
     if d is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
     before, d.owner = d.owner, body.owner
     audit_chain.append(
         db, "device_owner", device_id,
-        {"before": before, "after": body.owner, "by": body.by, "reason": body.reason, "at": utcnow()},
+        {"before": before, "after": body.owner, "by": actor(request), "reason": body.reason, "at": utcnow()},
     )  # fmt: skip
     db.commit()
     return next(x for x in list_devices(request, db) if x.device_id == device_id)
@@ -527,8 +499,7 @@ def list_enrollment_tokens(db: DbSession) -> list[EnrollmentTokenOut]:
 
 @admin.post("/enrollment-tokens/{token_id}/revoke", status_code=status.HTTP_204_NO_CONTENT)
 def revoke_enrollment_token(token_id: int, request: Request, db: DbSession) -> None:
-    if request.state.role != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "revoking needs the admin token")
+    require_permission(request, "devices.manage")
     t = db.get(EnrollmentToken, token_id)
     if t is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "enrollment token not found")
@@ -649,7 +620,8 @@ def policy_info(request: Request) -> PolicyInfo:
 @admin.post("/policy/reload", response_model=PolicyInfo)
 def reload_policy(request: Request, db: DbSession) -> PolicyInfo:
     """Re-read ``rules/`` from disk. An invalid rule file is rejected and the old policy stays."""
-    policy_admin.reload_base(request.app, db, request.state.role)
+    require_permission(request, "policy.write")
+    policy_admin.reload_base(request.app, db, request.state.role, actor(request))
     return _policy_info(request)
 
 
@@ -678,6 +650,8 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.state.verify_queue = queue.Queue()
     app.state.verify_worker = None
     app.state.db.create_all()  # manifests live in the DB and are part of the policy
+    with Session(app.state.db.engine) as db:
+        seed_roles(db)
     app.state.policy_lock = threading.RLock()
     app.state.refresh_policy = lambda: policy_runtime.refresh(app)
     # The first start bootstraps rules/; every later start restores the published DB policy.
@@ -707,6 +681,10 @@ def create_app(settings: Settings, verify_package: Any = None) -> FastAPI:
     app.include_router(gateway_authz.router)
     app.include_router(risk.admin)
     app.include_router(risk.sensor)
+    app.include_router(rbac.router)
+    app.include_router(task_access.admin)
+    app.include_router(task_access.sensor)
+    app.include_router(resource_mcp.router)
     _mount_dashboard(app, settings)
     return app
 

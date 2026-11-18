@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..pki import cert_pem
+from .access import require_permission
 from .auth import DbSession, require_admin
 
 TEMPLATE = Path(__file__).with_name("install.ps1")
@@ -183,8 +184,7 @@ class InstallCommandOut(BaseModel):
 def install_command(body: InstallCommandIn, request: Request, db: DbSession) -> InstallCommandOut:
     from .app import EnrollmentTokenRequest, create_enrollment_token  # app imports this module
 
-    if request.state.role != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "install commands need the admin token")
+    require_permission(request, "devices.manage")
     script = render(request)  # before spending a token: fails if the server is not set up for it
     tok = create_enrollment_token(
         EnrollmentTokenRequest(

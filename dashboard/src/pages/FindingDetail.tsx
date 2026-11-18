@@ -1,3 +1,4 @@
+import { usePermission, useGlobalPermission } from "../access";
 import { useState } from "react";
 
 import { ApiError, type Api } from "../api";
@@ -26,6 +27,7 @@ import { useAsync } from "../useAsync";
 import { JudgeChip } from "./Findings";
 
 export function FindingDetail({ api, id, role, query }: { api: Api; id: string; role: Role | null; query: Record<string, string> }) {
+  const canRespond = usePermission("response.manage", role);
   const { data, error, loading } = useAsync(() => api.finding(id), [api, id]);
   return (
     <section className="finding-detail">
@@ -33,7 +35,7 @@ export function FindingDetail({ api, id, role, query }: { api: Api; id: string; 
       {error && <ErrorBox error={error} />}
       {loading && !data && <Loading />}
       {data && <DetailBody d={data} query={query} />}
-      {data && data.finding.rule_id !== CAMPAIGN_RULE && role === "admin" && <Respond api={api} f={data.finding} />}
+      {data && data.finding.rule_id !== CAMPAIGN_RULE && canRespond && <Respond api={api} f={data.finding} />}
     </section>
   );
 }
@@ -264,8 +266,9 @@ function EventCard({ e, open = false }: { e: AgentEvent; open?: boolean }) {
 // Remote response (M11), admin token only. Targets come from the finding: the conversation at the top
 // of its delegation chain (blocking it also blocks the sub-agents), the person, the device it came from.
 function Respond({ api, f }: { api: Api; f: Finding }) {
-  const session = f.agent.root_session_id ?? f.agent.session_id;
-  const [by, setBy] = useState("");
+  const globalResponse = useGlobalPermission("response.manage");
+  const session = globalResponse ? f.agent.root_session_id ?? f.agent.session_id : f.agent.session_id;
+  const by = "authenticated";
   const [reason, setReason] = useState(`${f.title} (${f.rule_id})`);
   const [msg, setMsg] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
@@ -280,7 +283,7 @@ function Respond({ api, f }: { api: Api; f: Finding }) {
       setMsg(e instanceof ApiError ? e.message : String(e));
     }
   };
-  const ready = by.trim() !== "" && reason.trim() !== "";
+  const ready = reason.trim() !== "";
   return (
     <div className="card">
       <h2>원격 대응</h2>
@@ -288,10 +291,7 @@ function Respond({ api, f }: { api: Api; f: Finding }) {
         장비 <strong>{f.endpoint.device_id}</strong>로 보냅니다. 대화 차단은 이 대화와 거기서 위임된 하위 에이전트의 이후 툴 호출을 모두 막습니다.
       </p>
       <div className="filters">
-        <label>
-          누가
-          <input value={by} onChange={(e) => setBy(e.target.value)} placeholder="예: secops@corp.test" />
-        </label>
+        <p className="muted small">로그인한 계정으로 기록됩니다.</p>
         <label className="grow">
           왜
           <input value={reason} onChange={(e) => setReason(e.target.value)} />
@@ -301,12 +301,12 @@ function Respond({ api, f }: { api: Api; f: Finding }) {
         <button className="primary" disabled={!ready} onClick={() => void send("block_session", session)}>
           이 대화 차단
         </button>
-        <button className="primary" disabled={!ready} onClick={() => void send("block_user", f.principal.user_id)}>
+        {globalResponse && <button className="primary" disabled={!ready} onClick={() => void send("block_user", f.principal.user_id)}>
           {f.principal.user_id} 차단
-        </button>
-        <button className="link" disabled={!ready} onClick={() => void send("abort_session", f.agent.session_id)}>
+        </button>}
+        {globalResponse && <button className="link" disabled={!ready} onClick={() => void send("abort_session", f.agent.session_id)}>
           실행 중단 시도
-        </button>
+        </button>}
         <a className="small" href="#/actions">
           대응 목록 →
         </a>

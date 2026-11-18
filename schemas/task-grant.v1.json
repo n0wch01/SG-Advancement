@@ -1,0 +1,141 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "purpose": {
+      "const": "sg-advance.task",
+      "default": "sg-advance.task",
+      "title": "Purpose",
+      "type": "string"
+    },
+    "version": {
+      "const": 1,
+      "default": 1,
+      "title": "Version",
+      "type": "integer"
+    },
+    "grant_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Grant Id",
+      "type": "string"
+    },
+    "user_id": {
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "User Id",
+      "type": "string"
+    },
+    "device_id": {
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Device Id",
+      "type": "string"
+    },
+    "binding_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Binding Id",
+      "type": "string"
+    },
+    "agent_type": {
+      "enum": [
+        "claude_code",
+        "codex_cli"
+      ],
+      "title": "Agent Type",
+      "type": "string"
+    },
+    "session_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "project_id": {
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Project Id",
+      "type": "string"
+    },
+    "environment": {
+      "enum": [
+        "development",
+        "test"
+      ],
+      "title": "Environment",
+      "type": "string"
+    },
+    "agent_profile": {
+      "enum": [
+        "reader",
+        "tester",
+        "coder"
+      ],
+      "title": "Agent Profile",
+      "type": "string"
+    },
+    "actions": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 3,
+      "minItems": 1,
+      "title": "Actions",
+      "type": "array"
+    },
+    "paths": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "title": "Paths",
+      "type": "array"
+    },
+    "issued_at": {
+      "format": "date-time",
+      "title": "Issued At",
+      "type": "string"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "policy_version": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Policy Version",
+      "type": "string"
+    },
+    "parent_id": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Id"
+    }
+  },
+  "required": [
+    "grant_id",
+    "user_id",
+    "device_id",
+    "binding_id",
+    "agent_type",
+    "session_id",
+    "project_id",
+    "environment",
+    "agent_profile",
+    "actions",
+    "paths",
+    "issued_at",
+    "expires_at",
+    "policy_version"
+  ],
+  "title": "TaskClaims",
+  "type": "object"
+}

@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from . import audit_chain
+from .access import actor, require_permission
 from .auth import DbSession, require_admin
 from .db import ApprovalReview, EventRow, FindingRow, utcnow
 
@@ -228,18 +229,18 @@ def review_count(db: DbSession) -> dict[str, int]:
 def review_approval(event_id: str, body: ReviewIn, request: Request, db: DbSession) -> ReviewOut:
     """Security's verdict on a person's approval. ``problem`` is followed by a response (block the person
     or conversation from the finding page); the review itself changes nothing on the device."""
-    if request.state.role != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "reviewing needs the admin token")
+    # The row is also filtered by its immutable project attribution.
     row = db.get(EventRow, event_id)
     if row is None or row.kind != "approval.resolved":
         raise HTTPException(status.HTTP_404_NOT_FOUND, "approval not found")
+    require_permission(request, "approvals.review", row.project_id)
     if db.get(ApprovalReview, event_id) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "already reviewed")
     r = ApprovalReview(
         approval_event_id=event_id,
         user_id=row.doc["principal"]["user_id"],
         status=body.status,
-        reviewed_by=body.by,
+        reviewed_by=actor(request),
         reason=body.reason,
         reviewed_at=utcnow(),
     )

@@ -264,7 +264,7 @@ class Sensor:
             for c, r in self.posture.items()
             if now - self._posture_at.get(c, now) <= self.POSTURE_MAX_AGE
         }
-        if not fresh:
+        if not fresh or len(fresh) != len(self.posture):
             return "unknown", []
         reasons = list(dict.fromkeys(r for rs in fresh.values() for r in rs))
         return ("degraded" if reasons else "ok"), reasons
@@ -621,4 +621,12 @@ class Sensor:
         return result
 
     def flush(self) -> FlushResult:
+        if self.posture_expected:
+            checks = {name: {"at": self._posture_at[name].isoformat(), "reasons": reasons}
+                      for name, reasons in dict(self.posture).items() if name in self._posture_at}
+            try:
+                self.client.report_posture(checks)
+            except Exception as exc:
+                # A failed report never extends the server's posture lease or drops spool records.
+                log.info("posture report unavailable (%s)", type(exc).__name__)
         return self.spool.flush(self.client)

@@ -38,6 +38,9 @@ class Settings:
     lan_url: str | None = None  # e.g. https://192.168.0.9:18443
     install_url: str | None = None  # e.g. http://192.168.0.9:18080
     plugin_dir: Path | None = None  # integrations/openclaw-plugin, zipped for PCs that run OpenClaw
+    resource_root: Path | None = None  # dedicated server-only workspaces; None disables file resources
+    resource_posture_max_age_seconds: int = 300
+    resource_required_checks: tuple[str, ...] = ("mcp-gateway",)
 
     @property
     def ca_path(self) -> Path:
@@ -63,4 +66,11 @@ class Settings:
             lan_url=os.environ.get("SGA_LAN_URL") or None,
             install_url=os.environ.get("SGA_INSTALL_URL") or None,
             plugin_dir=Path(d) if (d := os.environ.get("SGA_PLUGIN_DIR")) else None,
+            resource_root=Path(d) if (d := os.environ.get("SGA_RESOURCE_ROOT")) else None,
+            resource_posture_max_age_seconds=int(
+                os.environ.get("SGA_RESOURCE_POSTURE_MAX_AGE_SECONDS", "300")
+            ),
+            resource_required_checks=tuple(
+                filter(None, os.environ.get("SGA_RESOURCE_REQUIRED_CHECKS", "mcp-gateway").split(","))
+            ),
         )

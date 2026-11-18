@@ -1,3 +1,4 @@
+import { usePermission } from "../access";
 import { useState } from "react";
 
 import { ApiError, type Api } from "../api";
@@ -13,7 +14,7 @@ export function Actions({ api, role }: { api: Api; role: Role | null }) {
   const [paused, setPaused] = useState(false);
   const result = useAsync(() => api.actions(), [api], REFRESH_MS, paused);
   const { data, error, loading } = result;
-  const admin = role === "admin";
+  const admin = usePermission("response.manage", role);
   return (
     <section>
       <div className="page-head">
@@ -88,7 +89,7 @@ export function Actions({ api, role }: { api: Api; role: Role | null }) {
 
 function Blocks({ api, admin, actions, onDone }: { api: Api; admin: boolean; actions: RemoteAction[]; onDone: () => void }) {
   const blocks = activeBlocks(actions);
-  const [by, setBy] = useState("");
+  const by = "authenticated";
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   if (blocks.length === 0) return <Empty>차단 중인 대화나 사람이 없습니다.</Empty>;
@@ -108,7 +109,7 @@ function Blocks({ api, admin, actions, onDone }: { api: Api; admin: boolean; act
             {admin && (
               <button
                 className="link"
-                disabled={!by.trim() || !reason.trim()}
+                disabled={!reason.trim()}
                 onClick={async () => {
                   setError(null);
                   try {
@@ -133,10 +134,7 @@ function Blocks({ api, admin, actions, onDone }: { api: Api; admin: boolean; act
       </ul>
       {admin && (
         <div className="filters">
-          <label>
-            누가
-            <input value={by} onChange={(e) => setBy(e.target.value)} />
-          </label>
+          <p className="muted small">로그인한 계정으로 기록됩니다.</p>
           <label>
             왜 (해제 사유)
             <input value={reason} onChange={(e) => setReason(e.target.value)} />

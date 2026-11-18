@@ -242,6 +242,20 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
                 print(f"--mcp-credential {name}: environment variable {var} is empty", file=sys.stderr)
                 return 2
             credentials[name] = value if " " in value else f"Bearer {value}"
+        protected = frozenset(args.mcp_protected_resource)
+        if protected:
+            creds = home.load_credentials()
+            assert creds is not None
+            expected = creds.server_url.rstrip("/") + "/v1/resources/mcp"
+            if any(servers.get(name) != expected for name in protected):
+                print("--mcp-protected-resource must target this enrolled control plane's /v1/resources/mcp",
+                      file=sys.stderr)
+                return 2
+            if protected & credentials.keys():
+                print("protected resources use the enrolled device credential, not an environment override",
+                      file=sys.stderr)
+                return 2
+            credentials.update({name: f"Bearer {creds.device_token}" for name in protected})
         secret = os.environ.get(args.mcp_proxy_secret_env, "") if args.mcp_proxy_secret_env else None
         if args.mcp_proxy_secret_env and not secret:
             print(f"--mcp-proxy-secret-env: {args.mcp_proxy_secret_env} is empty", file=sys.stderr)
@@ -257,6 +271,7 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
                 device_header=args.mcp_device_header,
                 upstream_ssl=home.ssl_context() if args.mcp_device_cert else None,
                 forward_user=args.mcp_device_cert,
+                protected_resources=protected,
             )
         )
     if args.openclaw_audit_proxy:  # team gateway: who approved / stopped what (M5b)
@@ -277,29 +292,31 @@ def _cmd_run(home: SensorHome, args: argparse.Namespace) -> int:
     if not adapters and args.no_local_api:
         print("nothing to do: pass --openclaw, --replay, a proxy, or keep the local API on", file=sys.stderr)
         return 2
+    ctx = AdapterContext(sensor, user_id=args.user, hostname=socket.gethostname())
+    # Optional OpenClaw integration: the gateway plugin can connect to the local API at any time, so its
+    # state is always there and persisted (a plugin seen once stays expected across restarts).
+    from .adapters.openclaw_people import OpenClawPeople
+    from .adapters.openclaw_state import OpenClawState, attach
     from .registry import PluginRegistry
 
-    plugins = PluginRegistry(state_path=home.root / "plugin-state.json")  # survives restarts
-    from .adapters.openclaw_people import OpenClawPeople
-
-    people = OpenClawPeople(state_path=home.root / "openclaw-people.json")  # team gateway attribution
-    ctx = AdapterContext(
-        sensor, user_id=args.user, hostname=socket.gethostname(), plugins=plugins, people=people
-    )
+    attach(ctx, OpenClawState(
+        plugins=PluginRegistry(state_path=home.root / "plugin-state.json"),
+        people=OpenClawPeople(state_path=home.root / "openclaw-people.json"),
+    ))  # fmt: skip
     local_api = None
-    if not args.no_local_api and sys.platform == "win32":
-        from .plugin_api import ENDPOINT_FILE, LocalApiServer
+    if not args.no_local_api:
+        from .local_api import ENDPOINT_FILE, SOCKET_NAME
+        from .plugin_api import openclaw_local_api
 
-        # No unix sockets in asyncio on Windows: loopback TCP + a token in the user's profile (M12).
-        local_api = LocalApiServer(ctx, home.root / ENDPOINT_FILE, tcp=True)
-    elif not args.no_local_api:
-        from .plugin_api import LocalApiServer
-
-        sock = args.socket or home.root / "sga.sock"
-        if len(str(sock).encode()) > 100:  # AF_UNIX path limit (104 on macOS, 108 on Linux)
-            print(f"socket path too long for a unix socket: {sock} (use --socket)", file=sys.stderr)
-            return 2
-        local_api = LocalApiServer(ctx, sock)
+        if sys.platform == "win32":
+            # No unix sockets in asyncio on Windows: loopback TCP + a token in the user's profile (M12).
+            local_api = openclaw_local_api(ctx, home.root / ENDPOINT_FILE, tcp=True)
+        else:
+            sock = args.socket or home.root / SOCKET_NAME
+            if len(str(sock).encode()) > 100:  # AF_UNIX path limit (104 on macOS, 108 on Linux)
+                print(f"socket path too long for a unix socket: {sock} (use --socket)", file=sys.stderr)
+                return 2
+            local_api = openclaw_local_api(ctx, sock)
     daemon = Daemon(
         sensor,
         adapters,
@@ -374,6 +391,23 @@ def _cmd_claude_code(home: SensorHome, args: argparse.Namespace) -> int:
         print(f"guard hook   {st['guard']}  (managed: can't be removed; user: removable; missing: none)")
         print(f"defaultMode  {st['default_mode'] or '-'}  bypass disabled: {st['bypass_disabled']}")
     return 0
+
+
+def _cmd_codex(home: SensorHome, args: argparse.Namespace) -> int:
+    from . import codex_setup
+
+    try:
+        if args.action == "install":
+            print(codex_setup.install(home.root, args.user, config_dir=args.config_dir, dry_run=args.dry_run))
+        elif args.action == "uninstall":
+            print("removed" if codex_setup.uninstall(args.config_dir) else "not installed")
+        else:
+            for key, value in codex_setup.status(args.config_dir).items():
+                print(f"{key}: {value}")
+        return 0
+    except (OSError, RuntimeError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
 
 def _cmd_service(home: SensorHome, args: argparse.Namespace) -> int:
@@ -458,6 +492,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--mcp-proxy-secret-env", metavar="ENV_VAR", help="accept only requests from the LAN gateway"
     )
+    p.add_argument("--mcp-protected-resource", action="append", default=[], metavar="NAME",
+                   help="registered protected repository upstream; keeps device credentials in this gateway")
     p.add_argument("--mcp-device-header", help="device id header the LAN gateway sets (e.g. x-sga-device)")
     p.add_argument(
         "--mcp-device-cert", action="store_true",
@@ -551,6 +587,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--user", default=os.environ.get("SGA_USER") or getpass.getuser(), help="employee id")
     p.add_argument("--dry-run", action="store_true", help="print the settings, change nothing")
     p.set_defaults(fn=_cmd_claude_code)
+
+    p = sub.add_parser("codex", help="configure the direct Codex CLI hook (review trust in Codex /hooks)")
+    p.add_argument("action", choices=["install", "uninstall", "status"])
+    p.add_argument("--config-dir", type=Path, help="Codex config directory (default CODEX_HOME or ~/.codex)")
+    p.add_argument("--user", default=os.environ.get("SGA_USER") or getpass.getuser())
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(fn=_cmd_codex)
 
     p = sub.add_parser("evaluate", help="judge one plugin request from stdin with the cached policy")
     p.add_argument("--user", default=os.environ.get("SGA_USER") or getpass.getuser(), help="employee id")

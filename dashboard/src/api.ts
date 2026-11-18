@@ -11,14 +11,18 @@ import type {
   DeviceInventory,
   Finding,
   FindingDetail,
+  Identity,
+  IdentityAdministration,
   PersonRisk,
   PolicyChange,
   PolicyRule,
   PolicyScope,
+  Project,
   RemoteAction,
-  Role,
+  SessionBinding,
   Summary,
   Timeline,
+  TaskGrant,
 } from "./types";
 
 const KEY = "sga-dashboard-token";
@@ -80,6 +84,7 @@ export class Api {
         signal: controller?.signal,
       });
       if (!res.ok) {
+        if (res.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event("sga-unauthorized"));
         let detail = res.statusText;
         try {
           const body = await res.json();
@@ -99,7 +104,20 @@ export class Api {
   }
 
   whoami() {
-    return this.get<{ role: Role }>("/whoami");
+    return this.get<Identity>("/whoami");
+  }
+
+  identityAdministration() { return this.get<IdentityAdministration>("/rbac"); }
+  projects() { return this.get<Project[]>("/rbac/projects"); }
+  sessions() { return this.get<SessionBinding[]>("/rbac/sessions"); }
+  ownedDevices() { return this.get<{ device_id: string }[]>("/rbac/owned-devices"); }
+  tasks() { return this.get<TaskGrant[]>("/tasks"); }
+  issueTask(body: { binding_id: string; environment: string; agent_profile: string; actions: string[]; paths: string[]; lifetime_seconds: number }) {
+    return this.call<TaskGrant & { token: string }>("POST", "/tasks", body);
+  }
+  revokeTask(id: string) { return this.call<{ revoked: boolean }>("DELETE", `/tasks/${encodeURIComponent(id)}`); }
+  identityWrite<T = unknown>(method: "POST" | "PUT" | "DELETE", path: string, body?: unknown) {
+    return this.call<T>(method, `/rbac${path}`, body);
   }
 
   summary(since: string | null) {
@@ -155,7 +173,7 @@ export class Api {
     return this.get<Device[]>("/devices");
   }
 
-  // Writes: the server accepts them from the admin token only (the dashboard token is GET-only).
+  // Permissions and target scope are verified again by the server for every write.
   setOverride(body: { scope: string; rule_id: string; enabled?: boolean; response?: string; allow?: string[]; by: string; reason: string }) {
     return this.call<{ revision: number }>("PUT", "/policy/overrides", body);
   }

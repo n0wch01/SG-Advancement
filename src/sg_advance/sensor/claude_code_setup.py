@@ -70,7 +70,8 @@ def hooks_block(exe: str, sga_home: Path, user: str) -> dict[str, Any]:
         if event == "PreToolUse":
             handler |= {"timeout": PRE_TOOL_TIMEOUT, "onFailure": "block"}
         elif event == "PostToolUse":
-            # Input PEP: a broken hook must not let an unchecked result through (fail closed, 2026-11-13).
+            # Failure feedback only: native 2.1.326 still exposes the original result when this hook
+            # cannot run. Successful output replacement is a separate capability (claude-code-live.md).
             handler |= {"timeout": OTHER_TIMEOUT, "onFailure": "block"}
         else:
             handler |= {"timeout": OTHER_TIMEOUT}

@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -60,6 +61,110 @@ class Base(DeclarativeBase):
 BASELINE_REVISION = "0001"  # the schema as M3-M7 created it without migrations
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    user_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(200))
+    disabled_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class UserToken(Base):
+    __tablename__ = "user_tokens"
+
+    token_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class Team(Base):
+    __tablename__ = "teams"
+
+    team_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+
+
+class TeamMember(Base):
+    __tablename__ = "team_members"
+
+    team_id: Mapped[str] = mapped_column(ForeignKey("teams.team_id"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"), primary_key=True)
+
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    project_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    workspace_root: Mapped[str | None] = mapped_column(String(1000))
+    environments: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["development", "test"])
+    disabled_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class Role(Base):
+    __tablename__ = "roles"
+
+    role_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    permissions: Mapped[list[str]] = mapped_column(JSON)
+
+
+class RoleBinding(Base):
+    __tablename__ = "role_bindings"
+    __table_args__ = (CheckConstraint(
+        "(user_id IS NOT NULL AND team_id IS NULL) OR (user_id IS NULL AND team_id IS NOT NULL)",
+        name="ck_role_subject",
+    ),)
+
+    binding_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    role_id: Mapped[str] = mapped_column(ForeignKey("roles.role_id"))
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id"), index=True)
+    team_id: Mapped[str | None] = mapped_column(ForeignKey("teams.team_id"), index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.project_id"), index=True)
+    environment: Mapped[str] = mapped_column(String(40), default="development")
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class AgentSessionBinding(Base):
+    __tablename__ = "agent_session_bindings"
+    __table_args__ = (UniqueConstraint("device_id", "agent_type", "session_id"),)
+
+    binding_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), index=True)
+    agent_type: Mapped[str] = mapped_column(String(40))
+    session_id: Mapped[str] = mapped_column(String(200))
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.project_id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class TaskGrant(Base):
+    __tablename__ = "task_grants"
+
+    grant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"), index=True)
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), index=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.project_id"), index=True)
+    binding_id: Mapped[str] = mapped_column(ForeignKey("agent_session_bindings.binding_id"))
+    origin_token_id: Mapped[str] = mapped_column(ForeignKey("user_tokens.token_id"))
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey("task_grants.grant_id"))
+    claims: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class DevicePosture(Base):
+    __tablename__ = "device_posture"
+
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), primary_key=True)
+    checks: Mapped[dict[str, Any]] = mapped_column(JSON)
+    received_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
 class EnrollmentToken(Base):
     """Issued by an admin, handed to whoever installs a sensor. Only the hash is stored."""
 
@@ -104,6 +209,7 @@ class Device(Base):
     # Review 2026-11-15: the person this device belongs to (a laptop). Set by security; the LAN gateway
     # then forwards this person for MCP calls whatever the device claims. None: the device's claim.
     owner: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    owner_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id"), nullable=True)
     revoke_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
 
@@ -119,6 +225,8 @@ class EventRow(Base):
     agent_type: Mapped[str] = mapped_column(String(40), index=True)
     session_id: Mapped[str] = mapped_column(String(200), index=True)
     sensor: Mapped[str] = mapped_column(String(40))
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.project_id"), index=True)
+    actor_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id"), index=True)
     doc: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
@@ -135,6 +243,8 @@ class FindingRow(Base):
     user_id: Mapped[str] = mapped_column(String(200), index=True)
     agent_type: Mapped[str] = mapped_column(String(40), index=True)
     session_id: Mapped[str] = mapped_column(String(200), index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.project_id"), index=True)
+    actor_id: Mapped[str | None] = mapped_column(ForeignKey("users.user_id"), index=True)
     doc: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
@@ -227,6 +337,8 @@ class RemoteAction(Base):
     The table is the audit trail: who, why, when it was delivered, whether it worked."""
 
     __tablename__ = "remote_actions"
+
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.project_id"), index=True)
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), index=True)

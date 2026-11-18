@@ -30,8 +30,8 @@ from pathlib import Path
 import yaml
 
 from sg_advance.detect import Engine, RuleSet
+from sg_advance.sensor.decision import input_guard_hits
 from sg_advance.sensor.judge import InjectionJudge, chunks, load_judge
-from sg_advance.sensor.plugin_api import input_guard_hits
 from sg_advance.shorthand import build_event
 
 ROOT = Path(__file__).resolve().parents[1]

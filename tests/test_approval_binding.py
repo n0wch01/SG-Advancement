@@ -13,7 +13,7 @@ from typing import Any
 
 from sg_advance.sensor import Sensor, hook
 from sg_advance.sensor.adapters import AdapterContext
-from sg_advance.sensor.plugin_api import judge_event
+from sg_advance.sensor.decision import judge_event
 from sg_advance.sensor.response import BLOCKED_SESSIONS
 
 BASE = {"session_id": "cc-9", "cwd": "/work/repo", "permission_mode": "default"}

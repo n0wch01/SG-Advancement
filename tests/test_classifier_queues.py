@@ -58,7 +58,7 @@ def test_a_failed_classifier_has_its_own_queue(enrolled: Sensor, cp: TestClient)
 def test_findings_without_a_verdict_stay_in_review(enrolled: Sensor, cp: TestClient) -> None:
     """Everything the classifier does not look at (exfiltration, destructive commands…) is as before."""
     from sg_advance.sensor.adapters import AdapterContext
-    from sg_advance.sensor.plugin_api import CLAUDE_CODE_HOOK, judge_event
+    from sg_advance.sensor.decision import CLAUDE_CODE_HOOK, judge_event
     from test_external_input import pre
 
     ctx = AdapterContext(enrolled, "bob", "pc")

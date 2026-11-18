@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from ..integrity import Manifest, effective_status
 from ..schema import AgentEvent, EventKind
+from .access import actor
 from .auth import DbSession, require_admin
 from .db import EventRow, PackageManifestRow, utcnow
 from .supply import DEFAULT_PUBLISHERS, SupplyError, VerifiedPackage, parse_spec, publisher_for
@@ -239,7 +240,7 @@ def add_manifest(body: AddRequest, request: Request, db: DbSession) -> ManifestO
     row = db.get(PackageManifestRow, body.spec)
     assert row is not None
     if body.approve and not row.error:
-        row.approved, row.revoked, row.decided_by, row.decided_at = True, False, body.by, utcnow()
+        row.approved, row.revoked, row.decided_by, row.decided_at = True, False, actor(request), utcnow()
         db.commit()
     request.app.state.refresh_policy()
     return _out(row, _cooldown(request))
@@ -261,13 +262,13 @@ def _decide(request: Request, db: Session, spec: str, *, approve: bool, by: str 
 @router.post("/approve", response_model=ManifestOut)
 def approve_manifest(body: SpecRequest, request: Request, db: DbSession) -> ManifestOut:
     """Trust a verified version now (e.g. an urgent fix still inside the release cooldown)."""
-    return _decide(request, db, body.spec, approve=True, by=body.by)
+    return _decide(request, db, body.spec, approve=True, by=actor(request))
 
 
 @router.post("/revoke", response_model=ManifestOut)
 def revoke_manifest(body: SpecRequest, request: Request, db: DbSession) -> ManifestOut:
     """Stop trusting a version (e.g. it turned out to be malicious): plugins lose trusted status."""
-    return _decide(request, db, body.spec, approve=False, by=body.by)
+    return _decide(request, db, body.spec, approve=False, by=actor(request))
 
 
 class SkillApproveRequest(_Model):
@@ -308,7 +309,7 @@ def approve_skill(body: SkillApproveRequest, request: Request, db: DbSession) ->
     )
     row.components = {f"skill:{body.ref}": digest}
     row.error, row.approved, row.revoked = None, True, False
-    row.decided_by, row.decided_at = body.by, utcnow()
+    row.decided_by, row.decided_at = actor(request), utcnow()
     db.merge(row)
     db.commit()
     request.app.state.refresh_policy()
@@ -324,7 +325,7 @@ def pin_plugin(body: PinRequest, request: Request, db: DbSession) -> ManifestOut
     )
     row.components = {f"plugin:{body.plugin_id}": body.digest}
     row.error, row.approved, row.revoked = None, True, False
-    row.decided_by, row.decided_at = body.by, utcnow()
+    row.decided_by, row.decided_at = actor(request), utcnow()
     db.merge(row)
     db.commit()
     request.app.state.refresh_policy()

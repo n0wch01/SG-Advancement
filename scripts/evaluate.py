@@ -35,7 +35,8 @@ from sg_advance.sensor import Sensor, SensorHome, enroll, hook
 from sg_advance.sensor.adapters import AdapterContext
 from sg_advance.sensor.adapters.mcp_gateway import McpGatewayAdapter, body_chunks, read_head
 from sg_advance.sensor.client import HttpResponse
-from sg_advance.sensor.plugin_api import CLAUDE_CODE_HOOK, judge, judge_event
+from sg_advance.sensor.decision import CLAUDE_CODE_HOOK, judge_event
+from sg_advance.sensor.plugin_api import judge
 from sg_advance.server import Settings, create_app
 from sg_advance.shorthand import build_event
 

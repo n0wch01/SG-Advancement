@@ -189,7 +189,7 @@ async def test_a_result_for_a_refused_call_contradicts_the_refusal(enrolled: Sen
     """The hook told Claude Code to deny; if the call's result arrives anyway, the refusal was not
     applied: recorded as a critical finding, the original stays 'unconfirmed' (never 'success')."""
     from sg_advance.sensor.adapters import AdapterContext
-    from sg_advance.sensor.plugin_api import CLAUDE_CODE_HOOK, judge_event
+    from sg_advance.sensor.decision import CLAUDE_CODE_HOOK, judge_event
 
     ctx = AdapterContext(enrolled, "bob", "pc")
     base = {"endpoint": {"device_id": "pending"}, "principal": {"user_id": "bob"},
@@ -240,6 +240,13 @@ def test_posture_results_survive_for_the_hooks_degraded_path(enrolled: Sensor) -
     enrolled.set_posture("claude-code-hook", ["claude-code: no SG-Advance hook"])
     again = Sensor(enrolled.home, transport=enrolled.client._send)  # what the hook builds with no daemon
     assert again.posture_state() == ("degraded", ["claude-code: no SG-Advance hook"])
+
+
+def test_a_fresh_check_cannot_hide_another_stale_check(enrolled: Sensor) -> None:
+    enrolled.set_posture("agent-discovery", [])
+    enrolled.set_posture("claude-code-hook", [])
+    enrolled._posture_at["claude-code-hook"] = now_utc() - timedelta(hours=2)
+    assert enrolled.posture_state() == ("unknown", [])
 
 
 def test_risk_score_weighs_severity_and_recency() -> None:

@@ -25,11 +25,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..pki import fingerprint
-from .db import Device, utcnow
+from .access import Identity, admin_permission, attach_scope, identity_for
+from .db import Device, User, UserToken, utcnow
 from .device_ca import presented_certificate
 
 ENROLL_PREFIX = "set_"  # SG-Advance enrollment token (prefix kept: existing tokens stay valid)
 DEVICE_PREFIX = "sdt_"  # SG-Advance device token
+USER_PREFIX = "sut_"
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -67,18 +69,42 @@ def _matches(token: str, expected: str | None) -> bool:
     return bool(expected) and hmac.compare_digest(token.encode(), expected.encode())  # type: ignore[union-attr]
 
 
-def require_admin(request: Request, token: Token) -> None:
-    """Admin token for everything; the dashboard token for reads. Sets ``request.state.role``."""
+def authenticate(request: Request, token: Token, db: DbSession) -> Identity:
+    """Read fresh identity/token/role state on every request; endpoint labels are never authority."""
     settings = request.app.state.settings
+    request.state.user_token_id = None
     if _matches(token, settings.admin_token):
-        request.state.role = "admin"
-        return
-    if _matches(token, settings.dashboard_token):
+        identity = Identity("bootstrap:admin", "Bootstrap administrator", legacy_role="admin")
+    elif _matches(token, settings.dashboard_token):
         if request.method not in READ_METHODS:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "the dashboard token is read-only")
-        request.state.role = "viewer"
+        identity = Identity("legacy:viewer", "Shared read-only session", legacy_role="viewer")
+    else:
+        row = db.scalar(select(UserToken).where(UserToken.token_hash == hash_token(token)))
+        if row is None or row.revoked_at is not None or row.expires_at <= utcnow():
+            raise _unauthorized("invalid or expired user token")
+        user = db.get(User, row.user_id)
+        if user is None or user.disabled_at is not None:
+            raise _unauthorized("user disabled")
+        identity = identity_for(db, user)
+        request.state.user_token_id = row.token_id
+    request.state.identity = identity
+    request.state.role = identity.legacy_role or "member"
+    attach_scope(db, identity)
+    return identity
+
+
+CurrentIdentity = Annotated[Identity, Depends(authenticate)]
+
+
+def require_admin(request: Request, identity: CurrentIdentity) -> None:
+    if identity.legacy_role is not None:
         return
-    raise _unauthorized("invalid admin token")
+    permission = admin_permission(request.scope["route"].path, request.method)
+    if permission == "authenticated":
+        return
+    if permission is None or not identity.has_any(permission):
+        raise HTTPException(403, f"permission required: {permission or 'unregistered endpoint'}")
 
 
 PROXY_SECRET_HEADER = "x-sga-proxy-secret"

@@ -142,7 +142,7 @@ def test_revoking_a_device_or_an_enrollment_token(lan: TestClient, tmp_path: Pat
         == 403
     )
     r = lan.post("/v1/admin/devices/laptop/revoke", json=WHO, headers=CP_ADMIN)
-    assert r.status_code == 200 and r.json()["revoked_by"] == "secops@corp.test"
+    assert r.status_code == 200 and r.json()["revoked_by"] == "bootstrap:admin"
     auth = {"Authorization": f"Bearer {sensor.creds.device_token}"}
     resp = Gateway(lan, home.cert_path)("GET", f"{LAN_URL}/v1/policy", auth, None)
     assert resp.status == 401 and b"revoked" in resp.body

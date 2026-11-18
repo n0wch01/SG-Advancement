@@ -1,0 +1,32 @@
+services:
+  control-plane:
+    build:
+      context: .
+      dockerfile: deploy/control-plane.Dockerfile
+    environment:
+      SGA_ADMIN_TOKEN: ${SGA_TASK_LAB_ADMIN_TOKEN:?use scripts/task_live_lab.py up}
+      SGA_AUTO_VERIFY: "0"
+      SGA_RESOURCE_ROOT: /data/resources
+      SGA_DASHBOARD_DIR: /opt/sga-dashboard
+      PYTHONDONTWRITEBYTECODE: "1"
+    labels:
+      sg-advance.task-owner: ${SGA_TASK_LAB_OWNER:?use scripts/task_live_lab.py up}
+    ports:
+      - "127.0.0.1:${SGA_TASK_LAB_PORT:-8775}:8000"
+    volumes:
+      - task-state:/data
+      - ./dashboard/dist:/opt/sga-dashboard:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [task-net]
+
+volumes:
+  task-state:
+    labels:
+      sg-advance.task-owner: ${SGA_TASK_LAB_OWNER:?use scripts/task_live_lab.py up}
+
+networks:
+  task-net:
+    driver: bridge

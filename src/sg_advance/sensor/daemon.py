@@ -22,8 +22,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from .adapters.base import Adapter, AdapterContext
+from .adapters.openclaw_state import KEY as OPENCLAW
 from .core import NoPolicy, Sensor, SyncStatus
-from .plugin_api import LocalApiServer, record_health
+from .local_api import LocalApiServer
 from .spool import FlushResult
 
 log = logging.getLogger(__name__)
@@ -101,34 +102,23 @@ class Daemon:
         slept = (now - last[0]) - (mono - last[1])
         if slept > HOST_SLEEP_MIN:
             log.info("host was suspended for %.0fs; not counted against the plugin heartbeat", slept)
-            self.ctx.plugins.excuse(slept)
+            if OPENCLAW in self.ctx.extensions:
+                from . import plugin_api
+
+                plugin_api.excuse_host_sleep(self.ctx, slept)
 
     def check_plugin_health(self, now: float | None = None, mono: float | None = None) -> str | None:
-        """Emit a sensor.health event when the gateway plugin's heartbeats stop.
-        ``now``/``mono``: wall and monotonic clocks (tests). A ``now`` without ``mono`` moves both."""
+        """The OpenClaw gateway plugin's liveness (only when this daemon has OpenClaw state: a Claude Code
+        or Codex-only PC has no plugin to lose). ``now``/``mono``: wall and monotonic clocks (tests). A
+        ``now`` without ``mono`` moves both."""
         if now is None:
             now, mono = time.time(), time.monotonic()
         self._excuse_host_sleep(now, now if mono is None else mono)
-        plugins = self.ctx.plugins
-        said_bye = plugins.bye_at is not None
-        if plugins.check(now) != "lost":
+        if OPENCLAW not in self.ctx.extensions:
             return None
-        last = plugins.last_contact
-        quiet = now - last - plugins.excused if last is not None else None
-        if said_bye:
-            detail = f"plugin was unloaded by the gateway and did not return within {plugins.bye_grace:.0f}s"
-        elif quiet is not None and plugins.excused:
-            detail = (
-                f"no heartbeat for {quiet:.0f}s while the host was awake "
-                f"({plugins.excused:.0f}s asleep not counted)"
-            )
-        elif quiet is not None:
-            detail = f"no heartbeat for {quiet:.0f}s"
-        else:
-            detail = "no heartbeat since the sensor started"
-        log.warning("openclaw plugin heartbeat lost (%s)", detail)
-        record_health(self.ctx, "lost", detail, last)
-        return "lost"
+        from . import plugin_api
+
+        return plugin_api.check_plugin_health(self.ctx, now)
 
     async def _health_loop(self) -> None:
         while True:

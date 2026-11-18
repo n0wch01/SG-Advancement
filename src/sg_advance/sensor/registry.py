@@ -1,4 +1,6 @@
-"""Shared in-daemon state between enforcement points and observers."""
+"""OpenClaw gateway plugin state in the daemon: what the plugin judged, and whether it is alive.
+
+Agent-neutral approval bookkeeping lives in ``approvals`` (2026-11-18)."""
 
 from __future__ import annotations
 
@@ -6,7 +8,6 @@ import json
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any
 
 from .state import read_json_dict
 
@@ -38,8 +39,6 @@ class PluginRegistry:
         self.lost_after = lost_after
         self.state_path = state_path
         self.tool_plugins: dict[str, str] = {}  # tool name -> plugin id, filled by the WS adapter
-        # call id -> what asked for approval (event/finding ids, rules), until the user answers
-        self._pending: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self.expected = False
         self.last_contact: float | None = None  # wall clock (epoch seconds)
         self.lost_reported = False
@@ -137,24 +136,3 @@ class PluginRegistry:
 
     def seen(self, call_id: str) -> bool:
         return call_id in self._seen
-
-    # ── approvals waiting for a person ───────────────────────────────────────
-
-    def remember_approval(self, call_id: str, context: dict[str, Any], keep: int = 5_000) -> None:
-        self._pending[call_id] = context
-        self._pending.move_to_end(call_id)
-        while len(self._pending) > keep:  # prompts that never resolved (gateway restart, …)
-            self._pending.popitem(last=False)
-
-    def take_approval(self, call_id: str) -> dict[str, Any] | None:
-        return self._pending.pop(call_id, None)
-
-    def take_session(self, conversation: str) -> list[dict[str, Any]]:
-        """Remove and return the approvals still waiting in one conversation (its main session id; a
-        subagent's call counts towards its root). Entries without the call (OpenClaw) never match."""
-        def of(ctx: dict[str, Any]) -> str | None:
-            agent = getattr(ctx.get("call"), "agent", None)
-            return (agent.root_session_id or agent.session_id) if agent is not None else None
-
-        ids = [cid for cid, ctx in self._pending.items() if of(ctx) == conversation]
-        return [self._pending.pop(cid) for cid in ids]

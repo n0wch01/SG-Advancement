@@ -64,6 +64,7 @@ _HOP = {
 }
 PROXY_SECRET_HEADER = "x-sga-proxy-secret"
 FORWARDED_USER_HEADER = "X-SGA-User"
+TASK_GRANT_HEADER = "x-sga-task-grant"
 # Never passed upstream from the client: identity is what this gateway or the LAN gateway says.
 IDENTITY_HEADERS = {PROXY_SECRET_HEADER, "x-sga-device", "x-sga-client-cert", "x-sga-entry"}
 CLIENT_AUTH_HEADERS = {"authorization", "proxy-authorization", "cookie", "x-api-key"}
@@ -181,7 +182,9 @@ def tool_refusal(msg_id: Any, reason: str) -> dict[str, Any]:
 
 def _agent_type(user_agent: str) -> str:
     ua = user_agent.lower()
-    return "claude_code" if "claude-code" in ua or "claude code" in ua else "unknown"
+    if "claude-code" in ua or "claude code" in ua:
+        return "claude_code"
+    return "codex_cli" if "codex-cli" in ua or "codex cli" in ua else "unknown"
 
 
 INSPECT_MAX = 1_000_000  # results are judged whole up to this; the sensor keeps a short preview
@@ -213,6 +216,7 @@ class McpGatewayAdapter:
         proxy_secret: str | None = None,
         device_header: str | None = None,
         forward_user: bool = False,
+        protected_resources: frozenset[str] = frozenset(),
     ) -> None:
         host, _, port = listen.rpartition(":")
         self.host, self.port = host or "127.0.0.1", int(port)
@@ -226,6 +230,10 @@ class McpGatewayAdapter:
         # Zero trust (2026-11-13): the resource's credential lives here, never with the agent. For a
         # server listed here the client's own auth headers are dropped and this value is sent instead.
         self.credentials = dict(credentials or {})
+        if (not protected_resources <= set(servers) or not protected_resources <= self.credentials.keys()
+                or (protected_resources and not enforce)):
+            raise ValueError("protected resources require registered upstream credentials and enforcement")
+        self.protected_resources = protected_resources
         unknown = set(self.credentials) - set(servers)
         if unknown:
             raise ValueError(f"credentials for unknown MCP servers: {sorted(unknown)}")
@@ -237,13 +245,17 @@ class McpGatewayAdapter:
         self.forward_user = forward_user
         self.quarantined: set[tuple[str, str]] = set()  # (server, tool) hidden from agents
         self._server: asyncio.base_events.Server | None = None
+        self._context: AdapterContext | None = None
 
     async def start(self, ctx: AdapterContext) -> None:
+        self._context = ctx
+
         async def handler(r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
             await self._client(ctx, r, w)
 
         self._server = await asyncio.start_server(handler, self.host, self.port)
         self.port = self._server.sockets[0].getsockname()[1]
+        ctx.sensor.set_posture("mcp-gateway", [] if self.enforce else ["MCP gateway is in monitor mode"])
         log.info(
             "mcp gateway on %s:%d (%s): %s", self.host, self.port,
             "enforce" if self.enforce else "monitor", ", ".join(sorted(self.servers)),
@@ -252,10 +264,19 @@ class McpGatewayAdapter:
     async def run(self, ctx: AdapterContext) -> None:
         await self.start(ctx)
         assert self._server is not None
-        async with self._server:
-            await self._server.serve_forever()
+        try:
+            async with self._server:
+                while self._server.is_serving():
+                    ctx.sensor.set_posture(
+                        "mcp-gateway", [] if self.enforce else ["MCP gateway is in monitor mode"]
+                    )
+                    await asyncio.sleep(30)
+        finally:
+            ctx.sensor.set_posture("mcp-gateway", ["MCP gateway stopped"])
 
     async def close(self) -> None:
+        if self._context is not None:
+            self._context.sensor.set_posture("mcp-gateway", ["MCP gateway stopped"])
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
@@ -337,7 +358,7 @@ class McpGatewayAdapter:
         client: asyncio.StreamReader | None = None,
     ) -> tuple[dict[Any, Any], list[dict[str, Any]]]:
         """(pending inspections by request id, refusals to send instead of forwarding)."""
-        from ..plugin_api import MCP_GATEWAY, judge_event
+        from ..decision import MCP_GATEWAY, judge_event
 
         pending: dict[Any, Any] = {}
         refusals: list[dict[str, Any]] = []
@@ -438,7 +459,7 @@ class McpGatewayAdapter:
         """Input PEP (KISA agentic AI ZT guide 2.4, P6-7): a tool result with high or critical prompt-
         injection findings never reaches the model; it gets a notice instead (enforce mode). The full
         preview is kept with the event for security. Lower severities are recorded only."""
-        from ..plugin_api import MCP_GATEWAY, input_guard_hits, withheld_response
+        from ..decision import MCP_GATEWAY, input_guard_hits, withheld_response
 
         event = self._event(ctx, name, who, payload)
         if uninspected:
@@ -541,6 +562,8 @@ class McpGatewayAdapter:
             path = url.path or "/"
             head = [f"{method} {path}{'?' + url.query if url.query else ''} HTTP/1.1", f"Host: {url.netloc}"]
             dropped = set(_HOP) | IDENTITY_HEADERS | {self.user_header or "", self.device_header or ""}
+            if name not in self.protected_resources:
+                dropped.add(TASK_GRANT_HEADER)
             if name in self.credentials:
                 dropped |= CLIENT_AUTH_HEADERS
             head += [f"{k}: {v}" for k, v in headers.items() if k not in dropped]

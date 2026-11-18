@@ -30,8 +30,8 @@ def replay(sensor: Sensor, *names: str) -> None:
 
 
 def test_dashboard_token_reads_but_never_writes(cp_view: TestClient) -> None:
-    assert cp_view.get("/v1/admin/whoami", headers=VIEWER).json() == {"role": "viewer"}
-    assert cp_view.get("/v1/admin/whoami", headers=CP_ADMIN).json() == {"role": "admin"}
+    assert cp_view.get("/v1/admin/whoami", headers=VIEWER).json()["role"] == "viewer"
+    assert cp_view.get("/v1/admin/whoami", headers=CP_ADMIN).json()["role"] == "admin"
     for path in ("/v1/admin/findings", "/v1/admin/events", "/v1/admin/devices", "/v1/admin/approvals"):
         assert cp_view.get(path, headers=VIEWER).status_code == 200, path
     assert cp_view.get("/v1/admin/manifests", headers=VIEWER).status_code == 200

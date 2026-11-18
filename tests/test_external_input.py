@@ -19,7 +19,7 @@ from sg_advance.detect import Engine, RuleSet
 from sg_advance.sensor import Sensor, hook
 from sg_advance.sensor.adapters import AdapterContext
 from sg_advance.sensor.adapters.mcp_gateway import McpGatewayAdapter
-from sg_advance.sensor.plugin_api import CLAUDE_CODE_HOOK, judge_event
+from sg_advance.sensor.decision import CLAUDE_CODE_HOOK, judge_event
 from sg_advance.shorthand import build_event
 from test_mcp_gateway import FakeMcp, call, rpc
 

@@ -1,3 +1,4 @@
+import { usePermission } from "../access";
 import { useEffect, useState } from "react";
 
 import { ApiError, type Api } from "../api";
@@ -17,6 +18,7 @@ const RANGES: [string, string][] = [
 // Policy (2026-11-11, 2026-11-14): people approve risky actions themselves, grade 3-1 included; only very
 // high risk is blocked outright. Security reviews each approved high/critical call here afterwards.
 export function Approvals({ api, query, role }: { api: Api; query: Record<string, string>; role: Role | null }) {
+  const canReview = usePermission("approvals.review", role);
   const view = query.review === "pending" ? "pending" : query.approved === "false" ? "denied" : query.approved === "all" ? "all" : "approved";
   const range = query.range ?? "7d";
   const [rows, setRows] = useState<Approval[]>([]);
@@ -102,7 +104,7 @@ export function Approvals({ api, query, role }: { api: Api; query: Record<string
       {error && <ErrorBox error={error} />}
       {!loading && !error && rows.length === 0 && <Empty>이 조건의 승인 기록이 없습니다.</Empty>}
       {view === "pending" &&
-        rows.map((a) => <ReviewCard key={a.event_id} api={api} a={a} admin={role === "admin"} onDone={() => void load(0)} />)}
+        rows.map((a) => <ReviewCard key={a.event_id} api={api} a={a} admin={canReview} onDone={() => void load(0)} />)}
       {rows.length > 0 && view !== "pending" && (
         <div className="card flush">
           <table className="approvals">
@@ -205,10 +207,10 @@ function ReviewChip({ a }: { a: Approval }) {
 // One approved high/critical call: what ran, why it asked, and security's verdict. "문제 있음" is
 // followed by a response from the finding page (block the person or the conversation).
 function ReviewCard({ api, a, admin, onDone }: { api: Api; a: Approval; admin: boolean; onDone: () => void }) {
-  const [by, setBy] = useState("");
+  const by = "authenticated";
   const [reason, setReason] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
-  const ready = by.trim() !== "" && reason.trim() !== "";
+  const ready = reason.trim() !== "";
   const who = approverText(a);
   const submit = async (status: "ok" | "problem") => {
     setMsg(null);
@@ -246,10 +248,7 @@ function ReviewCard({ api, a, admin, onDone }: { api: Api; a: Approval; admin: b
       {admin ? (
         <>
           <div className="filters">
-            <label>
-              누가
-              <input value={by} onChange={(e) => setBy(e.target.value)} placeholder="예: secops@corp.test" />
-            </label>
+            <p className="muted small">로그인한 계정으로 기록됩니다.</p>
             <label className="grow">
               왜
               <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="검토 의견 (문제 있음이면 이어서 Finding 화면에서 차단)" />

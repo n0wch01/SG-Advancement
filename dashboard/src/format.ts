@@ -183,7 +183,8 @@ export type Route =
   | { page: "inventory" }
   | { page: "timeline"; query: Record<string, string> }
   | { page: "policy"; query: Record<string, string> }
-  | { page: "actions" };
+  | { page: "actions" }
+  | { page: "access" };
 
 export function parseHash(hash: string): Route {
   const [path, qs = ""] = hash.replace(/^#/, "").split("?", 2);
@@ -194,6 +195,7 @@ export function parseHash(hash: string): Route {
   if (parts[0] === "findings") return { page: "findings", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "inventory") return { page: "inventory" };
   if (parts[0] === "actions") return { page: "actions" };
+  if (parts[0] === "access") return { page: "access" };
   if (parts[0] === "policy") return { page: "policy", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "timeline") return { page: "timeline", query: Object.fromEntries(new URLSearchParams(qs)) };
   if (parts[0] === "approvals") return { page: "approvals", query: Object.fromEntries(new URLSearchParams(qs)) };

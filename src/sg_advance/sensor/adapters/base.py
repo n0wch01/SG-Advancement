@@ -8,7 +8,8 @@ and hands each one to the daemon through ``AdapterContext``:
     ctx.record(result, enforcement)     # queue redacted event + findings with the outcome
 
 Observation-only adapters pass ``None`` as enforcement. Blocking adapters (OpenClaw plugin M5c,
-Claude Code hooks M6, MCP proxy M8) act before the tool runs; the OpenClaw WebSocket adapter can only
+Claude Code / Codex hooks, MCP gateway) act before the tool runs
+(sensor/decision.py); the OpenClaw WebSocket adapter can only
 abort after a tool started (or deny a pending shell approval).
 """
 
@@ -19,9 +20,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ...schema import AgentEvent, Enforcement
+from ..approvals import PendingApprovals
 from ..envelope import envelope
-from ..registry import PluginRegistry
-from .openclaw_people import OpenClawPeople
 
 if TYPE_CHECKING:
     from ..core import ProcessResult, Sensor
@@ -37,9 +37,11 @@ class AdapterContext:
     sensor: Sensor
     user_id: str  # the employee this endpoint's agents act for
     hostname: str | None = None
-    plugins: PluginRegistry = field(default_factory=PluginRegistry)  # in-gateway plugin's judgements
-    people: OpenClawPeople = field(default_factory=OpenClawPeople)  # team gateway: session/run → person
+    approvals: PendingApprovals = field(default_factory=PendingApprovals)  # prompts awaiting a person
     actions: dict[str, ActionHandler] = field(default_factory=dict)  # remote response handlers (M11)
+    # Agent-specific daemon state, by integration name (OpenClaw: adapters/openclaw_state.py). The generic
+    # context names no product: a new agent adds its own entry instead of a field here (2026-11-18).
+    extensions: dict[str, Any] = field(default_factory=dict)
 
     def local_event(
         self,

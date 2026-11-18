@@ -267,6 +267,26 @@ def test_credentials_only_for_registered_servers() -> None:
         McpGatewayAdapter("127.0.0.1:0", {"crm": "http://x"}, credentials={"hr": "Bearer t"})
 
 
+@pytest.mark.parametrize("protected", [False, True])
+async def test_task_capabilities_are_forwarded_only_to_registered_protected_resources(enrolled, protected):
+    upstream = FakeMcp(sse=False)
+    server = await upstream.start()
+    gateway = McpGatewayAdapter(
+        "127.0.0.1:0", {"repo": f"http://127.0.0.1:{upstream.port}/mcp"},
+        credentials={"repo": "Bearer device-test"},
+        protected_resources=frozenset({"repo"}) if protected else frozenset(),
+    )
+    await gateway.start(AdapterContext(enrolled, "test", "pc"))
+    try:
+        await rpc(gateway.port, "/mcp/repo", LIST, extra="X-SGA-Task-Grant: bounded-capability\r\n")
+        sent = upstream.headers[-1]
+        assert (sent.get("x-sga-task-grant") == "bounded-capability") is protected
+        assert sent["authorization"] == "Bearer device-test"
+    finally:
+        await gateway.close()
+        server.close()
+
+
 async def test_an_upstream_refusal_reaches_the_agent_as_an_mcp_error(enrolled: Sensor) -> None:
     """A revoked laptop: the LAN gateway answers 403 with an HTML page; the local gateway turns it into
     a JSON-RPC error the agent can read."""

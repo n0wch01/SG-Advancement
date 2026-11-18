@@ -16,7 +16,7 @@ import pytest
 from sg_advance.sensor import Sensor, hook
 from sg_advance.sensor import claude_code_setup as cc
 from sg_advance.sensor.adapters import AdapterContext
-from sg_advance.sensor.plugin_api import LocalApiServer
+from sg_advance.sensor.local_api import LocalApiServer
 
 PRE = {
     "session_id": "cc-1",

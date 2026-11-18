@@ -297,6 +297,12 @@ OpenClaw agent ─ before_tool_call ─▶ 플러그인 ──JSON 한 줄──
 
 `sensor.health`는 이번에 추가한 이벤트 종류다. 툴 호출이 아니라 **통제 장치 자체의 상태**를 나타낸다.
 
+결함 수정(2026-11-18): 전에는 로컬 API의 **모든 요청**이 플러그인 인사로 처리됐다.
+- 그래서 OpenClaw가 없는 Claude Code 전용 PC도 hook 요청 한 번으로 "플러그인이 있어야 하는 장비"가 됐다.
+- 마지막 hook 요청 150초 뒤 `openclaw-plugin-heartbeat-lost`(high) 경보가 났다.
+- 지금은 플러그인 작업(`hello`, `tool_call`, `resolution`)만 생존 신호로 센다(`plugin_api.OPENCLAW_OPS`, 시험 `tests/test_decision.py`).
+- 이미 잘못 기억한 장비는 `<home>/plugin-state.json`의 `expected`가 남아 있어 한 번 더 `lost`를 낼 수 있다. OpenClaw를 쓰지 않는 장비라면 이 파일을 지우면 된다.
+
 플러그인은 OpenClaw가 인스턴스를 정리할 때(`api.lifecycle.onDispose`) 인사 타이머를 멈추고 `bye`를 보낸다.
 OpenClaw는 플러그인의 타이머를 대신 멈추지 않으므로, 이걸 안 하면 판정 hook이 빠진 뒤에도 인사가 계속 간다(아래 실환경 결과).
 `bye` 뒤 30초를 기다리는 이유는 정상적인 게이트웨이 재시작이나 플러그인 교체에서는 새 인스턴스가 몇 초 안에 인사하기 때문이다.

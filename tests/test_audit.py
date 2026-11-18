@@ -135,7 +135,7 @@ def test_security_reviews_the_persons_approvals_afterwards(enrolled: Sensor, cp:
     assert again.status_code == 409  # one review per approval, kept in the audit chain
     assert [x["call_id"] for x in approvals(cp, review="pending")] == ["c2"]
     [problem] = approvals(cp, review="problem")
-    assert problem["review"]["by"] == "lead@corp.test"
+    assert problem["review"]["by"] == "bootstrap:admin"
     with cp.app.state.db._sessions() as db:
         kinds = {e.kind for e in db.scalars(select(AuditEntry))}
     assert "approval_review" in kinds

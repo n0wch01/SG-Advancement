@@ -21,7 +21,7 @@ def test_migrations_produce_exactly_the_models(tmp_path) -> None:
     with db.engine.connect() as conn:
         ctx = MigrationContext.configure(conn, opts={"compare_type": True})
         assert compare_metadata(ctx, Base.metadata) == []
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0011"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0013"
     db.create_all()  # idempotent on every start
 
 
@@ -45,6 +45,34 @@ def test_a_database_from_before_migrations_keeps_its_data(tmp_path) -> None:
     db = Database(url)
     db.create_all()
     with db.engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0011"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0013"
         assert conn.execute(text("SELECT device_id, group_name FROM devices")).all() == [("dev-1", None)]
         assert {"policy_groups", "policy_overrides", "policy_changes"} <= set(inspect(conn).get_table_names())
+
+
+def test_rbac_upgrade_preserves_referenced_device_events_and_findings(tmp_path) -> None:
+    db = Database(f"sqlite:///{tmp_path / 'populated.db'}")
+    cfg = Config()
+    cfg.set_main_option("script_location", str(Path(db_module.__file__).parent / "migrations"))
+    with db.engine.begin() as conn:
+        cfg.attributes["connection"] = conn
+        command.upgrade(cfg, "0011")
+        conn.execute(text(
+            "INSERT INTO devices (device_id, token_hash, enrolled_at) VALUES ('device', 'hash', :ts)"
+        ), {"ts": datetime.now(UTC).isoformat()})
+        conn.execute(text(
+            "INSERT INTO events (event_id, device_id, ts, received_ts, kind, user_id, agent_type, "
+            "session_id, sensor, doc) VALUES ('event', 'device', :ts, :ts, 'tool.call', 'claimed', "
+            "'codex_cli', 'session', 'codex_cli_hook', '{}')"
+        ), {"ts": datetime.now(UTC).isoformat()})
+        conn.execute(text(
+            "INSERT INTO findings (finding_id, device_id, ts, received_ts, rule_id, severity, "
+            "category, user_id, agent_type, session_id, doc) VALUES ('finding', 'device', :ts, :ts, "
+            "'rule', 'high', 'tool_misuse', 'claimed', 'codex_cli', 'session', '{}')"
+        ), {"ts": datetime.now(UTC).isoformat()})
+    db.create_all()
+    with db.engine.connect() as conn:
+        assert conn.execute(text("PRAGMA foreign_key_check")).all() == []
+        for table in ("events", "findings"):
+            assert conn.execute(text(f"SELECT project_id, actor_id FROM {table}")).all() == [(None, None)]
+        assert conn.execute(text("SELECT owner_user_id FROM devices")).all() == [(None,)]

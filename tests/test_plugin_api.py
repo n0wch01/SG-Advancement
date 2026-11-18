@@ -17,8 +17,10 @@ import pytest
 
 from sg_advance.sensor import Sensor
 from sg_advance.sensor.adapters import AdapterContext
+from sg_advance.sensor.adapters.openclaw_state import OpenClawState, attach, openclaw
 from sg_advance.sensor.cli import main as sensor_main
-from sg_advance.sensor.plugin_api import LocalApiServer
+from sg_advance.sensor.local_api import LocalApiServer
+from sg_advance.sensor.plugin_api import openclaw_local_api
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = ROOT / "integrations" / "openclaw-plugin"
@@ -45,7 +47,7 @@ def spooled(sensor: Sensor, kind: str) -> list[dict[str, Any]]:
 @pytest.fixture
 async def api(enrolled: Sensor) -> AsyncIterator[tuple[LocalApiServer, Path]]:
     d = Path(tempfile.mkdtemp(prefix="sn", dir="/tmp"))  # AF_UNIX paths must stay short
-    server = LocalApiServer(AdapterContext(enrolled, "alice", "alice-pc"), d / "s.sock")
+    server = openclaw_local_api(AdapterContext(enrolled, "alice", "alice-pc"), d / "s.sock")
     await server.start()
     try:
         yield server, d / "s.sock"
@@ -79,7 +81,7 @@ async def test_verdicts_map_to_plugin_decisions(api, enrolled: Sensor) -> None:
         req("c2", command="psql $DB -c 'DROP TABLE users;'"),
         req("c3", tool="read", path="README.md"),
     )
-    assert hello == {"ok": True} and server.ctx.plugins.active
+    assert hello == {"ok": True} and openclaw(server.ctx).plugins.active
     assert block["decision"] == "block" and "sensitive-file-exfil-command" in block["rules"]
     assert approve["decision"] == "approve" and approve["action"] == "require_approval"
     assert allow["decision"] == "allow"
@@ -101,7 +103,7 @@ async def test_verdicts_map_to_plugin_decisions(api, enrolled: Sensor) -> None:
     ev = next(e for e in spooled(enrolled, "event") if e["payload"]["call_id"] == "c1")
     assert ev["source"]["sensor"] == "openclaw_plugin"
     assert ev["labels"]["requester_senderid"] == "alice-id"
-    assert all(server.ctx.plugins.seen(c) for c in ("c1", "c2", "c3"))
+    assert all(openclaw(server.ctx).plugins.seen(c) for c in ("c1", "c2", "c3"))
 
 
 async def test_bad_requests_are_answered_not_crashed(api) -> None:
@@ -121,8 +123,8 @@ async def test_ws_adapter_skips_plugin_judged_calls_and_flags_bypass(enrolled: S
 
     gw = FakeGateway()
     ctx = AdapterContext(enrolled, "alice")
-    ctx.plugins.touch()  # plugin said hello
-    ctx.plugins.mark("c1")  # ...and judged c1 before it ran
+    openclaw(ctx).plugins.touch()  # plugin said hello
+    openclaw(ctx).plugins.mark("c1")  # ...and judged c1 before it ran
     async with serve(gw.handler, "127.0.0.1", 0) as srv:
         url = f"ws://127.0.0.1:{srv.sockets[0].getsockname()[1]}"
         adapter = OpenClawAdapter(url, token="gw-token", enforce=False, plugin_grace=0.3)
@@ -284,7 +286,7 @@ async def test_plugin_judgement_arriving_after_the_tool_start_is_not_a_bypass(en
 
     gw = FakeGateway()
     ctx = AdapterContext(enrolled, "alice")
-    ctx.plugins.touch()
+    openclaw(ctx).plugins.touch()
     async with serve(gw.handler, "127.0.0.1", 0) as srv:
         url = f"ws://127.0.0.1:{srv.sockets[0].getsockname()[1]}"
         adapter = OpenClawAdapter(url, token="gw-token", enforce=False, plugin_grace=2.0)
@@ -293,7 +295,7 @@ async def test_plugin_judgement_arriving_after_the_tool_start_is_not_a_bypass(en
             await asyncio.wait_for(adapter.connected.wait(), 5)
             await gw.push(tool("start", "exec", "late", args={"command": "rm -rf ~/x"}))
             await asyncio.sleep(0.3)
-            ctx.plugins.mark("late")  # the plugin's request lands a moment later
+            openclaw(ctx).plugins.mark("late")  # the plugin's request lands a moment later
             await asyncio.sleep(0.5)
         finally:
             task.cancel()
@@ -328,8 +330,9 @@ def test_daemon_reports_lost_heartbeat_as_finding(enrolled: Sensor) -> None:
     from sg_advance.sensor.daemon import Daemon
     from sg_advance.sensor.registry import PluginRegistry
 
-    ctx = AdapterContext(enrolled, "alice", plugins=PluginRegistry(lost_after=150))
-    ctx.plugins.heartbeat(now=1_000)
+    ctx = AdapterContext(enrolled, "alice")
+    attach(ctx, OpenClawState(plugins=PluginRegistry(lost_after=150)))
+    openclaw(ctx).plugins.heartbeat(now=1_000)
     daemon = Daemon(enrolled, [], ctx)
     assert daemon.check_plugin_health(now=1_100) is None
     assert daemon.check_plugin_health(now=1_200) == "lost"
@@ -346,13 +349,14 @@ def test_host_sleep_is_not_a_lost_heartbeat(enrolled: Sensor) -> None:
     from sg_advance.sensor.daemon import Daemon
     from sg_advance.sensor.registry import PluginRegistry
 
-    ctx = AdapterContext(enrolled, "alice", plugins=PluginRegistry(lost_after=150))
-    ctx.plugins.heartbeat(now=1_000)
+    ctx = AdapterContext(enrolled, "alice")
+    attach(ctx, OpenClawState(plugins=PluginRegistry(lost_after=150)))
+    openclaw(ctx).plugins.heartbeat(now=1_000)
     daemon = Daemon(enrolled, [], ctx)
     assert daemon.check_plugin_health(now=1_030, mono=30) is None
     # asleep for an hour: wall +3600 s, monotonic +10 s (the tick that was due when it slept)
     assert daemon.check_plugin_health(now=4_640, mono=40) is None
-    assert ctx.plugins.heartbeat(now=4_660) is None  # the plugin's next hello after wake
+    assert openclaw(ctx).plugins.heartbeat(now=4_660) is None  # the plugin's next hello after wake
     assert not [e for e in spooled(enrolled, "event") if e["payload"]["kind"] == "sensor.health"]
 
 
@@ -361,8 +365,9 @@ def test_plugin_silent_after_wake_is_still_lost(enrolled: Sensor) -> None:
     from sg_advance.sensor.daemon import Daemon
     from sg_advance.sensor.registry import PluginRegistry
 
-    ctx = AdapterContext(enrolled, "alice", plugins=PluginRegistry(lost_after=150))
-    ctx.plugins.heartbeat(now=1_000)
+    ctx = AdapterContext(enrolled, "alice")
+    attach(ctx, OpenClawState(plugins=PluginRegistry(lost_after=150)))
+    openclaw(ctx).plugins.heartbeat(now=1_000)
     daemon = Daemon(enrolled, [], ctx)
     daemon.check_plugin_health(now=1_100, mono=100)  # 100 s quiet before sleep
     daemon.check_plugin_health(now=4_700, mono=110)  # slept 3590 s
@@ -380,8 +385,9 @@ def test_stopped_sensor_is_not_excused(enrolled: Sensor) -> None:
     from sg_advance.sensor.daemon import Daemon
     from sg_advance.sensor.registry import PluginRegistry
 
-    ctx = AdapterContext(enrolled, "alice", plugins=PluginRegistry(lost_after=150))
-    ctx.plugins.heartbeat(now=1_000)
+    ctx = AdapterContext(enrolled, "alice")
+    attach(ctx, OpenClawState(plugins=PluginRegistry(lost_after=150)))
+    openclaw(ctx).plugins.heartbeat(now=1_000)
     daemon = Daemon(enrolled, [], ctx)
     daemon.check_plugin_health(now=1_010, mono=10)
     assert daemon.check_plugin_health(now=4_610, mono=3_610) == "lost"
@@ -405,8 +411,8 @@ def test_sleep_after_goodbye_does_not_shorten_the_grace() -> None:
 
 async def test_hello_after_loss_reports_recovery(api, enrolled: Sensor) -> None:
     server, path = api
-    server.ctx.plugins.heartbeat()
-    server.ctx.plugins.lost_reported = True  # an outage was reported earlier
+    openclaw(server.ctx).plugins.heartbeat()
+    openclaw(server.ctx).plugins.lost_reported = True  # an outage was reported earlier
     await ask(path, {"op": "hello", "plugin": "sg-advance", "version": "0.1.0"})
     statuses = [
         e["payload"]["status"] for e in spooled(enrolled, "event") if e["payload"]["kind"] == "sensor.health"
@@ -440,11 +446,11 @@ async def test_bye_op_and_daemon_detail(api, enrolled: Sensor) -> None:
     from sg_advance.sensor.daemon import Daemon
 
     server, path = api
-    server.ctx.plugins.heartbeat()
+    openclaw(server.ctx).plugins.heartbeat()
     assert await ask(path, {"op": "bye", "plugin": "sg-advance", "reason": "disposed"}) == [{"ok": True}]
-    assert server.ctx.plugins.bye_at is not None
+    assert openclaw(server.ctx).plugins.bye_at is not None
     daemon = Daemon(enrolled, [], server.ctx)
-    assert daemon.check_plugin_health(now=server.ctx.plugins.bye_at + 31) == "lost"
+    assert daemon.check_plugin_health(now=openclaw(server.ctx).plugins.bye_at + 31) == "lost"
     ev = next(e for e in spooled(enrolled, "event") if e["payload"]["kind"] == "sensor.health")
     assert "unloaded by the gateway" in ev["payload"]["detail"]
 
@@ -501,7 +507,7 @@ async def test_windows_loopback_tcp_needs_the_endpoint_token(enrolled: Sensor, t
     """M12: no unix sockets on Windows. The daemon listens on 127.0.0.1 and writes the port and a
     per-run token to the sensor home; requests without that token are refused."""
     endpoint = tmp_path / "sga-api.json"
-    server = LocalApiServer(AdapterContext(enrolled, "alice", "laptop"), endpoint, tcp=True)
+    server = openclaw_local_api(AdapterContext(enrolled, "alice", "laptop"), endpoint, tcp=True)
     await server.start()
     try:
         ep = json.loads(endpoint.read_text())
@@ -541,7 +547,8 @@ def _verdict(spec: dict[str, Any]):
 
 
 def test_irreversible_approvals_carry_their_own_warning() -> None:
-    from sg_advance.sensor.plugin_api import IRREVERSIBLE_TITLE, plugin_response
+    from sg_advance.sensor.decision import IRREVERSIBLE_TITLE
+    from sg_advance.sensor.plugin_api import plugin_response
 
     sql = "psql -c 'DELETE FROM users;'"
     v = _verdict({"kind": "tool.call", "tool": "Bash", "arguments": {"command": sql}})
@@ -556,7 +563,8 @@ def test_irreversible_approvals_carry_their_own_warning() -> None:
 
 
 def test_irreversible_warning_clips_and_masks_what_it_shows() -> None:
-    from sg_advance.sensor.plugin_api import _what_runs, plugin_response
+    from sg_advance.sensor.decision import _what_runs
+    from sg_advance.sensor.plugin_api import plugin_response
     from sg_advance.shorthand import build_event
 
     long_cmd = "rm -rf /srv/data/" + "x" * 500
