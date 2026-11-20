@@ -19,6 +19,7 @@
 
 ```bash
 uv run python scripts/task_live_lab.py up                          # 서버·센서·저장소(처음 한 번 git 내려받기: 이미지 빌드)
+uv run python scripts/task_live_lab.py refresh-tokens              # 실험 사용자 토큰(24시간)이 만료됐으면 다시 발급
 uv run python scripts/task_live_scenario.py run claude_code developer
 uv run python scripts/task_live_scenario.py run codex_cli developer
 uv run python scripts/task_live_scenario.py revoke <case>          # 그 작업 권한을 회수하고 같은 대화를 이어 감
@@ -98,10 +99,11 @@ uv run python scripts/task_live_scenario.py evidence <case>        # 저장소 r
 
 ## 한계
 
-- 개발자 회수 단계(Claude Code)는 3을 고치기 전에 돌렸다. 그때 생긴 분류기 오탐 2건(high)은 처리하지 않고 남겼다. 같은 경로는 QA 실행에서 고친 뒤를 확인했다.
+- 개발자 회수 단계(Claude Code)는 3을 고치기 전에 돌렸다. 그때 생긴 분류기 오탐 2건(high)은 2026-11-20에 관제팀 사용자로 오탐 처리했다(사용자 결정). 하나는 서버 거부 문구, 하나는 B 결정 전 보호 저장소 픽스처 내용이었다. 같은 경로는 QA 실행에서 고친 뒤를 확인했다.
 - 헤드리스 실행이다. 다음은 아직 실제 실행에 넣지 않았다: 대화형 승인 흐름, 비밀 유출을 유도하는 외부 문서, 다른 프로젝트 거부, 하위 위임 축소.
   - 대화형 승인을 뺀 나머지는 자동 회귀가 있다(`tests/test_external_input.py`, `test_rbac.py`, `test_task_resources.py`).
-- **관제 차단 뒤의 거부도 사람의 위험도에 들어간다.** 차단된 대화에서 시도한 2번이 각각 `remote-blocked-session`(high)으로 남았다. 앞서 남은 분류기 오탐 2건과 합쳐 개발자가 다시 위험 상승이 됐다(설계대로의 동작이며, 룰 조정 여부는 사용자 결정).
+- **관제 차단 뒤의 거부도 사람의 위험도에 들어간다.** 차단된 대화에서 시도한 2번이 각각 `remote-blocked-session`(high)으로 남았다. 앞서 남은 분류기 오탐 2건과 합쳐 개발자가 다시 위험 상승이 됐다.
+  - 사용자 결정(2026-11-20): 그대로 둔다. 봉쇄 뒤에도 계속 시도하는 것은 위험 신호로 보고, 오판이면 오탐 처리로 푼다.
   - 실제 제품 시연은 남았다.
 - 같은 사용자 한계: 에이전트는 자기 슬롯의 작업 권한 파일을 읽을 수 있다(그것이 자격 증명이다). 장비 자격 증명은 센서 프록시가 붙이므로 에이전트 설정·환경에는 없지만, 같은 계정의 프로세스는 파일을 읽을 수 있다.
 - macOS 한 대에서만 확인했다. Windows·Linux, 다른 제품 버전은 따로 확인해야 한다.

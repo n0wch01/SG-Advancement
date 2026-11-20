@@ -22,11 +22,17 @@ def cp_view(cp: TestClient) -> TestClient:
     return cp
 
 
-def replay(sensor: Sensor, *names: str) -> None:
+def replay(sensor: Sensor, *names: str, shift: timedelta = timedelta(0)) -> None:
     for name in names:
         for ev in ReplayAdapter([ROOT / "examples/events" / name]).events():
-            sensor.process(ev)
+            sensor.process(ev.model_copy(update={"ts": ev.ts + shift}) if shift else ev)
     assert sensor.flush().ok
+
+
+def to_recent(*names: str) -> timedelta:
+    """Offset that moves the newest fixture event to an hour ago, for views that count recent days."""
+    newest = max(ev.ts for n in names for ev in ReplayAdapter([ROOT / "examples/events" / n]).events())
+    return datetime.now(UTC) - timedelta(hours=1) - newest
 
 
 def test_dashboard_token_reads_but_never_writes(cp_view: TestClient) -> None:
@@ -175,11 +181,13 @@ def test_built_dashboard_is_served_with_strict_headers(cp: TestClient, tmp_path)
 
 
 def test_inventory_keeps_the_latest_snapshot_per_install(cp_view: TestClient, enrolled: Sensor) -> None:
-    replay(enrolled, "openclaw_shadow.jsonl", "openclaw_team.jsonl")
+    # The fixtures carry fixed dates; open_findings counts the last 7 days, so replay them as recent.
+    shift = to_recent("openclaw_shadow.jsonl", "openclaw_team.jsonl")
+    replay(enrolled, "openclaw_shadow.jsonl", "openclaw_team.jsonl", shift=shift)
     # carol's install changes later: plugin added. Only the newer state should be listed.
     later = next(ReplayAdapter([ROOT / "examples/events/openclaw_shadow.jsonl"]).events())
     p = later.payload.model_copy(update={"guard_plugin": "enabled", "changed": ("guard_plugin",)})
-    newer = {"ts": later.ts + timedelta(minutes=5), "payload": p, "event_id": "x1"}
+    newer = {"ts": later.ts + shift + timedelta(minutes=5), "payload": p, "event_id": "x1"}
     enrolled.process(later.model_copy(update=newer))
     assert enrolled.flush().ok
     [dev] = cp_view.get("/v1/admin/inventory", headers=VIEWER).json()

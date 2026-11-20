@@ -15,6 +15,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,6 +131,7 @@ def fixtures() -> None:
         "-",
         text=True,
         input="""
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import json
 root=Path('/data/resources')
@@ -152,6 +154,7 @@ print('Protected fixtures ready inside the container; existing files preserved.'
 
 
 REPOSITORY_SETUP = r"""
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import os, subprocess
 env = {"PATH": os.environ["PATH"], "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
@@ -204,6 +207,18 @@ def seed() -> None:
             },
         )
         users[name] = api("POST", f"/v1/admin/rbac/users/{uid}/tokens", {"lifetime_seconds": 86400})
+    private(LAB / "users.json", json.dumps(users))
+
+
+def refresh_tokens() -> None:
+    """Reissue the lab users' personal tokens once their 24-hour lifetime has passed."""
+    users = json.loads((LAB / "users.json").read_text())
+    now = datetime.now(UTC)
+    for name, issued in users.items():
+        if datetime.fromisoformat(issued["expires_at"].replace("Z", "+00:00")) > now + timedelta(minutes=10):
+            continue
+        users[name] = api("POST", f"/v1/admin/rbac/users/lab-{name}/tokens", {"lifetime_seconds": 86400})
+        print(f"lab-{name}: new token until {users[name]['expires_at']}")
     private(LAB / "users.json", json.dumps(users))
 
 
@@ -432,6 +447,7 @@ def check() -> None:
         "-",
         text=True,
         input="""
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import hashlib,json
 root=Path('/data/resources/alpha')
@@ -450,7 +466,7 @@ if (root/'.git').is_dir():
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="action", required=True)
-    for name in ("up", "down", "install-hooks", "restore-hooks", "check"):
+    for name in ("up", "down", "install-hooks", "restore-hooks", "check", "refresh-tokens"):
         sub.add_parser(name)
     create = sub.add_parser("slot")
     create.add_argument("agent", choices=["claude_code", "codex_cli"])
@@ -475,6 +491,8 @@ def main() -> int:
         prepare(args)
     elif args.action == "check":
         check()
+    elif args.action == "refresh-tokens":
+        refresh_tokens()
     elif args.action == "latest-session":
         rows = api("GET", f"/v1/admin/events?device_id={DEVICE}&kind=session.start&limit=100")
         print(next(e["agent"]["session_id"] for e in rows if e["agent"]["type"] == args.agent))
