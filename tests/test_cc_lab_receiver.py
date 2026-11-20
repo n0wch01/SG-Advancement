@@ -56,3 +56,27 @@ def test_oversized_upload_is_rejected_and_not_recorded(receiver) -> None:
     finally:
         conn.close()
     assert not receipts.exists()
+
+
+def test_a_served_document_records_the_fetch(tmp_path: Path) -> None:
+    receipts = tmp_path / "receipts.jsonl"
+    page = b"# notes\nplain text\n"
+    server = ThreadingHTTPServer(("127.0.0.1", 0), RECEIVER["handler"](receipts, {"/docs/notes.md": page}))
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        conn.request("GET", "/docs/notes.md?x=1")
+        response = conn.getresponse()
+        assert response.status == 200 and response.read() == page
+        conn.request("GET", "/docs/other.md")
+        missing = conn.getresponse()
+        missing.read()
+        assert missing.status == 404  # only the named documents are served
+        conn.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    [record] = [json.loads(line) for line in receipts.read_text().splitlines()]
+    assert record["method"] == "GET" and record["path"] == "/docs/notes.md" and record["bytes"] == len(page)

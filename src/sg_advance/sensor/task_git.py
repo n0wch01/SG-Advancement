@@ -28,6 +28,7 @@ import re
 import ssl
 import stat
 import sys
+import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -78,8 +79,10 @@ class GitProxyAdapter:
         self.device_token = device_token
         self.upstream_ssl = upstream_ssl
         self._server: asyncio.base_events.Server | None = None
+        self._ctx: AdapterContext | None = None
 
     async def start(self, ctx: AdapterContext | None = None) -> None:
+        self._ctx = ctx
         self._server = await asyncio.start_server(self._client, self.host, self.port)
         self.port = self._server.sockets[0].getsockname()[1]
         log.info("git proxy listening on %s:%d → %s", self.host, self.port, self.upstream.netloc)
@@ -122,6 +125,9 @@ class GitProxyAdapter:
             if grant is None:  # git then asks its credential helper for the task grant
                 return _reply(401, "Unauthorized", b"task grant required\n",
                               {"WWW-Authenticate": 'Basic realm="SG-Advance task grant"'})  # fmt: skip
+            service = query.removeprefix("?service=") or m.group(2)
+            if (refused := self._without_hook(m.group(1), service, grant)) is not None:
+                return refused
             body = b""
             if method == "POST":
                 async for chunk in body_chunks(reader, headers, max_total=MAX_BODY):
@@ -135,6 +141,38 @@ class GitProxyAdapter:
         except (OSError, http.client.HTTPException) as e:
             log.warning("git proxy upstream failed: %s", type(e).__name__)
             return _reply(502, "Bad Gateway", b"protected repository unavailable\n")
+
+    def _without_hook(self, project: str, service: str, grant: str) -> bytes | None:
+        """Hook coverage (2026-11-20 user decision): when the grant's session never reached this daemon
+        through its agent's hook, the request is judged here (signed rule ``protected-resource-without-
+        agent-hook``) before anything goes upstream. Covered sessions pass straight to the control plane,
+        which judges every Git request itself, so nothing is recorded twice."""
+        ctx = self._ctx
+        claims = ctx.sensor.grant_claims(grant) if ctx is not None else None
+        if ctx is None or claims is None:
+            return None  # an unverifiable grant: the control plane refuses it
+        labels = ctx.sensor.hook_coverage(grant)
+        if labels.get("sga_hook_coverage") != "missing":
+            return None
+        from .decision import GIT_PROXY, judge_event
+        from .envelope import envelope
+
+        tool = "git_push" if service == "git-receive-pack" else "git_fetch"
+        event = envelope(
+            sensor="mcp_proxy",
+            agent={"type": claims.agent_type, "session_id": claims.session_id},
+            # No MCP provider: this is a Git request, not an MCP call (unapproved-mcp-tool-call fired on it).
+            payload={"kind": "tool.call", "call_id": f"git:{uuid.uuid4().hex}", "tool": tool,
+                     "arguments": {"project": project}},
+            hostname=ctx.hostname,
+            user_id=claims.user_id,
+            labels={"sga_source": "git_proxy", **labels},
+        )  # fmt: skip
+        verdict = judge_event(ctx, event, GIT_PROXY)
+        if verdict.get("decision") == "allow":
+            return None
+        reason = str(verdict.get("reason") or "SG-Advance: not allowed by policy")
+        return _reply(403, "Forbidden", reason.encode() + b"\n")
 
     @staticmethod
     def _grant(authorization: str) -> str | None:

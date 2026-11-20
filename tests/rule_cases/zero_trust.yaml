@@ -100,3 +100,31 @@ cases:
     events:
       - {kind: tool.result, tool: Bash, call_id: c-10, output_preview: "ok"}
     expect_not: [enforcement-contradicted]
+
+  # hook 누락 (2026-11-20 사용자 결정: 경보 + 보호 자원 거부). 실험 Codex 프로필의 hook 정의가 바뀐 뒤 다시 신뢰되지 않아
+  # 모든 대화가 hook 없이 돌았는데, 보호 자원은 작업 권한만 보고 받아들였다. 보호 자원 게이트웨이(MCP·Git 프록시)가
+  # 작업 권한의 대화가 이 데몬에 hook 이벤트를 보낸 적 있는지 라벨로 붙이고 이 룰이 거부한다.
+  - name: hook 기록이 없는 대화의 보호 자원 MCP 호출 → 거부
+    agent: codex_cli
+    sensor: mcp_proxy
+    events:
+      - {kind: tool.call, tool: read_file, provider: {kind: mcp, mcp_server: repository}, arguments: {path: src/calc.py},
+         labels: {sga_source: mcp_gateway, sga_hook_coverage: missing}}
+    expect: [protected-resource-without-agent-hook]
+
+  - name: hook 기록이 없는 대화의 git push(Git 프록시) → 거부
+    agent: claude_code
+    sensor: mcp_proxy
+    events:
+      - {kind: tool.call, tool: git_push, arguments: {project: alpha}, labels: {sga_source: git_proxy, sga_hook_coverage: missing}}
+    expect: [protected-resource-without-agent-hook]
+
+  - name: hook 기록이 있는 대화, 보호 자원이 아닌 호출(라벨 없음)은 대상 아님
+    agent: codex_cli
+    sensor: mcp_proxy
+    events:
+      - {kind: tool.call, tool: read_file, provider: {kind: mcp, mcp_server: repository}, arguments: {path: src/calc.py},
+         labels: {sga_source: mcp_gateway, sga_hook_coverage: seen}}
+      - {kind: tool.call, tool: query, provider: {kind: mcp, mcp_server: reports}, arguments: {q: x},
+         labels: {sga_source: mcp_gateway}}
+    expect_not: [protected-resource-without-agent-hook]

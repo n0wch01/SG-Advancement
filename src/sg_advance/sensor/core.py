@@ -28,8 +28,9 @@ from ..detect import Engine, Verdict
 from ..pki import fingerprint, key_pem, make_csr, new_key
 from ..policy import PolicyBundle, PolicyVerificationError, key_id, load_public_key
 from ..redact import redact_event
-from ..schema import AgentEvent, Enforcement, EventKind
+from ..schema import AgentEvent, Enforcement, EventKind, SensorType
 from ..schema import labels as labels_mod
+from ..task_grants import GrantError, TaskClaims, verify_task
 from . import actions as actions_mod
 from . import delegation as delegation_mod
 from . import downloads as downloads_mod
@@ -225,6 +226,7 @@ class Sensor:
         # results as its gateway relayed them (its marked denials among them) and this daemon's notices, so
         # the copy an agent's hook reports back carries the same verified origin.
         self._own_texts: dict[str, tuple[str, str | None, datetime]] = {}
+        self._hook_sessions: dict[tuple[str, str], datetime] = {}  # (agent type, session) → last hook event
         # Rule tuning (2026-11-15): snapshot findings already reported, kept across restarts.
         self._standing: dict[str, str] | None = None
 
@@ -476,6 +478,44 @@ class Sensor:
         server = lineage_mod.mcp_server_of(result)  # the gateway knows the server from the result itself
         return f"mcp:{server}" if server else None
 
+    # Hook coverage (2026-11-20 user decision, docs/task-scenario.md): a Codex profile whose changed hook
+    # definitions were never re-trusted ran every lab session without hooks, silently, while the protected
+    # resources accepted its task grant. Protected-resource gateways in this daemon now ask whether the
+    # grant's own session has reached this daemon through its agent's hook; the signed rule
+    # ``protected-resource-without-agent-hook`` decides. Same-user limit: a process running as the person
+    # can reach the local API and imitate a hook event.
+    HOOK_SENSORS = frozenset({SensorType.CLAUDE_CODE_HOOK, SensorType.CODEX_CLI_HOOK})
+    HOOK_KEEP = timedelta(hours=24)
+    HOOK_MAX = 5000
+
+    def _note_hook(self, event: AgentEvent) -> None:
+        now = now_utc()
+        if len(self._hook_sessions) >= self.HOOK_MAX:
+            self._hook_sessions = {k: v for k, v in self._hook_sessions.items() if now - v < self.HOOK_KEEP}
+            while len(self._hook_sessions) >= self.HOOK_MAX:
+                self._hook_sessions.pop(next(iter(self._hook_sessions)))
+        self._hook_sessions[(str(event.agent.type), event.agent.session_id)] = now
+
+    def grant_claims(self, grant: str | None) -> TaskClaims | None:
+        """A task grant verified with the control plane's key, or None (the control plane refuses it)."""
+        if not grant:
+            return None
+        try:
+            return verify_task(grant, self._key)
+        except GrantError:
+            return None
+
+    def hook_coverage(self, grant: str | None) -> dict[str, str]:
+        """Labels for a protected-resource request carrying ``grant``: whether the grant's session (verified
+        here with the control plane's key) has sent this daemon a hook event in the last 24 hours. A grant
+        that does not verify gets no label: the control plane refuses it anyway."""
+        claims = self.grant_claims(grant)
+        if claims is None:
+            return {}
+        seen = self._hook_sessions.get((claims.agent_type, claims.session_id))
+        fresh = seen is not None and now_utc() - seen < self.HOOK_KEEP
+        return {"sga_hook_coverage": "seen" if fresh else "missing"}
+
     OWN_TEXT_KEEP = timedelta(minutes=30)
     OWN_TEXT_MAX = 5000
     OWN_TEXT_ORIGINS = ("control_plane_denial", "sensor_notice", "protected_resource")
@@ -545,6 +585,8 @@ class Sensor:
         (possibly asynchronously) and report what happened through ``record``."""
         if self.engine is None:
             raise NoPolicy("call start() first")
+        if event.source.sensor in self.HOOK_SENSORS and event.agent.session_id:
+            self._note_hook(event)
         event = self.stamp(event)
         verdict = self.engine.process(event)  # detection sees the original (unredacted) event
         return ProcessResult(verdict, event)

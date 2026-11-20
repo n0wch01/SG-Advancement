@@ -114,6 +114,7 @@ Claude Code ─▶ 노트북 센서의 로컬 게이트웨이 ─▶ LAN 게이�
 |---|---|---|---|
 | `policy-stale-state-changing-tool` | 안내서 2장 4절 3): 캐시 정책 유효기간 | 관제 서버가 정책을 72시간(`SGA_POLICY_MAX_AGE_HOURS`) 확인해 주지 못함 + 읽기 전용이 아닌 툴 | 사람 확인 |
 | `sensitive-resource-from-degraded-device` | P2-1·P2-2: 상태 미달 기기의 민감 데이터 접근 제한 | PC 상태 `degraded`(hook 없는 Claude Code, 통제 밖 에이전트) + 민감 리소스 | 차단 |
+| `protected-resource-without-agent-hook` | P2-2: 통제 수단이 확인되지 않은 실행의 자원 접근 제한(2026-11-20) | 작업 권한의 대화가 이 데몬에 hook 이벤트를 보낸 적 없음(`sga_hook_coverage=missing`) + 보호 자원(MCP·Git) | 차단 |
 | `sensitive-resource-by-elevated-risk-user` | P1-4·C1-7: 위험도 지속 재평가 | 관제 서버가 고위험으로 내려보낸 사람 + 민감 리소스 | 거부 (2026-11-17, 전에는 보안팀 승인) |
 
 - **민감 리소스**는 정책이 정한다. 지금은 MCP 서버 `crm`, `hr-db`, `payments`(예시)이고, 두 룰이 같은 목록을 쓴다.

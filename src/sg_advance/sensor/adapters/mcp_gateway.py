@@ -357,8 +357,10 @@ class McpGatewayAdapter:
         who: dict[str, str],
         messages: list[Any],
         client: asyncio.StreamReader | None = None,
+        grant: str | None = None,
     ) -> tuple[dict[Any, Any], list[dict[str, Any]]]:
-        """(pending inspections by request id, refusals to send instead of forwarding)."""
+        """(pending inspections by request id, refusals to send instead of forwarding). ``grant``: the task
+        grant of a call to a protected resource; its session's hook coverage becomes a label."""
         from ..decision import MCP_GATEWAY, judge_event
 
         pending: dict[Any, Any] = {}
@@ -381,6 +383,8 @@ class McpGatewayAdapter:
                 "arguments": args if isinstance(args, dict) else {"input": args},
             }
             event = self._event(ctx, name, who, call)
+            if name in self.protected_resources:
+                event["labels"] |= ctx.sensor.hook_coverage(grant)
             if (name, tool) in self.quarantined and self.enforce:
                 ctx.record(ctx.evaluate(AgentEvent.model_validate(event)))
                 refusals.append(
@@ -559,7 +563,8 @@ class McpGatewayAdapter:
         if body:
             doc = json.loads(body)
             messages = doc if isinstance(doc, list) else [doc]
-            pending, refusals = await self._judge_calls(ctx, name, who, messages, client)
+            grant = headers.get(TASK_GRANT_HEADER) if name in self.protected_resources else None
+            pending, refusals = await self._judge_calls(ctx, name, who, messages, client, grant)
             if refusals:
                 # Refused calls never reach the server. A batch with one refused call is refused whole.
                 out = refusals if isinstance(doc, list) else refusals[0]

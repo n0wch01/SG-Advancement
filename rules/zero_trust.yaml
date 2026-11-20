@@ -123,3 +123,26 @@ rules:
       type: regex
       fields: [labels.sga_enforcement_contradicted]
       pattern: '^true$'
+
+  # hook 누락 (2026-11-20 사용자 결정: 경보 + 보호 자원 거부, fail closed).
+  # 실제 관측: 실험 Codex 프로필의 hook 정의가 바뀐 뒤 다시 신뢰되지 않아 codex exec가 경고 없이 hook을 건너뛰었고,
+  # 보호 자원은 작업 권한만 보고 그 대화를 받아들였다. 보호 자원 게이트웨이(센서의 MCP 게이트웨이·Git 프록시)가
+  # 작업 권한(서명 검증)의 대화가 지난 24시간 안에 이 데몬에 hook 이벤트를 보낸 적 있는지 라벨로 붙인다(seen | missing).
+  # 오탐 주의: 데몬을 재시작하면 기억이 사라진다. 다음 툴 호출의 PreToolUse가 곧 다시 채우므로 보통 바로 풀린다.
+  #   사람이 에이전트의 작업 권한으로 직접 git을 쓰는 경우도 거부된다(작업 권한은 그 에이전트 대화의 것).
+  # 미탐 주의: 같은 사용자 프로세스는 로컬 API로 hook 이벤트를 흉내 낼 수 있다. 대화 도중 hook을 끈 경우는
+  #   24시간 동안 seen으로 남는다. 보호 자원이 아닌 MCP·로컬 셸은 이 룰의 대상이 아니다.
+  - id: protected-resource-without-agent-hook
+    severity: medium
+    category: policy_violation
+    title: hook 기록이 없는 대화의 보호 자원 접근
+    message: 이 작업 권한의 대화에서 에이전트 hook 이벤트를 받은 적이 없어 보호 자원 접근을 막았습니다. 엔드포인트 판정 없이 작업이 진행되던 상태입니다.
+    recommended_action: 그 PC의 에이전트 hook 설치·신뢰 상태를 확인하세요(Codex는 /hooks에서 정의를 다시 신뢰해야 합니다). hook 이벤트가 들어오면 자동으로 풀립니다.
+    response: block
+    dedup: none
+    tags: ["action-independent", zero-trust, "kisa-zt:P2-2"]
+    when: {payload.kind: tool.call}
+    match:
+      type: regex
+      fields: [labels.sga_hook_coverage]
+      pattern: '^missing$'

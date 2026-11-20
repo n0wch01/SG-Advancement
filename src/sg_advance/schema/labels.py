@@ -78,6 +78,10 @@ LABELS: dict[str, Label] = {
     "sga_verdict": Label("enforcement_point", "judged without the daemon: degraded"),
     "sga_plugin": Label("enforcement_point", "OpenClaw WS adapter: the gateway plugin never saw the call"),
     "sga_client_device": Label("enforcement_point", "MCP gateway: the calling device (LAN gateway mTLS)"),
+    "sga_hook_coverage": Label(
+        "enforcement_point",
+        "protected-resource gateway: the grant session sent this daemon a hook event (seen) or not (missing)",
+    ),
     # ── control plane: never from a client ──
     "sga_project_id": Label("control_plane", "registered project of the session"),
     "sga_verified_user": Label("control_plane", "registered person of the session"),

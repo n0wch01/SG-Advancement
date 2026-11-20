@@ -39,6 +39,7 @@ sga-sensor --home /absolute/path/sensor codex status --config-dir /absolute/path
 
 **설정 파일에 존재하는 것과 활성화는 다르다.** Codex에서 `/hooks`로 정확한 정의를 검토하고
 신뢰해야 한다. 정의가 바뀌면 다시 검토해야 한다. `status`는 설치 여부만 보고하며 신뢰 상태를 추정하지 않는다.
+실제 관측(0.167.0, 2026-11-20): 정의가 바뀐 뒤 다시 신뢰하지 않으면 `codex exec`는 **경고 없이** hook을 건너뛴다. task-lab의 Codex 실행 전체에서 hook 이벤트가 0건이었다([task-scenario.md](task-scenario.md#codex-hook이-꺼져-있었다)).
 개인이 제거할 수 있는 설정이므로 관리자 강제 설정이나 변조 방지 경계로 설명하지 않는다.
 
 실험 환경은 기존 Claude 실험의 가짜 프로젝트·센서를 재사용하며, Codex 설정·인증은 별도로 둔다.

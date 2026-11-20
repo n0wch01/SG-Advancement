@@ -83,6 +83,9 @@ def hook_point(event: AgentEvent) -> EnforcementPoint:
 MCP_GATEWAY = EnforcementPoint(
     SensorType.MCP_PROXY, "mcp gateway", "the agent's own approval prompt", in_path=True
 )
+GIT_PROXY = EnforcementPoint(
+    SensorType.MCP_PROXY, "git proxy", "the agent's own approval prompt", in_path=True
+)
 
 
 # Input PEP (KISA agentic AI ZT guide 2.4, P6-7): tool results with injection findings this severe never
