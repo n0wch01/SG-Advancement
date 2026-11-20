@@ -77,7 +77,7 @@ git 자체 설정도 서버가 강제한다(`receive.denyDeletes`, `receive.deny
 | `production/`, `.env`, `.github/` 수정 push | 거부(hook 사유 표시), 브랜치는 이전 커밋 그대로 |
 | 강제 push | 거부 |
 | QA의 소스 수정 push / 테스트 수정 push | 거부(`source.write` 없음) / 허용 |
-| push 전에 작업 권한 회수 | HTTP 403, git 실행 안 됨, 브랜치 없음 |
+| push 전에 작업 권한 회수 | HTTP 403, git 실행 안 됨, 브랜치 없음. 첫 요청(ref 광고)의 거부도 작업 권한별로 기록(2026-11-19) |
 | 저장소에 `exit 0` hook을 심어 둠 | 무시되고 `main` push는 여전히 거부 |
 | PR 기록·CI | 개발자 허용, QA의 PR 기록 거부·CI 허용. CI는 설정 전 거부, 설정 후 실행 |
 | 같은 대화의 30번째 push | 대화 중단 판정, 30번째 커밋은 반영 안 됨 |

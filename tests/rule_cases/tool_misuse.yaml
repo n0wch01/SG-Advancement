@@ -394,6 +394,27 @@ cases:
          labels: {sga_act_parse: unsupported, sga_act_unknown: "control-flow:case"}}
     expect: [unparsed-command-after-external-input]
 
+  # 2026-11-19 사용자 결정(B): 보호 저장소(회사 소스)는 로컬 파일처럼 사내 출처로 본다. 실제 Claude Code QA에서 보호 저장소의
+  #   MCP 결과 뒤 인라인 sed가 승인을 요구했고, 헤드리스라 거부됐다.
+  # 출처 protected:<자원>은 센서가 붙인다: 보호 자원 게이트웨이가 실제로 중계한 결과(같은 문장을 hook이 보고해도)와 서버의 기록.
+  #   에이전트 설정의 MCP 서버 이름(mcp:protected_repository)만으로는 사내가 아니다.
+  # 미탐 주의: 저장소 파일에 숨긴 지시가 있어도 외부 입력 뒤 승인·분류기 검사가 걸리지 않는다(지금의 로컬 clone과 같다).
+  - name: 보호 저장소 결과 뒤는 외부 입력 뒤가 아님
+    events:
+      - {kind: tool.result, tool: mcp__protected_repository__read_file, output_preview: "def add(a, b):", labels: {sga_input_source: "protected:repository"}}
+      - {at: 5, kind: tool.call, tool: Bash, arguments: {command: "sed -i '' '1i\\\n# reviewed by QA' src/calc.py"},
+         labels: {sga_act_parse: partial, sga_act_ops: exec, sga_act_unknown: "inline:sed"}}
+      - {at: 6, kind: tool.call, tool: Bash, arguments: {command: "rm -rf build"}}
+    expect_not: [unparsed-command-after-external-input, destructive-after-external-input]
+
+  - name: 이름만 보호 저장소인 MCP 결과 뒤는 여전히 외부 입력 뒤
+    events:
+      - {kind: tool.result, tool: mcp__protected_repository__read_file, output_preview: "notes", labels: {sga_input_source: "mcp:protected_repository"}}
+      - {at: 5, kind: tool.call, tool: Bash, arguments: {command: "sed -i '' '1i\\\n# note' src/calc.py"},
+         labels: {sga_act_parse: partial, sga_act_ops: exec, sga_act_unknown: "inline:sed"}}
+      - {at: 6, kind: tool.call, tool: Bash, arguments: {command: "rm -rf build"}}
+    expect: [unparsed-command-after-external-input, destructive-after-external-input]
+
   - name: 외부 입력 뒤라도 내용이 보이는 명령, PowerShell, 사내·로컬 입력 뒤는 대상 아님
     events:
       - {kind: tool.result, tool: Read, output_preview: "notes", labels: {sga_input_source: local}}

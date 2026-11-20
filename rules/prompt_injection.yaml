@@ -206,7 +206,7 @@ rules:
   # 미탐 주의: 로컬 파일은 보지 않는다(사용자 결정: 전부 제외). clone한 저장소의 README·코드 주석에 숨긴 지시도 여기에 든다.
   #   이미지·첨부 속 지시, 출처가 사내로 적힌 오염된 사내 문서도 보지 않는다.
   - id: external-result-candidate
-    version: "2"
+    version: "3"
     severity: info
     category: prompt_injection
     title: 분류기 검사 대상 (외부 출처 툴 결과)
@@ -222,7 +222,7 @@ rules:
       type: regex
       fields: [labels.sga_input_source]
       # destructive-after-external-input(tool_misuse.yaml)의 외부 판정과 같게 유지
-      pattern: '(?:^|,)(?!(?:local|mcp:(?:testdb|reports|crm)|file:[^,]*|[^,]*\.corp\.internal)(?:,|$))[^,]+'
+      pattern: '(?:^|,)(?!(?:local|mcp:(?:testdb|reports|crm)|protected:[^,]*|file:[^,]*|[^,]*\.corp\.internal)(?:,|$))[^,]+'
 
   # 2단 판정의 대응(사용자 결정): malicious → 결과를 모델에 넘기지 않음(prompt_injection·high라 입력 PEP가 가림),
   #   이후 민감·파괴 행동 차단(injection-then-* 시퀀스의 1단계), 출처 호스트를 캠페인 지표로(같은 페이지가 여러 사람을 노림).

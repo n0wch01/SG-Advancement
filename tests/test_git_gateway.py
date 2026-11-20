@@ -18,7 +18,7 @@ import uvicorn
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from sg_advance.server.db import AuditEntry
+from sg_advance.server.db import AuditEntry, EventRow
 from test_task_resources import grant, resources  # noqa: F401  # resources is a fixture
 
 GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0",
@@ -162,6 +162,12 @@ def test_revocation_applies_to_the_next_push_before_git_runs(cp, server, repo, t
     out = git(*opts, "push", "origin", "feature/late", cwd=work, check=False)
     assert out.returncode != 0 and "403" in out.stderr
     assert "refs/heads/feature/late" not in heads(r["root"])
+    # git is refused at its first request (the ref advertisement): that refusal is recorded too
+    with Session(cp.app.state.db.engine) as db:
+        refused = [e.doc for e in db.scalars(select(EventRow).where(EventRow.kind == "tool.call"))
+                   if e.doc["labels"].get("sga_task_grant_id") == dev["grant_id"]
+                   and e.doc["payload"]["tool"] == "git_push"]  # fmt: skip
+    assert refused and refused[-1]["labels"]["sga_authorization"] == "deny"
 
 
 def test_repository_hooks_are_never_used(cp, server, repo, tmp_path):

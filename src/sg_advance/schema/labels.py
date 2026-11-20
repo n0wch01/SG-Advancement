@@ -37,7 +37,7 @@ LABELS: dict[str, Label] = {
     # ── sensor: stamped, never taken from input ──
     "sga_input_source": Label("sensor", "where a tool result came from (host, mcp:<server>, local, unknown)"),
     "sga_result_origin": Label(
-        "sensor", "SG-Advance's own text: a protected resource's denial or the sensor's notice (not input)"
+        "sensor", "verified origin: protected_resource, its control_plane_denial, or the sensor_notice"
     ),
     "sga_data_class": Label("sensor", "lineage: protected data in this call's arguments"),
     "sga_lineage": Label("sensor", "lineage tracking state (tracked, unavailable)"),

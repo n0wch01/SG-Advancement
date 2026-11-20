@@ -422,8 +422,9 @@ class McpGatewayAdapter:
                 "output_preview": _text_of(result if result is not None else msg.get("error")),
             }
             uninspected = "too_large" if len(payload["output_preview"]) > INSPECT_MAX else None
-            if self._marked_denial(name, result):  # the server's own refusal, not external input
-                ctx.sensor.remember_own_text(payload["output_preview"], "control_plane_denial")
+            if name in self.protected_resources:  # verified: relayed from the control plane's resource
+                origin = "control_plane_denial" if self._marked_denial(name, result) else "protected_resource"
+                ctx.sensor.remember_own_text(payload["output_preview"], origin, name)
             payload["output_bytes"] = len(payload["output_preview"].encode())
             payload["output_preview"] = payload["output_preview"][:INSPECT_MAX]
             return self._input_pep(ctx, name, who, msg, payload, uninspected)

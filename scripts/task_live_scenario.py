@@ -8,6 +8,8 @@ afterwards (refs, files on each branch) and the gateway's records for the grant,
     task_live_scenario.py run claude_code developer     # PR + CI; production change and deploy refused
     task_live_scenario.py run codex_cli qa               # test change + CI; PR, source, production refused
     task_live_scenario.py revoke CASE                     # revoke that grant, resume the same session
+    task_live_scenario.py block CASE                      # SOC blocks that session, resume it
+    task_live_scenario.py run claude_code developer --lifetime 120 ; task_live_scenario.py expire CASE
     task_live_scenario.py evidence CASE
 
 Uses the lab-only logged-in profiles (data/cc-live/config, data/codex-live/config), never ~/.claude
@@ -26,6 +28,7 @@ import sys
 import time
 import uuid
 from argparse import Namespace
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -147,7 +150,7 @@ def codex_thread(case: str) -> str:
     raise RuntimeError("Codex did not report a session id; see " + str(OUT / f"{case}.stderr"))
 
 
-def run(agent: str, role: str) -> None:
+def run(agent: str, role: str, lifetime: int | None = None) -> None:
     short = "cc" if agent == "claude_code" else "cx"
     prefix = "feature" if role == "developer" else "test"
     case = f"{short}-{role}-{secrets.token_hex(2)}"
@@ -157,7 +160,7 @@ def run(agent: str, role: str) -> None:
     clone = lab.LAB / "workspace" / slot
     if agent == "claude_code":
         session = str(uuid.uuid4())
-        lab.prepare(Namespace(user=role, slot=slot, session=session))
+        lab.prepare(Namespace(user=role, slot=slot, session=session, lifetime=lifetime))
         config = json.loads((lab.LAB / "slots" / (slot + ".json")).read_text())
         info = {"agent": agent, "role": role, "slot": slot, "session_id": session, "branch": branch,
                 "clone": str(clone), "grant_id": config["grant_id"]}  # fmt: skip
@@ -165,7 +168,7 @@ def run(agent: str, role: str) -> None:
     else:  # Codex has no session-id option: open the session, register it, then give it the task
         opened = codex(case + "-open", clone, "Reply with the single word READY.", None)
         session = codex_thread(case + "-open")
-        lab.prepare(Namespace(user=role, slot=slot, session=session))
+        lab.prepare(Namespace(user=role, slot=slot, session=session, lifetime=lifetime))
         config = json.loads((lab.LAB / "slots" / (slot + ".json")).read_text())
         info = {"agent": agent, "role": role, "slot": slot, "session_id": session, "branch": branch,
                 "clone": str(clone), "grant_id": config["grant_id"], "open": opened}  # fmt: skip
@@ -177,16 +180,46 @@ def run(agent: str, role: str) -> None:
     evidence(case)
 
 
-def revoke(case: str) -> None:
+def grant_expiry(info: dict) -> datetime:
+    grants = lab.api("GET", "/v1/admin/tasks", user=info["role"])
+    found = next(g for g in grants if g["grant_id"] == info["grant_id"])
+    return datetime.fromisoformat(found["claims"]["expires_at"].replace("Z", "+00:00"))
+
+
+def block_session(info: dict) -> dict:
+    """The SOC operator (lab-soc, scoped to alpha) blocks the conversation; waits for the device's answer."""
+    action = lab.api("POST", "/v1/admin/actions", {
+        "device_id": lab.DEVICE, "action": "block_session", "target": info["session_id"],
+        "by": "lab-soc", "reason": "SOC containment test (task scenario)"}, user="soc")  # fmt: skip
+    for _ in range(90):
+        rows = lab.api("GET", "/v1/admin/actions", user="soc")
+        now = next(a for a in rows if a["id"] == action["id"])
+        if now["status"] in {"done", "failed"}:
+            return {"status": now["status"], "applied": now["applied"], "detail": now["result_detail"]}
+        time.sleep(1)
+    raise RuntimeError("the device did not answer the block in 90 s")
+
+
+def revoke(case: str, how: str = "revoke") -> None:
+    """Take the authority away (revoke the grant, let it expire, or SOC blocks the session), then resume
+    the same session and ask for the same protected operations."""
     info = manifest()[case]
-    lab.api("DELETE", f"/v1/admin/tasks/{info['grant_id']}", user=info["role"])
+    if how == "revoke":
+        lab.api("DELETE", f"/v1/admin/tasks/{info['grant_id']}", user=info["role"])
+    elif how == "expire":
+        wait = (grant_expiry(info) - datetime.now(UTC)).total_seconds() + 5
+        print(f"waiting {max(wait, 0):.0f}s for the grant to expire", flush=True)
+        time.sleep(max(wait, 0))
+    else:
+        info["block"] = block_session(info)
+        print(json.dumps({"block": info["block"]}))
     prompt = AFTER_REVOCATION.format(branch=info["branch"])
-    follow = case + "-revoked"
+    follow = case + "-" + {"revoke": "revoked", "expire": "expired", "block": "blocked"}[how]
     if info["agent"] == "claude_code":
         result = claude(follow, info, prompt, resume=True)
     else:
         result = codex(follow, Path(info["clone"]), prompt, info["session_id"])
-    info["revoked"] = result
+    info[follow.rsplit("-", 1)[1]] = result
     remember(case, info)
     print(json.dumps({"case": follow, **result}))
     print(final_text(follow)[:3000])
@@ -241,15 +274,16 @@ def main() -> int:
     r = sub.add_parser("run")
     r.add_argument("agent", choices=["claude_code", "codex_cli"])
     r.add_argument("role", choices=["developer", "qa"])
-    for name in ("revoke", "evidence"):
+    r.add_argument("--lifetime", type=int, help="grant lifetime in seconds (default 900)")
+    for name in ("revoke", "expire", "block", "evidence"):
         sub.add_parser(name).add_argument("case")
     args = p.parse_args()
     if args.action == "run":
-        run(args.agent, args.role)
-    elif args.action == "revoke":
-        revoke(args.case)
-    else:
+        run(args.agent, args.role, args.lifetime)
+    elif args.action == "evidence":
         evidence(args.case)
+    else:
+        revoke(args.case, args.action)
     return 0
 
 

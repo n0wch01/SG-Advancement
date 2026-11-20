@@ -126,7 +126,8 @@ def operation_event(
                 "sga_source": "protected_repository",
                 "sga_task_grant_id": claims.grant_id,
                 "sga_authorization": "allow" if authorized else "deny",
-                "sga_input_source": "mcp:protected-repository",
+                # the company repository, read by this server: internal like a local file (2026-11-19, B)
+                "sga_input_source": "protected:repository",
             },
         }
     )

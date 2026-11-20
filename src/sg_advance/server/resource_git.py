@@ -249,9 +249,17 @@ def _advertise(request: Request, db: Session, device: Device, project_id: str, s
     if service not in SERVICES:
         raise HTTPException(403, "unsupported git service")
     root = repository(request, db, project_id)
-    token, claims = grant_for(request, device, project_id, SERVICES[service])
-    if service == "git-receive-pack" and not set(WRITE_ACTIONS) & set(claims.actions):
-        raise HTTPException(403, "task authorization denied: no write action in the grant")
+    # git always asks for the refs first: a revoked, expired or blocked grant is refused here, before any
+    # push body, and that refusal is recorded like any other (2026-11-19: it used to leave no record)
+    tool = "git_push" if service == "git-receive-pack" else "git_fetch"
+    payload = git_event_payload(tool, {"project": project_id})
+    try:
+        token, claims = grant_for(request, device, project_id, SERVICES[service])
+        if service == "git-receive-pack" and not set(WRITE_ACTIONS) & set(claims.actions):
+            raise HTTPException(403, "task authorization denied: no write action in the grant")
+    except HTTPException as exc:
+        denied(request, db, device, request.headers.get("x-sga-task-grant", ""), exc, payload)
+        raise
     refs = run_git([service.removeprefix("git-"), "--stateless-rpc", "--advertise-refs", "."], cwd=root)
     body = pkt(f"# service={service}\n") + b"0000" + refs
     return Response(

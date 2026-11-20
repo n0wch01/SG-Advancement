@@ -373,6 +373,7 @@ def prepare(args) -> None:
             "actions": actions,
             "paths": ["src", "tests", "docs", "README.md"],
             "agent_profile": "coder" if args.user == "developer" else "tester",
+            "lifetime_seconds": getattr(args, "lifetime", None) or 900,
         },
         user=args.user,
     )

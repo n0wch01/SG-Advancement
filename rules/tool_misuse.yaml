@@ -161,7 +161,7 @@ rules:
           pattern: *destructive
 
   - id: destructive-after-external-input
-    version: "3"
+    version: "4"
     severity: critical
     category: tool_misuse
     title: 외부 콘텐츠를 읽은 직후의 파괴적 행동
@@ -177,7 +177,9 @@ rules:
           when: {payload.kind: tool.result}
           fields: [labels.sga_input_source]
           # 사내·로컬이 아닌 출처가 하나라도 있으면 외부. 사내 MCP 서버·사내 호스트 목록은 여기서 관리한다.
-          pattern: '(?:^|,)(?!(?:local|mcp:(?:testdb|reports|crm)|file:[^,]*|[^,]*\.corp\.internal)(?:,|$))[^,]+'
+          # protected:<자원>(2026-11-19 사용자 결정 B): 센서가 확인한 보호 저장소 결과는 로컬 파일처럼 사내.
+          #   에이전트 설정의 이름(mcp:protected_repository)만으로는 사내가 아니다.
+          pattern: '(?:^|,)(?!(?:local|mcp:(?:testdb|reports|crm)|protected:[^,]*|file:[^,]*|[^,]*\.corp\.internal)(?:,|$))[^,]+'
         - name: destructive-action
           when: {payload.kind: tool.call}
           fields: *destructive_fields
@@ -194,7 +196,7 @@ rules:
   # 미탐 주의: 외부 입력 없이(사용자 요청만으로) 실행한 숨긴 명령, 10분 뒤, 다른 대화·하위 에이전트로 넘어간 경우.
   #   라벨이 없는 예전 센서에서는 걸리지 않는다.
   - id: unparsed-command-after-external-input
-    version: "2"
+    version: "3"
     severity: high
     category: prompt_injection
     title: 외부 입력 직후 내용을 읽을 수 없는 명령
@@ -210,7 +212,7 @@ rules:
           when: {payload.kind: tool.result}
           fields: [labels.sga_input_source]
           # destructive-after-external-input의 외부 판정과 같게 유지
-          pattern: '(?:^|,)(?!(?:local|mcp:(?:testdb|reports|crm)|file:[^,]*|[^,]*\.corp\.internal)(?:,|$))[^,]+'
+          pattern: '(?:^|,)(?!(?:local|mcp:(?:testdb|reports|crm)|protected:[^,]*|file:[^,]*|[^,]*\.corp\.internal)(?:,|$))[^,]+'
         - name: unreadable-command
           when: {payload.kind: tool.call}
           fields: [labels.sga_act_unknown]

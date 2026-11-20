@@ -447,3 +447,25 @@ async def test_a_protected_resources_marked_denial_is_remembered_as_its_own(enro
     origin = result["labels"].get("sga_result_origin")
     assert origin == ("control_plane_denial" if protected else None)
     assert (enrolled._text_key(DenyingMcp.TEXT) in enrolled._own_texts) is protected
+
+
+@pytest.mark.parametrize("protected", [True, False])
+async def test_what_a_protected_resource_relays_is_internal(enrolled, protected):
+    """2026-11-19 user decision B: a protected resource's result is the company's repository (source
+    ``protected:<name>``), remembered so the agent's hook copy gets the same source. Another server is not."""
+    upstream = FakeMcp(sse=False)
+    server = await upstream.start()
+    gateway = McpGatewayAdapter(
+        "127.0.0.1:0", {"repo": f"http://127.0.0.1:{upstream.port}/mcp"},
+        credentials={"repo": "Bearer device-test"},
+        protected_resources=frozenset({"repo"}) if protected else frozenset(),
+    )
+    await gateway.start(AdapterContext(enrolled, "test", "pc"))
+    try:
+        await rpc(gateway.port, "/mcp/repo", call(2, "query_customers", name="x"))
+    finally:
+        await gateway.close()
+        server.close()
+    result = next(e for e in spooled(enrolled, "event") if e["payload"]["kind"] == "tool.result")
+    assert result["labels"]["sga_input_source"] == ("protected:repo" if protected else "mcp:repo")
+    assert (enrolled._text_key("query_customers ok") in enrolled._own_texts) is protected
