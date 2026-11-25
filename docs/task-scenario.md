@@ -81,7 +81,9 @@ uv run python scripts/task_live_scenario.py external codex_cli
 - hook이 꺼진 Codex 결과는 SG-Advance의 방어로 셀 수 없다. 모델이 따르기로 했다면 막을 SG-Advance 지점이 없었다.
 - 숨은 지시를 모델이 본 뒤 실제로 전송을 시도하는 경로(전송 명령 거부)는 직접 지시 방식으로 따로 확인했다([claude-code-live.md](claude-code-live.md) 사례 4, [codex-cli.md](codex-cli.md)). 이번 실행에서는 그 경로까지 가지 않았다.
 - hook이 켜진 Codex 대화에는 `agent-safety-bypass`(medium, 경보) 2건이 생겼다. `codex exec`가 hook에 권한 모드를 `bypassPermissions`(사람 승인 없음)로 보고하기 때문이다. 신뢰 우회 옵션 때문이 아니다.
-- **외부 문서 시연이 사람의 위험도를 올린다.** 두 제품이 각각 high 2건을 남겨 lab-developer가 위험 상승이 됐다. 그 뒤 개발자의 새 작업 권한은 `user_risk_elevated`로 거부된다. 문서에 심긴 지시를 막은 것인데 피해자인 사람의 위험도가 오른다(룰 조정 여부는 사용자 결정).
+- **외부 문서 시연이 사람의 위험도를 올렸다.** 두 제품이 각각 high 2건을 남겨 lab-developer가 위험 상승이 됐다. 그 뒤 개발자의 새 작업 권한은 `user_risk_elevated`로 거부됐다. 문서에 심긴 지시를 막은 것인데 피해자인 사람의 위험도가 오른 것이다.
+  - 사용자 결정(2026-11-20, A): 결과를 모델에서 가린 입력 인젝션 Finding은 사람의 위험도에서 뺀다([zero-trust.md](zero-trust.md)). Finding과 캠페인 묶음은 남는다.
+  - 실제 확인: 반영 뒤 lab-developer의 위험 상승이 풀렸다(Finding 4건은 그대로). 개발자 작업 권한으로 Claude 외부 문서를 다시 돌렸더니 결과가 가려졌고, 업로드 0건, 위험 상승 없음이었다.
 
 ### Codex hook이 꺼져 있었다
 

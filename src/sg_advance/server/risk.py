@@ -10,6 +10,12 @@ Medium and lower never count, so the zero-trust rules' own findings (medium) can
 into the score. It decays by itself when the window moves on. A finding a reviewer marked as a false
 positive (``FindingDisposition``, 2026-11-18) does not count.
 
+Injection kept from the model (2026-11-20 user decision A): a prompt-injection finding whose tool result
+was withheld (``response.stage == "result_withheld"``) is about the content the person's agent read, not
+what it did. In the live external-document case four of them made the person elevated and every new task
+grant was refused. They stay as findings and in campaigns; whatever the agent does next counts as usual.
+The stage is reported by the enforcement point (same trust as the finding itself).
+
 Each person also gets a **score** from 0 to 100 (2026-11-14, KISA P1-4: a continuous value rather
 than yes/no): critical counts 60, high 20, each weighted by how recent it is (1.0 now, falling
 linearly to 0.5 at the edge of the window), capped at 100. The score ranks people and shows how
@@ -85,6 +91,12 @@ def score_of(found: list[tuple[str, datetime]], now: datetime) -> int:
     return min(SCORE_MAX, round(total))
 
 
+def withheld_input(doc: dict) -> bool:
+    """An injection finding whose result never reached the model (input PEP)."""
+    stage = (doc.get("response") or {}).get("stage")
+    return doc.get("category") == "prompt_injection" and stage == "result_withheld"
+
+
 def scores(db: Session, now: datetime | None = None, *, verified_only: bool = False) -> dict[str, PersonRisk]:
     now = now or utcnow()
     since = now - WINDOW
@@ -105,6 +117,8 @@ def scores(db: Session, now: datetime | None = None, *, verified_only: bool = Fa
     actions = set(db.scalars(events))
     found: dict[str, list[tuple[str, datetime]]] = {}
     for user, sev, ts, doc in rows:
+        if withheld_input(doc):
+            continue
         if user and user != "unknown" and any(i in actions for i in doc.get("evidence_event_ids") or ()):
             found.setdefault(user, []).append((sev, ts))
     out = {}
